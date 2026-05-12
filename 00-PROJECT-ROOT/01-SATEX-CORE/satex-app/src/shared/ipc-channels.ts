@@ -84,6 +84,18 @@ export const IPC = {
   AUTONOMOUS_ENABLE:  'satex:autonomous:enable',
   AUTONOMOUS_DISABLE: 'satex:autonomous:disable',
   AUTONOMOUS_STATUS:  'satex:autonomous:status',
+
+  // ── Phase 8: Continuous Observer / PatternLearner / Vault ─────────────────
+  // Push (main → renderer)
+  OBSERVER_STATS:     'satex:observer:stats',
+  LEARNER_STATS:      'satex:learner:stats',
+  VAULT_STATS:        'satex:vault:stats',
+  // Invoke (renderer → main)
+  OBSERVER_GET:       'satex:observer:get',
+  LEARNER_GET:        'satex:learner:get',
+  LEARNER_WEIGHTS:    'satex:learner:weights',
+  VAULT_GET:          'satex:vault:get',
+  VAULT_CHECKPOINT:   'satex:vault:checkpoint',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -99,6 +111,9 @@ export const PUSH_CHANNELS = [
   IPC.BRAIN_UPDATE,
   IPC.AUTONOMOUS_DECISION,
   IPC.LOG_EVENT,
+  IPC.OBSERVER_STATS,
+  IPC.LEARNER_STATS,
+  IPC.VAULT_STATS,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

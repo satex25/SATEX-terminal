@@ -274,6 +274,87 @@ export interface TacticsStatus {
   lastUpdated: number
 }
 
+// ─── Continuous Observer / Pattern Learner / Vault (Phase 8) ─────────────────
+// Entirely separate from Brain. Brain learns ONLY on trade close — these
+// subsystems learn continuously from the live tick/candle stream.
+
+export type MarketRegime = 'trend_up' | 'trend_down' | 'range' | 'chop' | 'unknown'
+
+/** Single tick-rate observation. Append-only, time-series. */
+export interface Observation {
+  ts: number
+  symbol: string
+  last: number
+  mid: number
+  spreadBps: number
+  /** Price delta vs 10 ticks ago, normalized as bps of last. */
+  velocityBps: number
+  ema9: number
+  ema21: number
+  ema50: number
+  rsi14: number
+  atr14: number
+  vwap: number
+  trendStrength: number
+  regime: MarketRegime
+}
+
+/** Continuous-learning weight for one (feature, regime) pair. Entirely
+ *  independent of the Brain SGD weights — different table, different lifecycle. */
+export interface PatternWeight {
+  feature: string
+  regime: MarketRegime
+  weight: number
+  samples: number
+  updatedAt: number
+}
+
+/** Audit row written every learning cycle. */
+export interface LearningCycle {
+  ts: number
+  observationsSeen: number
+  weightsUpdated: number
+  avgError: number
+  note: string
+}
+
+/** Observer runtime stats — pushed to renderer for status pip. */
+export interface ObserverStats {
+  running: boolean
+  totalObserved: number
+  observationsPerMinute: number
+  symbolsTracked: number
+  bufferedRows: number
+  lastFlushAt: number | null
+  lastFlushSize: number
+}
+
+/** PatternLearner runtime stats — pushed to renderer for status pip. */
+export interface LearnerStats {
+  running: boolean
+  cycles: number
+  lastCycleAt: number | null
+  lastCycleObservations: number
+  lastCycleAvgError: number
+  weightsTracked: number
+}
+
+/** Vault writer stats — pushed to renderer for status pip. */
+export interface VaultStats {
+  enabled: boolean
+  vaultRoot: string | null
+  notesWritten: number
+  lastWriteAt: number | null
+  lastNotePath: string | null
+}
+
+/** Reason payload for a manual vault checkpoint trigger. */
+export interface VaultCheckpointRequest {
+  reason: string
+  scope: 'session' | 'trade' | 'tactics' | 'brain' | 'observer' | 'manual'
+  detail?: string
+}
+
 export interface CalendarImpact extends Number {}
 export interface ForexEvent {
   id: string

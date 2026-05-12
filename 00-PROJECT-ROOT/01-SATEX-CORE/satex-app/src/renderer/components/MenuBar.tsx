@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { useAccountStore } from '../stores/accountStore'
 import { Icon } from './Icon'
 import { Dropdown, type DropdownItem } from './Dropdown'
-import type { TacticsStatus } from '@shared/types'
+import type { TacticsStatus, ObserverStats, LearnerStats, VaultStats } from '@shared/types'
 
 export type ModalKind = 'about' | 'shortcuts' | 'settings' | 'live' | 'tactics'
 
@@ -25,6 +25,9 @@ export function MenuBar({ onCmd, onOpenModal, presetIdx, setPresetIdx, presets, 
   const account = useAccountStore(s => s.account)
   const [now, setNow] = useState(() => new Date())
   const [tactics, setTactics] = useState<TacticsStatus | null>(null)
+  const [observer, setObserver] = useState<ObserverStats | null>(null)
+  const [learner,  setLearner]  = useState<LearnerStats | null>(null)
+  const [vault,    setVault]    = useState<VaultStats | null>(null)
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000)
@@ -38,6 +41,17 @@ export function MenuBar({ onCmd, onOpenModal, presetIdx, setPresetIdx, presets, 
     pull()
     const id = setInterval(pull, 5000)
     return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  useEffect(() => {
+    const unsubs: Array<() => void> = []
+    if (window.satex?.onObserverStats) unsubs.push(window.satex.onObserverStats(setObserver))
+    if (window.satex?.onLearnerStats)  unsubs.push(window.satex.onLearnerStats(setLearner))
+    if (window.satex?.onVaultStats)    unsubs.push(window.satex.onVaultStats(setVault))
+    void window.satex?.getObserverStats?.().then(setObserver).catch(() => {})
+    void window.satex?.getLearnerStats?.().then(setLearner).catch(() => {})
+    void window.satex?.getVaultStats?.().then(setVault).catch(() => {})
+    return () => { for (const u of unsubs) u() }
   }, [])
 
   const liveDot = status.connected ? (
@@ -54,6 +68,15 @@ export function MenuBar({ onCmd, onOpenModal, presetIdx, setPresetIdx, presets, 
     { label: 'Reload workspace',       onClick: () => location.reload() },
     { divider: true },
     { label: 'Export orders (CSV)',    onClick: () => window.satex?.exportOrdersCsv?.() },
+    {
+      label: vault?.enabled ? 'Write vault checkpoint…' : 'Vault checkpoint (vault unavailable)',
+      onClick: async () => {
+        if (!window.satex?.vaultCheckpoint) return
+        const reason = window.prompt('Checkpoint reason?', 'Manual checkpoint')
+        if (!reason) return
+        await window.satex.vaultCheckpoint({ reason, scope: 'manual' })
+      },
+    },
     { divider: true },
     { label: 'Quit',                   onClick: () => window.close() },
   ]
@@ -150,6 +173,27 @@ export function MenuBar({ onCmd, onOpenModal, presetIdx, setPresetIdx, presets, 
             title={tactics.vetoReason ?? `MAY-TACTICS: ${tactics.state}`}
           >
             策 {tactics.state.toUpperCase()}
+          </span>
+        )}
+        {(observer || learner || vault) && (
+          <span
+            className="status-pip"
+            title={[
+              `Observer: ${observer?.running ? 'running' : 'idle'} · ${observer?.observationsPerMinute ?? 0}/min · ${observer?.totalObserved.toLocaleString() ?? 0} total`,
+              `Learner: ${learner?.cycles ?? 0} cycles · err ${(learner?.lastCycleAvgError ?? 0).toFixed(3)} · ${learner?.weightsTracked ?? 0} weights`,
+              `Vault: ${vault?.enabled ? `${vault.notesWritten} notes` : 'disabled'}`,
+            ].join('\n')}
+          >
+            <span
+              className="pip-dot"
+              style={{
+                background: observer?.running && learner?.running
+                  ? 'var(--bull-glow, #22C55E)'
+                  : 'var(--ink-3)',
+              }}
+            />
+            INTEL {observer?.observationsPerMinute ?? 0}
+            <i>/m</i>
           </span>
         )}
         <span>LAT {status.latencyMs || '—'}<i>ms</i></span>

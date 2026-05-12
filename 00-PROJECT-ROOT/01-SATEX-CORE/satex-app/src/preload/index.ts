@@ -15,6 +15,8 @@ import type {
   CredentialsMaskedStatus, CredentialsSetRequest,
   AnthropicMaskedStatus, AiDecision,
   LiveModeStatus, LiveModeSetRequest, TacticsStatus,
+  ObserverStats, LearnerStats, VaultStats, PatternWeight,
+  VaultCheckpointRequest,
 } from '@shared/types'
 
 // ── Typed listener wrapper ─────────────────────────────────────────────────────
@@ -71,6 +73,16 @@ const satexApi = {
   // ── MAY-TACTICS (Phase 7) ───────────────────────────────────────────────────
   getTacticsStatus: ()                             => ipcRenderer.invoke(IPC.TACTICS_STATUS) as Promise<TacticsStatus>,
   graduateTactics: ()                              => ipcRenderer.invoke(IPC.TACTICS_GRADUATE) as Promise<{ ok: boolean; reason?: string }>,
+
+  // ── Phase 8: Observer / Learner / Vault ─────────────────────────────────────
+  onObserverStats:  (cb: (s: ObserverStats) => void)              => on(IPC.OBSERVER_STATS, cb),
+  onLearnerStats:   (cb: (s: LearnerStats) => void)               => on(IPC.LEARNER_STATS,  cb),
+  onVaultStats:     (cb: (s: VaultStats) => void)                 => on(IPC.VAULT_STATS,    cb),
+  getObserverStats: ()                                            => ipcRenderer.invoke(IPC.OBSERVER_GET)    as Promise<ObserverStats>,
+  getLearnerStats:  ()                                            => ipcRenderer.invoke(IPC.LEARNER_GET)     as Promise<LearnerStats>,
+  getLearnerWeights:()                                            => ipcRenderer.invoke(IPC.LEARNER_WEIGHTS) as Promise<PatternWeight[]>,
+  getVaultStats:    ()                                            => ipcRenderer.invoke(IPC.VAULT_GET)       as Promise<VaultStats>,
+  vaultCheckpoint:  (req: VaultCheckpointRequest)                 => ipcRenderer.invoke(IPC.VAULT_CHECKPOINT, req) as Promise<{ ok: boolean; path?: string }>,
 
   // ── Layout + CSV export ─────────────────────────────────────────────────────
   saveLayout: (payload?: unknown)                  => ipcRenderer.invoke(IPC.LAYOUT_SAVE, payload) as Promise<{ ok: boolean }>,

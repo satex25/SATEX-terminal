@@ -12,7 +12,10 @@
  */
 import path from 'path'
 import { app } from 'electron'
-import type { Order, SessionRecord, PnlSnapshot, BrainParameter } from '@shared/types'
+import type {
+  Order, SessionRecord, PnlSnapshot, BrainParameter,
+  Observation, PatternWeight, LearningCycle, MarketRegime,
+} from '@shared/types'
 import { createLogger } from './logger'
 
 const log = createLogger('persistence')
@@ -117,6 +120,48 @@ function migrate(db: DB): void {
     CREATE TABLE IF NOT EXISTS watchlist (
       position        INTEGER PRIMARY KEY,
       symbol          TEXT NOT NULL UNIQUE
+    );
+
+    -- Phase 8: continuous-observer tick-rate log. Append-only time series.
+    -- NOT a brain table — Brain SGD is unaffected. This is independent intel.
+    CREATE TABLE IF NOT EXISTS observations (
+      ts              INTEGER NOT NULL,
+      symbol          TEXT NOT NULL,
+      last            REAL NOT NULL,
+      mid             REAL NOT NULL,
+      spread_bps      REAL NOT NULL,
+      velocity_bps    REAL NOT NULL,
+      ema9            REAL NOT NULL,
+      ema21           REAL NOT NULL,
+      ema50           REAL NOT NULL,
+      rsi14           REAL NOT NULL,
+      atr14           REAL NOT NULL,
+      vwap            REAL NOT NULL,
+      trend_strength  REAL NOT NULL,
+      regime          TEXT NOT NULL,
+      PRIMARY KEY (ts, symbol)
+    );
+    CREATE INDEX IF NOT EXISTS idx_obs_symbol_ts ON observations(symbol, ts);
+    CREATE INDEX IF NOT EXISTS idx_obs_ts ON observations(ts);
+
+    -- Phase 8: PatternLearner weights — entirely separate from brain table.
+    -- Keyed by (feature, regime). The Brain table is never touched by this path.
+    CREATE TABLE IF NOT EXISTS pattern_weights (
+      feature         TEXT NOT NULL,
+      regime          TEXT NOT NULL,
+      weight          REAL NOT NULL,
+      samples         INTEGER NOT NULL DEFAULT 0,
+      updated_at      INTEGER NOT NULL,
+      PRIMARY KEY (feature, regime)
+    );
+
+    -- Phase 8: audit log for every learning cycle (good and bad).
+    CREATE TABLE IF NOT EXISTS learning_log (
+      ts                  INTEGER PRIMARY KEY,
+      observations_seen   INTEGER NOT NULL,
+      weights_updated     INTEGER NOT NULL,
+      avg_error           REAL NOT NULL,
+      note                TEXT NOT NULL DEFAULT ''
     );
   `)
   log.info('sqlite schema migrated')
@@ -258,6 +303,115 @@ export function setWatchlist(symbols: string[]): void {
   db.exec('DELETE FROM watchlist')
   const stmt = db.prepare('INSERT INTO watchlist (position, symbol) VALUES (?,?)')
   symbols.forEach((sym, i) => stmt.run(i, sym))
+}
+
+// ─── Phase 8: Observations (append-only time series) ─────────────────────────
+
+/** Batch insert observations in a single transaction. Returns rows written. */
+export function insertObservations(rows: Observation[]): number {
+  if (rows.length === 0) return 0
+  const db = openDB()
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO observations
+      (ts, symbol, last, mid, spread_bps, velocity_bps,
+       ema9, ema21, ema50, rsi14, atr14, vwap, trend_strength, regime)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `)
+  // better-sqlite3 exposes .transaction; gracefully degrade for NullDB.
+  type TxDB = DB & { transaction?: <T extends (...args: unknown[]) => unknown>(fn: T) => T }
+  const txDb = db as TxDB
+  const exec = (): void => {
+    for (const o of rows) {
+      stmt.run(
+        o.ts, o.symbol, o.last, o.mid, o.spreadBps, o.velocityBps,
+        o.ema9, o.ema21, o.ema50, o.rsi14, o.atr14, o.vwap, o.trendStrength, o.regime
+      )
+    }
+  }
+  if (typeof txDb.transaction === 'function') (txDb.transaction(exec))()
+  else exec()
+  return rows.length
+}
+
+export function listObservations(symbol: string, sinceTs: number, limit = 1000): Observation[] {
+  return (openDB()
+    .prepare('SELECT * FROM observations WHERE symbol=? AND ts>=? ORDER BY ts ASC LIMIT ?')
+    .all(symbol, sinceTs, limit) as Array<Record<string, unknown>>)
+    .map(rowToObservation)
+}
+
+export function countObservations(): number {
+  const r = openDB().prepare('SELECT COUNT(*) AS n FROM observations').get() as { n: number } | undefined
+  return r?.n ?? 0
+}
+
+/** Prune observations older than `cutoffTs`. Returns rows deleted. */
+export function pruneObservations(cutoffTs: number): number {
+  const r = openDB().prepare('DELETE FROM observations WHERE ts<?').run(cutoffTs)
+  return Number(r.changes)
+}
+
+function rowToObservation(r: Record<string, unknown>): Observation {
+  return {
+    ts: Number(r['ts']),
+    symbol: String(r['symbol']),
+    last: Number(r['last']),
+    mid: Number(r['mid']),
+    spreadBps: Number(r['spread_bps']),
+    velocityBps: Number(r['velocity_bps']),
+    ema9: Number(r['ema9']),
+    ema21: Number(r['ema21']),
+    ema50: Number(r['ema50']),
+    rsi14: Number(r['rsi14']),
+    atr14: Number(r['atr14']),
+    vwap: Number(r['vwap']),
+    trendStrength: Number(r['trend_strength']),
+    regime: String(r['regime']) as MarketRegime,
+  }
+}
+
+// ─── Phase 8: Pattern weights (separate from brain table) ────────────────────
+
+export function upsertPatternWeight(w: PatternWeight): void {
+  openDB().prepare(`
+    INSERT OR REPLACE INTO pattern_weights (feature, regime, weight, samples, updated_at)
+    VALUES (?,?,?,?,?)
+  `).run(w.feature, w.regime, w.weight, w.samples, w.updatedAt)
+}
+
+export function listPatternWeights(): PatternWeight[] {
+  return (openDB()
+    .prepare('SELECT * FROM pattern_weights ORDER BY feature, regime')
+    .all() as Array<Record<string, unknown>>)
+    .map(r => ({
+      feature: String(r['feature']),
+      regime: String(r['regime']) as MarketRegime,
+      weight: Number(r['weight']),
+      samples: Number(r['samples']),
+      updatedAt: Number(r['updated_at']),
+    }))
+}
+
+// ─── Phase 8: Learning cycle audit log ───────────────────────────────────────
+
+export function insertLearningCycle(c: LearningCycle): void {
+  openDB().prepare(`
+    INSERT OR REPLACE INTO learning_log (ts, observations_seen, weights_updated, avg_error, note)
+    VALUES (?,?,?,?,?)
+  `).run(c.ts, c.observationsSeen, c.weightsUpdated, c.avgError, c.note)
+}
+
+export function listLearningCycles(limit = 50): LearningCycle[] {
+  return (openDB()
+    .prepare('SELECT * FROM learning_log ORDER BY ts DESC LIMIT ?')
+    .all(limit) as Array<Record<string, unknown>>)
+    .map(r => ({
+      ts: Number(r['ts']),
+      observationsSeen: Number(r['observations_seen']),
+      weightsUpdated: Number(r['weights_updated']),
+      avgError: Number(r['avg_error']),
+      note: String(r['note'] ?? ''),
+    }))
 }
 
 export function closeDB(): void {

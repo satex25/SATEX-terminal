@@ -82,6 +82,9 @@ function wireEngineEvents(): void {
   engine.onAccount((account)          => push(IPC.ACCOUNT_UPDATE, account))
   engine.onOrders((orders)            => push(IPC.ORDERS_UPDATE,  orders))
   engine.onStatus((status)            => push(IPC.SYSTEM_STATUS,  status))
+  engine.onObserverStats((s)          => push(IPC.OBSERVER_STATS, s))
+  engine.onLearnerStats((s)           => push(IPC.LEARNER_STATS,  s))
+  engine.onVaultStats((s)             => push(IPC.VAULT_STATS,    s))
 }
 
 // ── IPC Handlers (renderer → main) ────────────────────────────────────────────
@@ -140,6 +143,13 @@ function registerIpcHandlers(): void {
   // ── MAY-TACTICS (Phase 7) ────────────────────────────────────────────────────
   ipcMain.handle(IPC.TACTICS_STATUS,    ()  => engine.getTacticsStatus())
   ipcMain.handle(IPC.TACTICS_GRADUATE,  ()  => engine.graduateTactics())
+
+  // ── Continuous Observer / PatternLearner / Vault (Phase 8) ──────────────────
+  ipcMain.handle(IPC.OBSERVER_GET,      ()  => engine.getObserverStats())
+  ipcMain.handle(IPC.LEARNER_GET,       ()  => engine.getLearnerStats())
+  ipcMain.handle(IPC.LEARNER_WEIGHTS,   ()  => engine.getLearnerWeights())
+  ipcMain.handle(IPC.VAULT_GET,         ()  => engine.getVaultStats())
+  ipcMain.handle(IPC.VAULT_CHECKPOINT,  async (_e, req) => engine.manualVaultCheckpoint(req))
 
   // ── Layout + CSV export ──────────────────────────────────────────────────────
   ipcMain.handle(IPC.LAYOUT_SAVE,       (_e, payload: unknown) => {
@@ -203,6 +213,9 @@ app.whenReady().then(async () => {
       push(IPC.QUOTES_TICK, engine.getAllQuotes())
       push(IPC.ACCOUNT_UPDATE, engine.om.getAccount())
       push(IPC.ORDERS_UPDATE, engine.om.getOrders())
+      push(IPC.OBSERVER_STATS, engine.getObserverStats())
+      push(IPC.LEARNER_STATS,  engine.getLearnerStats())
+      push(IPC.VAULT_STATS,    engine.getVaultStats())
     }, 1500)
   } catch (err) {
     log.error('engine initialization failed', { err: String(err) })
