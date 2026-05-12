@@ -1,0 +1,117 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# mc4 — hardened root .gitignore
+# Single source of truth after flattening 01-SATEX-CORE into mc4.
+# Defense-in-depth on credentials, runtime data, build artifacts, OS junk,
+# and the workspace junk that accumulates from sessions.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Node / package managers
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+
+# Build outputs
+out/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.nyc_output/
+.vitest-cache/
+
+# Environment & secrets — keep templates, block everything else
+.env.local
+.env.*.local
+.env.production
+.env.development
+*.local
+!.env
+!.env.local.example
+!.env.example
+
+# Credentials material (defense in depth — these live in Electron userData,
+# but explicitly block in case userData ever lands in the tree)
+alpaca-creds.bin
+anthropic-key.bin
+*-creds.bin
+*-key.bin
+credentials.json
+secrets.json
+service-account.json
+
+# SQLite & runtime data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+userData/
+app-data/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Electron / packaging
+release/
+*.dmg
+*.exe
+*.msi
+*.app
+*.deb
+*.rpm
+*.AppImage
+*.snap
+
+# OS junk
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# IDE / editor (Obsidian's .obsidian/ stays untracked too — workspace-local)
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.history/
+*.code-workspace
+
+# Workspace junk (transient session artifacts)
+.tmp/
+tmp/
+.cache/
+*.tmp
+*.temp
+.tmp_*
+*.mp4
+*.mov
+"Recording *"
+"Screenshot *"
+Untitled.base
+
+# Accidental Vite scaffold left over from a mistyped `npm create vite`
+00-PROJECT-ROOT/01-SATEX-CORE/satex-app --template react-ts/
+
+# Obsidian vault workspace state (keep notes, drop workspace cache)
+.obsidian/workspace*
+.obsidian/cache
+.obsidian/plugins/*/data.json
+
+# Claude Code workspace state (local agent state should not be committed)
+.claude/sessions/
+.claude/projects/
+.claude/local/
