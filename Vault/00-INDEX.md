@@ -25,7 +25,7 @@ Pulled from the 2026-05-15 audit. Fix #1 + Fix #4 shipped — see commit `e0fbfd
 | #2 Move audit docs into vault | ✅ shipped | now at `Vault/00-Audit/` — see [[#Open priorities]] links below |
 | #3 Index note | ✅ shipped | this file |
 | #4 Brain-checkpoint noise guard | ✅ shipped | guard at `vault-writer.ts:305`; takes effect on next dev-server restart |
-| #5 Daily notes wiring | open | `daily-notes` plugin enabled but no folder configured; pair with the `/daily` skill |
+| #5 Daily notes wiring | ✅ shipped | folder `Vault/Daily/`, template `Vault/Templates/Daily.md`; pairs with the `/daily` skill |
 
 Active deliverables from the institutional audit (read these before planning Week-1 work):
 
@@ -60,6 +60,8 @@ High-signal engineering retros. The most recent is the gold standard for Phase-N
 | Folder | Purpose | Status |
 |---|---|---|
 | `Vault/00-Audit/` | Institutional forensic audit deliverables | 3 docs — SATEX-HANDOFF, MASTER-FIX-PLAN, MAY TACTICS |
+| `Vault/Daily/` | Daily working notes (one per day, `YYYY-MM-DD.md`) | wired; first note 2026-05-15 |
+| `Vault/Templates/` | Templater scaffolds for `daily-notes` plugin | 1 template — `Daily.md` |
 | `Vault/Sessions/` | Session start + close pairs | 44 files — active |
 | `Vault/Trades/` | Per-trade outcomes (wins + loss-learnings) | 0 files — populates when paper trading runs |
 | `Vault/Tactics/` | MAY-TACTICS state transitions | 0 files — populates on regime changes |
