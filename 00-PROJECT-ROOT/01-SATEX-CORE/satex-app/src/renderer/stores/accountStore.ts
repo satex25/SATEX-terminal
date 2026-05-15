@@ -2,7 +2,7 @@
  * SATEX — Account & Orders Store (Zustand)
  */
 import { create } from 'zustand'
-import type { Account, Order, SystemStatus, IndicatorSnapshot } from '@shared/types'
+import type { Account, Order, SystemStatus, IndicatorSnapshot, AutonomousStatus } from '@shared/types'
 import { STARTING_EQUITY } from '@shared/constants'
 
 interface AccountState {
@@ -10,10 +10,13 @@ interface AccountState {
   orders:  Order[]
   status:  SystemStatus
   indicators: Map<string, IndicatorSnapshot>
+  /** Phase 10: lifted from per-component subscriptions so TopBar reads from store. */
+  autonomous: AutonomousStatus | null
   setAccount:    (a: Account) => void
   setOrders:     (o: Order[]) => void
   setStatus:     (s: SystemStatus) => void
   setIndicators: (sym: string, snap: IndicatorSnapshot) => void
+  setAutonomous: (s: AutonomousStatus) => void
 }
 
 const defaultAccount: Account = {
@@ -33,6 +36,7 @@ export const useAccountStore = create<AccountState>((set) => ({
   orders:     [],
   status:     defaultStatus,
   indicators: new Map(),
+  autonomous: null,
   setAccount:    (account) => set({ account }),
   setOrders:     (orders)  => set({ orders }),
   setStatus:     (status)  => set({ status }),
@@ -41,4 +45,5 @@ export const useAccountStore = create<AccountState>((set) => ({
     m.set(sym, snap)
     return { indicators: m }
   }),
+  setAutonomous: (autonomous) => set({ autonomous }),
 }))

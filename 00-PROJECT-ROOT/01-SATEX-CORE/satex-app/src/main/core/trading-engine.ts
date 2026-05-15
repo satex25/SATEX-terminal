@@ -17,31 +17,51 @@ import { dirname, join, resolve } from 'node:path'
 import { getEnv } from '../services/env'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig } from '../services/alpaca'
-import { MarketSimulator, type MarketDataSource } from '../services/market-data'
+import { MarketSimulator, type MarketDataSource, type Unsub } from '../services/market-data'
 import { LiveMarket } from '../services/live-market'
 import { OrderManager, type OrderValidationContext } from '../services/order-manager'
+import { TickRecorder } from '../services/tick-recorder'
+import { ReplaySource } from '../services/replay-source'
+import { HistoricalImporter } from '../services/historical-importer'
 import { computeSnapshot } from '@shared/indicators'
-import { STARTING_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST } from '@shared/constants'
+import { STARTING_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, findUniverseEntry } from '@shared/constants'
 import type {
-  Account, AiDecision, Candle, CredentialsMaskedStatus, CredentialsSetRequest,
-  IndicatorSnapshot, LiveModeSetRequest, LiveModeStatus, NewsItem, Order,
+  Account, AiDecision, AlpacaModeSetRequest, AlpacaModeStatus,
+  AlpacaTradeUpdate, Candle,
+  CredentialsMaskedStatus, CredentialsSetRequest,
+  IndicatorSnapshot, LiveModeSetRequest, LiveModeStatus, NewsItem, NewsKind, Order,
   OrderRequest, Position, Quote, SystemStatus, TacticsStatus, AlpacaCredentialsStatus,
-  AnthropicMaskedStatus, ObserverStats, LearnerStats, VaultStats, PatternWeight,
+  BaiduMaskedStatus, ObserverStats, LearnerStats, VaultStats, PatternWeight,
   VaultCheckpointRequest,
+  ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
+  HistoricalImportRequest, HistoricalImportResult,
 } from '@shared/types'
+import { shortId } from '../services/id-generator'
 import { createLogger, configureLogger } from '../services/logger'
 import * as db from '../services/persistence'
 import { sessionId } from '../services/id-generator'
 import {
   getAlpacaCreds, setAlpacaCreds, clearAlpacaCreds, getAlpacaCredsMasked,
-  setAnthropicKey as storeSetAnthropicKey, getAnthropicMasked as storeGetAnthropicMasked
+  setBaiduKey as storeSetBaiduKey, getBaiduMasked as storeGetBaiduMasked
 } from '../services/credential-store'
 import { getLiveModeStatus, setLiveMode as storeSetLiveMode, isLive, getNotionalCap } from '../services/live-mode'
+import { getAlpacaMode, setAlpacaMode as storeSetAlpacaMode, resolveBaseUrl } from '../services/alpaca-mode'
 import { Brain } from '../services/brain'
 import { TacticsEngine } from '../services/tactics'
 import { MarketObserver } from '../services/market-observer'
 import { PatternLearner } from '../services/pattern-learner'
 import { VaultWriter } from '../services/vault-writer'
+import { AutonomousTrader, type AutonomousConfig } from '../services/autonomous-trader'
+import type { AutonomousDecision, AutonomousStatus } from '@shared/types'
+import { RegimeService } from '../services/regime'
+import { RiskGatesService } from '../services/risk-gates'
+import { MacroCalendarService } from '../services/macro-calendar'
+import { SystemLogsService } from '../services/system-logs'
+import { DepthFeedService } from '../services/depth-feed'
+import { EdgarService } from '../services/edgar'
+import type {
+  RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
+} from '@shared/types'
 
 const log = createLogger('engine')
 
@@ -54,6 +74,29 @@ export type StatusListener       = (status: SystemStatus) => void
 export type ObserverStatsListener = (s: ObserverStats) => void
 export type LearnerStatsListener  = (s: LearnerStats) => void
 export type VaultStatsListener    = (s: VaultStats) => void
+export type ReplayStatusListener  = (s: ReplayStatus) => void
+export type AutonomousStatusListener   = (s: AutonomousStatus) => void
+export type AutonomousDecisionListener = (d: AutonomousDecision) => void
+export type RegimeListener     = (s: RegimeSnapshot) => void
+export type RiskGatesListener  = (s: RiskGatesSnapshot) => void
+export type MacroListener      = (s: MacroSnapshot) => void
+export type LogsTailListener   = (s: SystemLogsTail) => void
+export type DepthListener      = (s: DepthSnapshot) => void
+
+/** Captured at order entry; drives Brain.learn and vault narrative on close.
+ *  The `symbol` field is load-bearing — it lets us pair server-side bracket
+ *  child fills (which arrive with a different orderId than the parent we
+ *  created) back to the entry that opened the position. */
+interface EntryFeaturesValue {
+  symbol: string
+  features: ReturnType<Brain['features']>
+  notional: number
+  regime: string | null
+  tactics: TacticsStatus | null
+  aiDecision: AiDecision | null
+  avgPrice: number
+  openedAt: number
+}
 
 export class TradingEngine {
   private market!: MarketDataSource
@@ -64,6 +107,24 @@ export class TradingEngine {
   private observer!: MarketObserver
   private learner!:  PatternLearner
   private vault!:    VaultWriter
+  private autonomous!: AutonomousTrader
+  // ── Phase 10: SATEX Terminal v2 · Black Box services ──────────────────────
+  private regime!:      RegimeService
+  private riskGates!:   RiskGatesService
+  private macro!:       MacroCalendarService
+  public  logs!:        SystemLogsService  // public so configureLogger can hand it the ingest fn
+  private depth!:       DepthFeedService
+  private edgar!:       EdgarService
+  /** Per-session live tape recorder. Null only before initialize(). */
+  private recorder: TickRecorder | null = null
+  /** Stashed live source while a replay is active; restored on replay stop. */
+  private liveMarket: MarketDataSource | null = null
+  /** Active replay source — present iff replay-mode === 'playing' | 'paused'. */
+  private replay: ReplaySource | null = null
+  /** Cached unsubscribes for the current market source's wiring. Re-installed
+   *  whenever we swap source (live ↔ replay) so listeners follow the swap. */
+  private marketSubs: Unsub[] = []
+  private replayStatusTimer: NodeJS.Timeout | null = null
   private currentSessionId = sessionId()
   private startedAt        = Date.now()
   private tickCount        = 0
@@ -74,10 +135,19 @@ export class TradingEngine {
   private pnlTimer:        NodeJS.Timeout | null = null
   private continuousStatsTimer: NodeJS.Timeout | null = null
   private vaultCheckpointTimer: NodeJS.Timeout | null = null
+  private healthLogTimer:       NodeJS.Timeout | null = null
+  private entryCleanupTimer:    NodeJS.Timeout | null = null
+  private tapePruneTimer:       NodeJS.Timeout | null = null
+  /** True once boot-time seed has been pushed to the renderer. Prevents
+   *  duplicate floods on renderer remounts (HMR / devtools reload). */
+  private seedBroadcastDone = false
+  /** Days of tick-tape to retain. Beyond this, rows get pruned on startup
+   *  and every 24h. Tunable via env later if needed. */
+  private static TAPE_RETENTION_DAYS = 7
   private quoteBatch:      Quote[] = []
   private batchTimer:      NodeJS.Timeout | null = null
   /** Snapshot of features at order entry, keyed by order id — drives brain.learn on close. */
-  private entryFeatures = new Map<string, { features: ReturnType<Brain['features']>; notional: number; regime: string | null; tactics: TacticsStatus | null; aiDecision: AiDecision | null; avgPrice: number; openedAt: number }>()
+  private entryFeatures = new Map<string, EntryFeaturesValue>()
   /** Last seen tactics state — used to detect transitions so we can vault them. */
   private lastTacticsState: TacticsStatus['state'] | null = null
 
@@ -91,11 +161,30 @@ export class TradingEngine {
   private observerStatsListeners: Set<ObserverStatsListener> = new Set()
   private learnerStatsListeners:  Set<LearnerStatsListener>  = new Set()
   private vaultStatsListeners:    Set<VaultStatsListener>    = new Set()
+  private replayStatusListeners:  Set<ReplayStatusListener>  = new Set()
+  private autonomousStatusListeners:   Set<AutonomousStatusListener>   = new Set()
+  private autonomousDecisionListeners: Set<AutonomousDecisionListener> = new Set()
+  private regimeListeners:     Set<RegimeListener>    = new Set()
+  private riskGatesListeners:  Set<RiskGatesListener> = new Set()
+  private macroListeners:      Set<MacroListener>     = new Set()
+  private logsListeners:       Set<LogsTailListener>  = new Set()
+  private depthListeners:      Set<DepthListener>     = new Set()
 
   async initialize(): Promise<void> {
     const env = getEnv()
-    configureLogger(env.logLevel)
+    // System logs service must exist before configureLogger so the ingest hook
+    // captures boot-time entries (otherwise the first ~20 INFO lines vanish).
+    this.logs = new SystemLogsService()
+    configureLogger(env.logLevel, this.logs.ingest)
     log.info('engine initializing', { mode: env.useSimulator ? 'simulator' : 'alpaca' })
+
+    // ── Pre-init DB maintenance (Phase 4.2, 2026-05-13) ────────────────────────
+    // Synchronous VACUUM if the file is over the threshold. Runs BEFORE the
+    // window shows so the user doesn't see a UI hang during reclamation. After
+    // the prune cron started running (2026-05-13), DELETEs free pages but the
+    // file doesn't shrink unless VACUUM is invoked.
+    const VACUUM_THRESHOLD_BYTES = 1024 * 1024 * 1024  // 1 GB
+    db.compactIfLarge(VACUUM_THRESHOLD_BYTES)
 
     // Session record
     db.insertSession({
@@ -128,41 +217,49 @@ export class TradingEngine {
     // Tactics — seed from prior orders (approx)
     this.tactics.seedFromOrders(db.listAllOrders())
 
-    // Credential resolution: stored credentials take precedence over env
-    const stored = getAlpacaCreds()
-    const keyId     = stored?.keyId     ?? env.alpacaKeyId
-    const secretKey = stored?.secretKey ?? env.alpacaSecretKey
+    // Credential resolution: stored credentials take precedence over env.
+    // Mode selection is owned by alpaca-mode.ts; default is 'paper'. Env vars
+    // (if set) feed into the paper slot only — they predate dual-mode and
+    // there's no separate ALPACA_LIVE_KEY_ID convention.
+    const mode = getAlpacaMode()
+    const stored = getAlpacaCreds(mode)
+    const keyId     = stored?.keyId     ?? (mode === 'paper' ? env.alpacaKeyId     : '')
+    const secretKey = stored?.secretKey ?? (mode === 'paper' ? env.alpacaSecretKey : '')
     const feed      = stored?.feed      ?? env.alpacaFeed
+    const baseUrl   = resolveBaseUrl(env.alpacaBaseUrl)
     const useAlpaca = !env.useSimulator && !!keyId && !!secretKey
 
     // Market data source
     if (!useAlpaca) {
       const seed = env.rngSeed ?? undefined
       this.market = new MarketSimulator(seed)
-      log.info('using simulator', { seed, reason: keyId ? 'env-forced' : 'no-credentials' })
+      const reason = env.useSimulator ? 'env-forced' : 'no-credentials'
+      log.info('using simulator', { seed, reason, mode, hasStoredCreds: !!stored })
     } else {
       const cfg: AlpacaConfig = {
         keyId, secretKey,
-        baseUrl: env.alpacaBaseUrl,
+        baseUrl,
         dataUrl: env.alpacaDataUrl,
         feed,
       }
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
-      log.info('using alpaca live market', { feed, fromStore: !!stored })
+      // Phase 3.2: wire bracket-fill learning — Alpaca pushes trade_updates for
+      // server-side stop/TP fills that never round-trip through our OrderManager.
+      this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
+      log.info('using alpaca live market', { feed, mode, fromStore: !!stored, baseUrl })
     }
 
-    // Wire data events
-    this.market.onQuotes((quotes) => this.onQuotesBatch(quotes))
-    this.market.onCandle((sym, c, isNew) => {
-      for (const l of this.candleListeners) l(sym, c, isNew)
-    })
-    this.market.onNews((item) => {
-      for (const l of this.newsListeners) l(item)
-    })
+    // Wire data events (helper so we can re-wire on live↔replay swap)
+    this.installMarketWiring(this.market)
 
     // Start data
     await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+
+    // ── Tick recorder (Phase 9): captures live tape for later replay ────────
+    this.recorder = new TickRecorder(this.currentSessionId)
+    this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
+    this.recorder.start()
 
     // Periodic account sync from Alpaca
     if (this.alpaca) {
@@ -213,10 +310,102 @@ export class TradingEngine {
     // Broadcast Observer/Learner/Vault stats every 5s
     this.continuousStatsTimer = setInterval(() => this.broadcastContinuousStats(), 5_000)
 
+    // ── Autonomous paper trader (Phase C, 2026-05-13) ─────────────────────────
+    // Created in stopped state. User must explicitly enable via the toggle.
+    // Refuses to submit when live capital is routed — paper-only by policy.
+    this.autonomous = new AutonomousTrader({
+      getWatchlist:  () => db.getWatchlist(),
+      getQuote:      (s) => this.market.getQuote(s),
+      getIndicators: (s) => computeSnapshot(s, this.market.getCandles(s, 200)),
+      getAccount:    () => this.om.getAccount(),
+      isLiveCapitalRouted: () => getAlpacaMode() === 'live' || isLive(),
+      getDecision:   (s) => this.getAiDecision(s),
+      submitOrder:   (req, opts) => this.submitOrder(req, opts),
+    })
+    this.autonomous.onStatus((s)   => { for (const fn of this.autonomousStatusListeners)   fn(s) })
+    this.autonomous.onDecision((d) => { for (const fn of this.autonomousDecisionListeners) fn(d) })
+
+    // ── Phase 10: SATEX Terminal v2 · Black Box ────────────────────────────
+    // Depth feed first — regime can consume its VPIN proxy for the liquidity metric.
+    this.depth = new DepthFeedService({
+      getQuote: (s) => this.market.getQuote(s),
+    })
+    this.depth.onUpdate((s) => { for (const fn of this.depthListeners) fn(s) })
+    this.depth.start()
+
+    // Regime — HMM 4-state classifier on the focused symbol.
+    this.regime = new RegimeService({
+      getQuote:      (s) => this.market.getQuote(s),
+      getCandles:    (s, l) => this.market.getCandles(s, l),
+      getIndicators: (s) => computeSnapshot(s, this.market.getCandles(s, 200)),
+      getVpin:       (s) => {
+        const snap = this.depth.get(s)
+        return snap.symbol === s ? snap.vpin : null
+      },
+    })
+    this.regime.onUpdate((s) => { for (const fn of this.regimeListeners) fn(s) })
+    this.regime.start()
+
+    // Risk gates — 6 pre-trade guardrails.
+    this.riskGates = new RiskGatesService({
+      getAccount:      () => this.om.getAccount(),
+      getQuote:        (s) => this.market.getQuote(s),
+      getCandles:      (s, l) => this.market.getCandles(s, l),
+      getPnlSnapshots: () => db.listPnlSnapshots(this.currentSessionId),
+    })
+    this.riskGates.onUpdate((s) => { for (const fn of this.riskGatesListeners) fn(s) })
+    this.riskGates.start()
+
+    // Macro calendar — curated event ribbon.
+    this.macro = new MacroCalendarService()
+    this.macro.onUpdate((s) => { for (const fn of this.macroListeners) fn(s) })
+    this.macro.start()
+
+    // EDGAR catalysts — polls SEC for recent 8-K/10-Q/10-K/Form 4 on watchlist
+    // symbols and pushes them as NewsItems through the existing news pipe.
+    this.edgar = new EdgarService({ getWatchlist: () => db.getWatchlist() })
+    this.edgar.onNews((item) => { for (const fn of this.newsListeners) fn(item) })
+    this.edgar.start()
+
+    // System logs tail — wraps the logger push channel (already initialized).
+    this.logs.onTail((s) => { for (const fn of this.logsListeners) fn(s) })
+
     // Periodic observer/brain checkpoint to vault every 10 minutes
     this.vaultCheckpointTimer = setInterval(() => void this.writePeriodicCheckpoints(), 10 * 60_000)
 
+    // ── Overnight robustness (Phase D, 2026-05-13) ─────────────────────────────
+    // Health heartbeat every 5 minutes so logs show heartbeat during long
+    // unattended runs.
+    this.healthLogTimer = setInterval(() => this.writeHealthLog(), 5 * 60_000)
+    // Prune stale entryFeatures every hour to guarantee the map stays bounded
+    // even if some sells fail to pair with their entries.
+    this.entryCleanupTimer = setInterval(() => this.pruneEntryFeatures(), 60 * 60_000)
+
+    // ── Tick-tape pruning (Phase 3.1, 2026-05-13) ──────────────────────────────
+    // Bounded retention for the tape: keep TAPE_RETENTION_DAYS of tick rows.
+    // Once at startup (clean up any backlog from before the pruner existed),
+    // then daily during runtime.
+    this.runTapePrune()
+    this.tapePruneTimer = setInterval(() => this.runTapePrune(), 24 * 60 * 60_000)
+
     log.info('engine ready', { sessionId: this.currentSessionId })
+  }
+
+  /**
+   * One-shot post-mount broadcast of fixture catalysts + historical candles.
+   * Called from the IPC.SUBSCRIBE handler so we know the renderer's useIPC
+   * effect has attached its listeners — pushes fired earlier (from inside
+   * initialize()) can race the renderer mount and be dropped. Guarded by
+   * `seedBroadcastDone` so HMR / devtools remounts don't re-seed.
+   */
+  broadcastInitialSeed(): void {
+    if (this.seedBroadcastDone) return
+    this.seedBroadcastDone = true
+    this.seedInitialNews()
+    // Candle backfill is heavy (Alpaca REST per symbol) — fire and forget.
+    void this.seedHistoricalCandles().catch(e =>
+      log.warn('candle seed failed', { err: String(e) }),
+    )
   }
 
   shutdown(): void {
@@ -226,9 +415,21 @@ export class TradingEngine {
     if (this.pnlTimer)               { clearInterval(this.pnlTimer);               this.pnlTimer = null }
     if (this.continuousStatsTimer)   { clearInterval(this.continuousStatsTimer);   this.continuousStatsTimer = null }
     if (this.vaultCheckpointTimer)   { clearInterval(this.vaultCheckpointTimer);   this.vaultCheckpointTimer = null }
+    if (this.healthLogTimer)         { clearInterval(this.healthLogTimer);         this.healthLogTimer = null }
+    if (this.entryCleanupTimer)      { clearInterval(this.entryCleanupTimer);      this.entryCleanupTimer = null }
+    if (this.tapePruneTimer)         { clearInterval(this.tapePruneTimer);         this.tapePruneTimer = null }
+    if (this.replayStatusTimer)      { clearInterval(this.replayStatusTimer);      this.replayStatusTimer = null }
     if (this.batchTimer)             { clearTimeout(this.batchTimer);              this.batchTimer = null }
+    this.recorder?.stop()
+    this.replay?.stop()
     this.observer?.stop()
     this.learner?.stop()
+    this.autonomous?.stop()
+    this.regime?.stop()
+    this.riskGates?.stop()
+    this.macro?.stop()
+    this.depth?.stop()
+    this.edgar?.stop()
     this.market?.stop?.()
     this.alpaca?.disconnectMarketStream()
     this.alpaca?.disconnectAccountStream()
@@ -253,13 +454,58 @@ export class TradingEngine {
   onObserverStats(fn: ObserverStatsListener): () => void { this.observerStatsListeners.add(fn); return () => this.observerStatsListeners.delete(fn) }
   onLearnerStats(fn: LearnerStatsListener):   () => void { this.learnerStatsListeners.add(fn);  return () => this.learnerStatsListeners.delete(fn) }
   onVaultStats(fn: VaultStatsListener):       () => void { this.vaultStatsListeners.add(fn);    return () => this.vaultStatsListeners.delete(fn) }
+  onReplayStatus(fn: ReplayStatusListener):   () => void { this.replayStatusListeners.add(fn);  return () => this.replayStatusListeners.delete(fn) }
+  onAutonomousStatus(fn: AutonomousStatusListener):     () => void { this.autonomousStatusListeners.add(fn);   return () => this.autonomousStatusListeners.delete(fn) }
+  onAutonomousDecision(fn: AutonomousDecisionListener): () => void { this.autonomousDecisionListeners.add(fn); return () => this.autonomousDecisionListeners.delete(fn) }
+  // Phase 10: Black Box service push hookups
+  onRegimeUpdate(fn: RegimeListener):       () => void { this.regimeListeners.add(fn);    return () => this.regimeListeners.delete(fn) }
+  onRiskGatesUpdate(fn: RiskGatesListener): () => void { this.riskGatesListeners.add(fn); return () => this.riskGatesListeners.delete(fn) }
+  onMacroUpdate(fn: MacroListener):         () => void { this.macroListeners.add(fn);     return () => this.macroListeners.delete(fn) }
+  onLogsTail(fn: LogsTailListener):         () => void { this.logsListeners.add(fn);      return () => this.logsListeners.delete(fn) }
+  onDepthUpdate(fn: DepthListener):         () => void { this.depthListeners.add(fn);     return () => this.depthListeners.delete(fn) }
+
+  // Phase 10: getters + symbol-switching for regime + depth
+  getRegime():    RegimeSnapshot     { return this.regime.get() }
+  getRiskGates(): RiskGatesSnapshot  { return this.riskGates.get() }
+  getRiskGatesForPreview(req: OrderRequest): RiskGatesSnapshot { return this.riskGates.gatesForPreview(req) }
+  getMacro():     MacroSnapshot      { return this.macro.get() }
+  getLogsTail(n?: number): SystemLogsTail { return this.logs.getTail(n) }
+  getDepth(symbol?: string): DepthSnapshot { return this.depth.get(symbol) }
+  subscribeDepth(symbol: string): void {
+    this.depth.subscribe(symbol)
+    this.regime.setSymbol(symbol)
+  }
+
+  // ── Autonomous paper trader ─────────────────────────────────────────────────
+  enableAutonomous():  { ok: boolean; reason?: string } { return this.autonomous.start() }
+  disableAutonomous(): { ok: boolean } { return this.autonomous.stop() }
+  getAutonomousStatus(): AutonomousStatus { return this.autonomous.getStatus() }
+  getAutonomousConfig(): AutonomousConfig { return this.autonomous.getConfig() }
+  getAutonomousRecent(): AutonomousDecision[] { return this.autonomous.getRecent() }
+  setAutonomousConfig(patch: Partial<AutonomousConfig>): AutonomousConfig { return this.autonomous.setConfig(patch) }
 
   // ── Order API ───────────────────────────────────────────────────────────────
   async submitOrder(req: OrderRequest, opts?: { signalConfidence?: number }): Promise<{ ok: boolean; orderId?: string; reason?: string }> {
+    // Hard block: no order submission during historical replay. The chart is
+    // showing past data; submitting against `quote.last` from a replay source
+    // would route to Alpaca priced on stale historical numbers — exactly the
+    // fat-finger risk that originally motivated the (over-broad) isLive()
+    // refusal in startReplay. With order submission blocked here, replay
+    // itself can run freely while live-mode is armed: no path exists for a
+    // historical-data click to move real capital.
+    if (this.replay) {
+      log.warn('order refused — replay active', { symbol: req.symbol, side: req.side })
+      return { ok: false, reason: 'Order submission disabled during historical replay — stop replay to trade' }
+    }
     const quote = this.market.getQuote(req.symbol)
     const refPrice = quote?.last ?? req.limitPrice ?? 0
+    // Gate 0 (quote freshness) only fires for live-interlock orders, but we
+    // compute the age unconditionally so the validator has the data it needs.
+    // Quote.timestamp is set at every tick by the market source (live or sim).
+    const refPriceAge = quote?.timestamp ? Date.now() - quote.timestamp : undefined
     const ctx: OrderValidationContext = {
       refPrice,
+      ...(refPriceAge !== undefined ? { refPriceAge } : {}),
       liveMode: isLive(),
       notionalCap: getNotionalCap(),
       assetClass: quote?.assetClass ?? 'equity',
@@ -285,6 +531,7 @@ export class TradingEngine {
         const recent = this.observer?.getRecent(req.symbol, 1) ?? []
         const regime = recent[0]?.regime ?? null
         this.entryFeatures.set(order.id, {
+          symbol: req.symbol,
           features,
           notional: refPrice * req.quantity,
           regime,
@@ -347,16 +594,18 @@ export class TradingEngine {
 
   getCredentialsStatus(): AlpacaCredentialsStatus {
     const env = getEnv()
-    const stored = getAlpacaCreds()
-    const keyId = stored?.keyId ?? env.alpacaKeyId
-    const secretKey = stored?.secretKey ?? env.alpacaSecretKey
+    const paperStored = getAlpacaCreds('paper')
+    const liveStored  = getAlpacaCreds('live')
+    const paperKeyId  = paperStored?.keyId ?? env.alpacaKeyId
+    const paperSecret = paperStored?.secretKey ?? env.alpacaSecretKey
+    const baseUrl     = resolveBaseUrl(env.alpacaBaseUrl)
     return {
-      paperConfigured:      !!keyId && !!secretKey,
-      liveConfigured:       false,
-      baseUrl:              env.alpacaBaseUrl,
+      paperConfigured:      !!paperKeyId && !!paperSecret,
+      liveConfigured:       !!liveStored?.keyId && !!liveStored?.secretKey,
+      baseUrl,
       dataUrl:              env.alpacaDataUrl,
-      feed:                 stored?.feed ?? env.alpacaFeed,
-      paperEndpointConfirmed: env.alpacaBaseUrl.includes(ALPACA_PAPER_HOST),
+      feed:                 paperStored?.feed ?? liveStored?.feed ?? env.alpacaFeed,
+      paperEndpointConfirmed: baseUrl.includes(ALPACA_PAPER_HOST),
     }
   }
 
@@ -364,37 +613,94 @@ export class TradingEngine {
   getCredentialsMasked(): CredentialsMaskedStatus { return getAlpacaCredsMasked() }
   setCredentials(req: CredentialsSetRequest): { ok: boolean; reason?: string } { return setAlpacaCreds(req) }
   clearCredentials(): { ok: boolean } { clearAlpacaCreds(); return { ok: true } }
-  setAnthropicKey(key: string): { ok: boolean; reason?: string } { return storeSetAnthropicKey(key) }
-  getAnthropicMasked(): AnthropicMaskedStatus { return storeGetAnthropicMasked() }
+  setBaiduKey(key: string): { ok: boolean; reason?: string } { return storeSetBaiduKey(key) }
+  getBaiduMasked(): BaiduMaskedStatus { return storeGetBaiduMasked() }
 
-  /** Rebuild AlpacaClient + LiveMarket using freshly stored credentials. */
+  /** Rebuild AlpacaClient + LiveMarket using freshly stored credentials for
+   *  the currently-active mode. */
   async reconnectAlpaca(): Promise<{ ok: boolean; reason?: string }> {
-    const stored = getAlpacaCreds()
-    if (!stored) return { ok: false, reason: 'No stored credentials' }
+    if (this.replay) return { ok: false, reason: 'stop replay before reconnecting' }
+    const mode = getAlpacaMode()
+    const stored = getAlpacaCreds(mode)
+    if (!stored) return { ok: false, reason: `No stored credentials for ${mode} mode` }
     const env = getEnv()
     try {
       this.alpaca?.disconnectMarketStream()
       this.alpaca?.disconnectAccountStream()
+      this.uninstallMarketWiring()
       this.market?.stop?.()
+      const baseUrl = resolveBaseUrl(env.alpacaBaseUrl)
       const cfg: AlpacaConfig = {
         keyId: stored.keyId, secretKey: stored.secretKey,
-        baseUrl: env.alpacaBaseUrl, dataUrl: env.alpacaDataUrl,
+        baseUrl, dataUrl: env.alpacaDataUrl,
         feed: stored.feed,
       }
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
-      this.market.onQuotes((quotes) => this.onQuotesBatch(quotes))
-      this.market.onCandle((sym, c, isNew) => { for (const l of this.candleListeners) l(sym, c, isNew) })
-      this.market.onNews((item) => { for (const l of this.newsListeners) l(item) })
+      // Phase 3.2: re-wire bracket-fill learning on every reconnect.
+      this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
+      this.installMarketWiring(this.market)
       await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      // Re-attach recorder ingest.
+      this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
       void this.syncAlpacaAccount()
       void this.syncMarketClock()
-      log.info('alpaca reconnected', { feed: stored.feed })
+      log.info('alpaca reconnected', { mode, feed: stored.feed, baseUrl })
       return { ok: true }
     } catch (err) {
       log.error('reconnect failed', { err: String(err) })
       return { ok: false, reason: String(err) }
     }
+  }
+
+  // ── Alpaca endpoint mode (paper vs live URL) ────────────────────────────────
+  getAlpacaModeStatus(): AlpacaModeStatus {
+    const env = getEnv()
+    const mode = getAlpacaMode()
+    const paperStored = getAlpacaCreds('paper')
+    const liveStored  = getAlpacaCreds('live')
+    return {
+      mode,
+      paperConfigured: !!(paperStored?.keyId && paperStored?.secretKey) || (!!env.alpacaKeyId && !!env.alpacaSecretKey),
+      liveConfigured:  !!(liveStored?.keyId  && liveStored?.secretKey),
+      baseUrl: resolveBaseUrl(env.alpacaBaseUrl),
+      connected: this.alpaca?.isMarketConnected ?? false,
+    }
+  }
+
+  /**
+   * Flip the Alpaca endpoint mode. Reconnects the AlpacaClient against the
+   * new endpoint so subsequent REST calls and WS streams use the right host.
+   * Refuses to flip to a mode with no stored credentials — caller must paste
+   * keys first via Settings → save → setAlpacaMode.
+   *
+   * NOTE: This only changes which endpoint we *talk to*. It does NOT bypass
+   * the live-mode typed-phrase interlock (live-mode.ts). And alpaca.ts:114
+   * still hard-blocks submitOrder against the live REST endpoint until that
+   * interlock is loosened — so flipping to 'live' here is safe for data /
+   * account viewing only.
+   */
+  async setAlpacaModeMode(req: AlpacaModeSetRequest): Promise<{ ok: boolean; reason?: string; baseUrl?: string }> {
+    if (this.replay) return { ok: false, reason: 'Stop replay before switching modes.' }
+    if (req.mode === 'live') {
+      const liveStored = getAlpacaCreds('live')
+      if (!liveStored?.keyId || !liveStored?.secretKey) {
+        return { ok: false, reason: 'No live credentials configured. Paste live keys in Settings first.' }
+      }
+    } else {
+      const env = getEnv()
+      const paperStored = getAlpacaCreds('paper')
+      const hasPaperKey = (paperStored?.keyId && paperStored?.secretKey) || (env.alpacaKeyId && env.alpacaSecretKey)
+      if (!hasPaperKey) {
+        return { ok: false, reason: 'No paper credentials configured. Paste paper keys in Settings first.' }
+      }
+    }
+    const result = storeSetAlpacaMode(req.mode)
+    log.warn('alpaca endpoint mode flipped', { mode: req.mode, baseUrl: result.baseUrl })
+    // Reconnect with new endpoint
+    const rec = await this.reconnectAlpaca()
+    if (!rec.ok) return { ok: false, reason: `Mode saved but reconnect failed: ${rec.reason}`, baseUrl: result.baseUrl }
+    return { ok: true, baseUrl: result.baseUrl }
   }
 
   // ── Live mode ───────────────────────────────────────────────────────────────
@@ -455,8 +761,234 @@ export class TradingEngine {
     return {
       ok:     true,
       uptime: Date.now() - this.startedAt,
-      mode:   this.alpaca ? 'alpaca-paper' : 'simulator',
+      mode:   this.replay ? 'replay' : this.alpaca ? 'alpaca-paper' : 'simulator',
     }
+  }
+
+  // ── Phase 9: Replay engine ──────────────────────────────────────────────────
+
+  /** Returns sessions that have recorded tape rows, for the picker UI. */
+  listReplayableSessions(limit = 50): ReplayableSession[] {
+    return db.listReplayableSessions(limit)
+  }
+
+  /** Returns the current replay status — synthesized whether or not active. */
+  getReplayStatus(): ReplayStatus {
+    if (!this.replay) {
+      return {
+        mode: 'recording',  // live recording is always running unless paused
+        sessionId: this.currentSessionId,
+        speed: 1,
+        cursorTs: null,
+        tapeStartTs: null,
+        tapeEndTs: null,
+        progress: null,
+        emittedTicks: 0,
+        bookmarks: [],
+        autoPausedReason: null,
+      }
+    }
+    const snap = this.replay.snapshot()
+    return {
+      mode: snap.paused ? 'paused' : 'playing',
+      sessionId: snap.sessionId,
+      speed: snap.speed,
+      cursorTs: snap.cursorTs,
+      tapeStartTs: snap.tapeStartTs,
+      tapeEndTs:   snap.tapeEndTs,
+      progress: snap.progress,
+      emittedTicks: snap.emittedTicks,
+      bookmarks: db.listBookmarks(snap.sessionId),
+      autoPausedReason: snap.autoPausedReason,
+    }
+  }
+
+  async startReplay(req: ReplayStartRequest): Promise<{ ok: boolean; reason?: string }> {
+    if (this.replay) return { ok: false, reason: 'replay already active — stop first' }
+    // Live-mode interlock used to block replay entirely here. That was too
+    // coarse — analysis of a past day should never depend on whether the
+    // user has armed real-capital posture. Risk is now contained at the
+    // submitOrder gate (no orders during replay), so this entry path is open
+    // regardless of isLive() state.
+    //
+    // Still refuse when open positions are unprotected by the kill switch:
+    // unrealized PnL on those positions would be polluted by replay prices,
+    // and the user might miss a real adverse move while reviewing history.
+    if (this.om?.getAccount().killSwitchArmed === false && this.om?.getAccount().openPositions.length) {
+      return { ok: false, reason: 'flatten or arm kill-switch before entering replay (open positions detected)' }
+    }
+    try {
+      const source = new ReplaySource(req.sessionId, {
+        speed:  req.speed,
+        ...(req.fromTs !== undefined ? { fromTs: req.fromTs } : {}),
+      })
+      // Pause the recorder so replay quotes don't pollute the tape.
+      this.recorder?.pause()
+      // Suspend the live source — keep a reference so we can restore it.
+      this.liveMarket = this.market
+      this.uninstallMarketWiring()
+      try { (this.liveMarket as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+      // Wire replay source in as the active market.
+      this.market = source
+      this.replay = source
+      this.installMarketWiring(source)
+      source.onTickEmitted = () => { /* status broadcast handled by timer */ }
+      source.start()
+      // Pause regime + risk-gates during replay — they consume live quotes that
+      // are now frozen on the historical cursor; resuming on stopReplay below.
+      this.regime?.pause()
+      // Begin pushing replay status snapshots at 2 Hz.
+      this.replayStatusTimer = setInterval(() => this.broadcastReplayStatus(), 500)
+      this.broadcastReplayStatus()
+      log.info('replay started', { sessionId: req.sessionId, fromTs: req.fromTs, speed: req.speed })
+      return { ok: true }
+    } catch (err) {
+      this.recorder?.resume()
+      log.error('replay start failed', { err: String(err) })
+      return { ok: false, reason: String(err) }
+    }
+  }
+
+  stopReplay(): { ok: boolean } {
+    if (!this.replay) return { ok: true }
+    try { this.replay.stop() } catch { /* ignore */ }
+    this.uninstallMarketWiring()
+    this.replay = null
+    if (this.replayStatusTimer) { clearInterval(this.replayStatusTimer); this.replayStatusTimer = null }
+    if (this.liveMarket) {
+      this.market = this.liveMarket
+      this.liveMarket = null
+      this.installMarketWiring(this.market)
+      try { void (this.market as MarketDataSource & { start: () => void | Promise<void> }).start() } catch { /* ignore */ }
+      // Re-attach recorder ingest.
+      this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
+      this.recorder?.resume()
+    }
+    this.regime?.resume()
+    this.broadcastReplayStatus()
+    log.info('replay stopped — live source restored')
+    return { ok: true }
+  }
+
+  pauseReplay():  { ok: boolean } { this.replay?.pause();  this.broadcastReplayStatus(); return { ok: !!this.replay } }
+  resumeReplay(): { ok: boolean } { this.replay?.resume(); this.broadcastReplayStatus(); return { ok: !!this.replay } }
+
+  seekReplay(ts: number): { ok: boolean } {
+    if (!this.replay) return { ok: false }
+    this.replay.seek(ts)
+    this.broadcastReplayStatus()
+    return { ok: true }
+  }
+
+  setReplaySpeed(speed: number): { ok: boolean; speed: number } {
+    if (!this.replay) return { ok: false, speed: 0 }
+    const s = this.replay.setSpeed(speed)
+    this.broadcastReplayStatus()
+    return { ok: true, speed: s }
+  }
+
+  addReplayBookmark(label: string): ReplayBookmark | null {
+    if (!this.replay) return null
+    const snap = this.replay.snapshot()
+    if (snap.cursorTs == null) return null
+    const b: ReplayBookmark = {
+      id: shortId('bmk'),
+      sessionId: snap.sessionId,
+      ts: snap.cursorTs,
+      label: label.trim() || `Bookmark @ ${new Date(snap.cursorTs).toISOString()}`,
+      createdAt: Date.now(),
+    }
+    db.insertBookmark(b)
+    this.broadcastReplayStatus()
+    return b
+  }
+
+  deleteReplayBookmark(id: string): { ok: boolean } {
+    db.deleteBookmark(id)
+    this.broadcastReplayStatus()
+    return { ok: true }
+  }
+
+  listReplayBookmarks(sessionId: string): ReplayBookmark[] { return db.listBookmarks(sessionId) }
+
+  // ── Historical-day importer ─────────────────────────────────────────────────
+  async importHistoricalDay(req: HistoricalImportRequest): Promise<HistoricalImportResult> {
+    const importer = new HistoricalImporter(this.alpaca)
+    return importer.import(req)
+  }
+
+  deleteReplaySession(sessionId: string): { ok: boolean; reason?: string } {
+    if (this.replay && this.replay.snapshot().sessionId === sessionId) {
+      return { ok: false, reason: 'Stop replay before deleting the active session.' }
+    }
+    const importer = new HistoricalImporter(this.alpaca)
+    return importer.deleteSession(sessionId)
+  }
+
+  /**
+   * Prior trading-day H/L/C for a symbol — used by the Pivot Points
+   * chart indicator (Phase 11). Pulls the last 7 daily bars from Alpaca
+   * and returns the most-recent one strictly older than `today` so that
+   * the levels are stable mid-session.
+   *
+   * Returns null when the symbol is not equity/index, Alpaca is offline,
+   * or no completed prior-day bar is available yet (early Monday before
+   * the prior Friday's bar has posted, weekends, etc.). Renderer treats
+   * null as "insufficient data" and hides the lines.
+   */
+  async getPriorDayHlc(symbol: string): Promise<{ high: number; low: number; close: number; date: string } | null> {
+    if (!this.alpaca) return null
+    const sym = symbol.toUpperCase()
+    // Equity-only — Alpaca daily-bars endpoint is /v2/stocks/.
+    const entry = findUniverseEntry(sym)
+    if (entry && entry.assetClass !== 'equity' && entry.assetClass !== 'index') return null
+
+    const now = new Date()
+    const start = new Date(now); start.setUTCDate(start.getUTCDate() - 10)
+    const startIso = start.toISOString()
+    try {
+      const bars = await this.alpaca.getBars(sym, '1Day', startIso)
+      if (bars.length === 0) return null
+      // bars are time-ascending; find the most-recent one whose calendar day
+      // is strictly before today (avoid an in-progress day if it ever shows up).
+      const todayUtc = new Date(); todayUtc.setUTCHours(0, 0, 0, 0)
+      const todayMs = todayUtc.getTime()
+      for (let i = bars.length - 1; i >= 0; i--) {
+        const b = bars[i]!
+        const barMs = b.time * 1000
+        if (barMs < todayMs) {
+          const d = new Date(barMs)
+          const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+          return { high: b.high, low: b.low, close: b.close, date: iso }
+        }
+      }
+      return null
+    } catch (e) {
+      log.warn('getPriorDayHlc failed', { symbol: sym, err: String(e) })
+      return null
+    }
+  }
+
+  // ── Internal: market-source wiring lifecycle ────────────────────────────────
+
+  private installMarketWiring(source: MarketDataSource): void {
+    this.marketSubs.push(source.onQuotes((quotes) => this.onQuotesBatch(quotes)))
+    this.marketSubs.push(source.onCandle((sym, c, isNew) => {
+      for (const l of this.candleListeners) l(sym, c, isNew)
+    }))
+    this.marketSubs.push(source.onNews((item) => {
+      for (const l of this.newsListeners) l(item)
+    }))
+  }
+
+  private uninstallMarketWiring(): void {
+    for (const u of this.marketSubs) { try { u() } catch { /* ignore */ } }
+    this.marketSubs = []
+  }
+
+  private broadcastReplayStatus(): void {
+    const status = this.getReplayStatus()
+    for (const l of this.replayStatusListeners) l(status)
   }
 
   // ── Internal ─────────────────────────────────────────────────────────────────
@@ -537,74 +1069,150 @@ export class TradingEngine {
     const { side, symbol, quantity } = order.request
     // Position-flat detection: sell that resulted in no position
     if (side === 'sell' && !position) {
-      // The position has been deleted from the order manager; pnl was applied
-      // to account.dailyPnl by applyFill. We approximate realized pnl for this
-      // closing trade from the last seen avgPrice — captured at entry.
       const entry = this.entryFeatures.get(order.id) ?? null
       // Some sell orders are opened directly without a paired entry (e.g. close
       // of an Alpaca-synced position). Walk back through entryFeatures looking
       // for any open entry on this symbol when there is no direct match.
-      const fallback = entry ?? this.findOpenEntryForSymbol(symbol)
+      const fallbackPair = entry ? null : this.findOpenEntryForSymbol(symbol)
+      const fallbackId = entry ? order.id : fallbackPair?.[0] ?? null
+      const fallback   = entry ?? (fallbackPair ? fallbackPair[1] : null)
       const fillPrice = order.fillPrice ?? 0
-      // Coarse realized-pnl approximation: close notional minus stored entry notional.
-      // Caller could pair sells to opens via clientOrderId later for accuracy.
-      const realizedPnl = fallback ? fillPrice * quantity - fallback.notional : 0
-      const tacticsBefore = this.tactics.status()
-      this.tactics.recordOutcome(symbol, realizedPnl)
-      const tacticsAfter = this.tactics.status()
-      if (fallback) this.brain.learn(realizedPnl, fallback.notional, fallback.features, 'buy')
-      this.entryFeatures.delete(order.id)
-      db.updateSession(this.currentSessionId, { tradeCount: db.listOrders(this.currentSessionId).length })
-      log.info('learning hook fired', { symbol, realizedPnl })
-
-      // Vault: write a trade-close note capturing wins AND learnings from losses
-      if (this.vault && fallback) {
-        const syntheticPosition: Position = {
-          symbol, quantity, avgPrice: fallback.avgPrice,
-          unrealizedPnl: 0, realizedPnl,
-          openedAt: fallback.openedAt,
-        }
-        void this.vault.writeTradeClose({
-          order,
-          position: syntheticPosition,
-          pnl: realizedPnl,
-          holdMs: Date.now() - fallback.openedAt,
-          aiDecision: fallback.aiDecision,
-          tacticsAtEntry: fallback.tactics,
-          regimeAtEntry: fallback.regime,
-        })
-      }
-
-      // Vault: write a tactics-transition note if state changed
-      if (this.vault && this.lastTacticsState !== tacticsAfter.state) {
-        const reason = tacticsAfter.state === 'veto'
-          ? `Drawdown or signal-quality threshold breached after ${tacticsAfter.tradesObserved} trades`
-          : tacticsAfter.state === 'armed'
-            ? `Graduated to armed after ${tacticsAfter.tradesObserved} trades`
-            : `Recalibrating — metrics below floor`
-        void this.vault.writeTacticsTransition(tacticsBefore, tacticsAfter, reason)
-        this.lastTacticsState = tacticsAfter.state
-      }
+      this.recordTradeClose({
+        symbol, quantity, fillPrice,
+        entry: fallback, entryId: fallbackId,
+        order, source: 'order-manager',
+      })
     }
   }
 
-  /** Walk entryFeatures looking for the oldest open entry on this symbol. */
-  private findOpenEntryForSymbol(symbol: string): { features: ReturnType<Brain['features']>; notional: number; regime: string | null; tactics: TacticsStatus | null; aiDecision: AiDecision | null; avgPrice: number; openedAt: number } | null {
-    let best: ReturnType<typeof this.findOpenEntryForSymbol> = null
+  /**
+   * Shared post-close pipeline. Called from two paths:
+   *
+   *   1. OrderManager.onOrderFill — for sells we routed through our OM
+   *      (manual closes, simulator fills, autonomous-trader exits that we
+   *      explicitly submit as separate orders).
+   *
+   *   2. AlpacaClient.onTradeUpdate — for server-side bracket children
+   *      (stop-loss / take-profit legs) that fire on the exchange without
+   *      ever round-tripping through our OrderManager. Pre-2026-05-13 these
+   *      were silently dropped and the Brain never learned from them.
+   *
+   * Both paths agree on what "closing a position" means: realize PnL, run
+   * SGD against the brain, update tactics history, write the vault note.
+   */
+  private recordTradeClose(args: {
+    symbol: string
+    quantity: number
+    fillPrice: number
+    entry: EntryFeaturesValue | null
+    entryId: string | null
+    order?: Order
+    source: 'order-manager' | 'alpaca-bracket'
+  }): void {
+    const { symbol, quantity, fillPrice, entry, entryId, order, source } = args
+    const realizedPnl = entry ? fillPrice * quantity - entry.notional : 0
+    const tacticsBefore = this.tactics.status()
+    this.tactics.recordOutcome(symbol, realizedPnl)
+    const tacticsAfter = this.tactics.status()
+    if (entry) this.brain.learn(realizedPnl, entry.notional, entry.features, 'buy')
+    if (entryId) this.entryFeatures.delete(entryId)
+    db.updateSession(this.currentSessionId, { tradeCount: db.listOrders(this.currentSessionId).length })
+    log.info('learning hook fired', { symbol, realizedPnl: Math.round(realizedPnl * 100) / 100, source })
+
+    if (this.vault && entry) {
+      const syntheticPosition: Position = {
+        symbol, quantity, avgPrice: entry.avgPrice,
+        unrealizedPnl: 0, realizedPnl,
+        openedAt: entry.openedAt,
+      }
+      // Synthesize an order record for bracket-path closes where we have no
+      // real Order object — the vault writer expects one.
+      const orderForVault: Order = order ?? {
+        id: `bracket-${symbol}-${Date.now()}`,
+        createdAt: Date.now(),
+        filledAt:  Date.now(),
+        status: 'filled' as const,
+        fillPrice,
+        request: {
+          symbol, side: 'sell' as const, type: 'market' as const,
+          quantity, source: 'alpaca-bracket',
+        },
+      }
+      void this.vault.writeTradeClose({
+        order: orderForVault,
+        position: syntheticPosition,
+        pnl: realizedPnl,
+        holdMs: Date.now() - entry.openedAt,
+        aiDecision: entry.aiDecision,
+        tacticsAtEntry: entry.tactics,
+        regimeAtEntry: entry.regime,
+      })
+    }
+
+    if (this.vault && this.lastTacticsState !== tacticsAfter.state) {
+      const reason = tacticsAfter.state === 'veto'
+        ? `Drawdown or signal-quality threshold breached after ${tacticsAfter.tradesObserved} trades`
+        : tacticsAfter.state === 'armed'
+          ? `Graduated to armed after ${tacticsAfter.tradesObserved} trades`
+          : `Recalibrating — metrics below floor`
+      void this.vault.writeTacticsTransition(tacticsBefore, tacticsAfter, reason)
+      this.lastTacticsState = tacticsAfter.state
+    }
+  }
+
+  /**
+   * Alpaca account-stream trade-update handler.
+   *
+   * Fires for every fill on the account, including:
+   *   - Entry orders we submitted (OrderManager already handles these via
+   *     fillOrder → onOrderFill — we dedup by orderId).
+   *   - Bracket child orders (stop/TP) — these never round-tripped through
+   *     us so OrderManager doesn't know about them. THIS is the path we
+   *     need to learn from.
+   *   - External orders placed directly in the Alpaca dashboard.
+   */
+  private onAlpacaTradeUpdate(update: AlpacaTradeUpdate): void {
+    if (update.event !== 'fill') return  // Ignore partial / new / canceled / etc.
+    // Dedup: if OrderManager already has this orderId, its onOrderFill path
+    // will run recordTradeClose. Avoid double-learning.
+    if (this.om.getOrders().some(o => o.id === update.orderId)) return
+    // For now we only learn from sell-fills that close a position we opened.
+    // Buy-fills (covering shorts) would mirror — out of scope until shorts.
+    if (update.side !== 'sell') return
+    const found = this.findOpenEntryForSymbol(update.symbol)
+    if (!found) {
+      log.debug('alpaca bracket fill: no matching entry', { symbol: update.symbol, orderId: update.orderId })
+      return
+    }
+    const [entryId, entry] = found
+    this.recordTradeClose({
+      symbol: update.symbol,
+      quantity: update.quantity,
+      fillPrice: update.price,
+      entry,
+      entryId,
+      source: 'alpaca-bracket',
+    })
+    // Refresh account snapshot so equity reflects the fill immediately
+    // rather than waiting on the next 15s sync.
+    void this.syncAlpacaAccount()
+  }
+
+  /** Walk entryFeatures looking for the oldest open entry on this symbol.
+   *  Returns the [id, value] pair so callers can delete after processing. */
+  private findOpenEntryForSymbol(symbol: string): [string, EntryFeaturesValue] | null {
+    let bestId: string | null = null
+    let bestValue: EntryFeaturesValue | null = null
     let bestOpenedAt = Infinity
-    for (const [, v] of this.entryFeatures) {
-      if (v.openedAt < bestOpenedAt && this.entryFeaturesSymbolMatches(symbol)) {
-        best = v
+    for (const [id, v] of this.entryFeatures) {
+      if (v.symbol === symbol && v.openedAt < bestOpenedAt) {
+        bestId = id
+        bestValue = v
         bestOpenedAt = v.openedAt
       }
     }
-    return best
+    return bestId && bestValue ? [bestId, bestValue] : null
   }
-
-  /** Cheap symbol-match check — entryFeatures isn't keyed by symbol so this is
-   *  intentionally permissive. Returning true is safe; tactics.recordOutcome
-   *  already gates on realized PnL. */
-  private entryFeaturesSymbolMatches(_symbol: string): boolean { return true }
 
   private async syncAlpacaAccount(): Promise<void> {
     if (!this.alpaca) return
@@ -663,6 +1271,56 @@ export class TradingEngine {
     })
   }
 
+  /**
+   * Overnight-robustness helpers.
+   *
+   * writeHealthLog: emits a single info line summarising engine state so the
+   * log file shows a heartbeat during long unattended runs. Look for these
+   * lines to confirm "is it still alive?" without bringing up the UI.
+   *
+   * pruneEntryFeatures: caps memory growth from the entryFeatures Map. An
+   * entry older than 24h is almost certainly orphaned (its sell was never
+   * paired) and dropping it can't cost us much learning signal.
+   */
+  private writeHealthLog(): void {
+    const mem = process.memoryUsage()
+    const acct = this.om.getAccount()
+    const auto = this.autonomous?.getStatus()
+    log.info('health', {
+      sessionId: this.currentSessionId,
+      uptimeSec: Math.floor((Date.now() - this.startedAt) / 1000),
+      heapMb: Math.round(mem.heapUsed / 1024 / 1024),
+      rssMb:  Math.round(mem.rss      / 1024 / 1024),
+      equity: Math.round(acct.equity),
+      dailyPnl: Math.round(acct.dailyPnl),
+      openPositions: acct.openPositions.length,
+      ordersThisSession: db.listOrders(this.currentSessionId).length,
+      alpacaConnected: this.alpaca?.isMarketConnected ?? false,
+      msSinceLastTick: this.alpaca?.msSinceLastTick ?? null,
+      autonomous: auto ? { enabled: auto.enabled, approved: auto.approvedCount, signals: auto.signalsFired } : null,
+      entryFeaturesSize: this.entryFeatures.size,
+    })
+  }
+
+  private pruneEntryFeatures(): void {
+    const cutoff = Date.now() - 24 * 60 * 60_000
+    let pruned = 0
+    for (const [id, v] of this.entryFeatures) {
+      if (v.openedAt < cutoff) { this.entryFeatures.delete(id); pruned++ }
+    }
+    if (pruned > 0) log.info('entryFeatures pruned', { pruned, remaining: this.entryFeatures.size })
+  }
+
+  private runTapePrune(): void {
+    try {
+      const maxAgeMs = TradingEngine.TAPE_RETENTION_DAYS * 24 * 60 * 60_000
+      const pruned = db.pruneOldTicks(maxAgeMs)
+      if (pruned > 0) log.info('tape pruned', { pruned, retentionDays: TradingEngine.TAPE_RETENTION_DAYS })
+    } catch (e) {
+      log.warn('tape prune failed', { err: String(e) })
+    }
+  }
+
   private recordPnlSnapshot(): void {
     const account = this.om.getAccount()
     let unrealized = 0
@@ -676,6 +1334,133 @@ export class TradingEngine {
       unrealizedPnl: unrealized,
     })
   }
+
+  /**
+   * Push fixture catalysts so the Catalysts/News panel renders immediately on
+   * boot — before any simulator tick or Alpaca news poll. These are clearly
+   * sourced as `SATEX/desk` so a downstream live-news adapter (Alpaca News
+   * REST, RSS, etc.) can layer real items on top without dedup logic.
+   */
+  private seedInitialNews(): void {
+    const SEED: Array<{ kind: NewsKind; symbol?: string; title: string; summary: string; sentiment: number; agoMin: number }> = [
+      { kind: 'breaking', symbol: 'NVDA', title: 'NVDA Q3 beat: EPS $0.81 vs $0.74 cons',          summary: 'Data center revenue +56% YoY; Blackwell sampling ahead of schedule.',     sentiment:  0.55, agoMin:  3 },
+      { kind: 'flow',     symbol: 'SPY',  title: 'Block tape · $620M SPY routed pre-open',           summary: 'Institutional desk crosses 1.0M shares; call skew widens at 610 strike.', sentiment:  0.20, agoMin:  9 },
+      { kind: 'macro',                    title: 'EIA crude inventories −3.4MM vs −1.8MM cons',     summary: 'Larger-than-expected drawdown; gasoline build offsets crude tightness.', sentiment:  0.15, agoMin: 17 },
+      { kind: 'earnings', symbol: 'AAPL', title: 'AAPL services revenue beats; iPhone in line',     summary: 'Services +14% YoY; gross margin 47.1% vs 46.5% est.',                    sentiment:  0.40, agoMin: 23 },
+      { kind: 'sentiment',symbol: 'TSLA', title: 'TSLA short interest −12% w/w · retail net-long',   summary: 'First net-long retail positioning in 6 weeks; FTD count declining.',     sentiment:  0.30, agoMin: 31 },
+      { kind: 'flow',     symbol: 'AMD',  title: 'AMD call volume 2.3× daily avg · MI400 prep',      summary: 'Heavy near-dated call activity into upcoming MI400 launch.',             sentiment:  0.25, agoMin: 42 },
+      { kind: 'breaking',                 title: 'Fed minutes signal extended pause through Q2',     summary: 'Officials lean toward holding rates steady; dot plot unchanged.',        sentiment: -0.10, agoMin: 53 },
+    ]
+    const now = Date.now()
+    for (const s of SEED) {
+      const item: NewsItem = {
+        id: shortId('seed'),
+        source: 'SATEX/desk',
+        kind: s.kind,
+        ...(s.symbol ? { symbol: s.symbol } : {}),
+        title: s.title,
+        summary: s.summary,
+        sentiment: s.sentiment,
+        publishedAt: now - s.agoMin * 60_000,
+      }
+      for (const l of this.newsListeners) l(item)
+    }
+    log.info('seeded catalysts', { count: SEED.length })
+  }
+
+  /**
+   * Backfill historical 1-minute bars for the quad-chart symbols + watchlist so
+   * the charts render meaningful candles on first paint instead of a flat
+   * seed-stub line. Two paths:
+   *   1. Alpaca REST when configured + symbol is an equity/index ETF.
+   *   2. Synthetic GBM walk for futures (ES/NQ/...) and crypto (BTC/ETH/...)
+   *      or any symbol Alpaca rejects. Better than a flat line for visual
+   *      verification.
+   *
+   * Pushed bars are also stamped into the LiveCandleBuffer history via
+   * `seedHistory` so indicator computations (EMA9/21, VWAP, RSI) immediately
+   * have a warm window.
+   */
+  private async seedHistoricalCandles(): Promise<void> {
+    const QUAD = ['NVDA', 'SPY', 'ES', 'BTC']
+    const symbols = Array.from(new Set<string>([...QUAD, ...db.getWatchlist()]))
+    const BARS = 200
+    const startIso = new Date(Date.now() - (BARS + 5) * 60_000).toISOString()
+    let pushedFromAlpaca = 0
+    let pushedSynthetic  = 0
+    const lm = this.market as unknown as { seedHistory?: (s: string, c: Candle[]) => void }
+
+    for (const sym of symbols) {
+      const entry = findUniverseEntry(sym)
+      if (!entry) continue
+      const isAlpacaServable = (entry.assetClass === 'equity' || entry.assetClass === 'index')
+      let bars: Candle[] | null = null
+
+      // Path 1 — Alpaca REST for equities/ETFs.
+      if (isAlpacaServable && this.alpaca?.isConfigured) {
+        try {
+          const fetched = await this.alpaca.getBars(sym, '1Min', startIso)
+          if (fetched.length > 0) bars = fetched
+        } catch (e) {
+          log.debug('alpaca bars fetch failed — falling back to synth', { sym, err: String(e) })
+        }
+      }
+
+      // Path 2 — synthetic GBM walk (futures, crypto, or Alpaca failure).
+      if (!bars || bars.length === 0) {
+        bars = synthBackfill(entry.seed, BARS)
+        if (bars.length === 0) continue
+        pushedSynthetic += bars.length
+      } else {
+        pushedFromAlpaca += bars.length
+      }
+
+      // Seed buffer history so indicators have warm data immediately
+      lm.seedHistory?.(sym, bars)
+      // Push each bar to the renderer (idempotent — store appends/replaces)
+      for (const c of bars) {
+        for (const l of this.candleListeners) l(sym, c, true)
+      }
+    }
+    log.info('candle seed complete', {
+      symbols: symbols.length,
+      fromAlpaca: pushedFromAlpaca,
+      synthetic:  pushedSynthetic,
+    })
+  }
+}
+
+/**
+ * Tiny synthetic 1-minute OHLCV backfill — only used to keep charts visually
+ * alive for symbols Alpaca won't serve (futures, crypto). Math.random is fine
+ * here; this path is presentation-only and never feeds the brain/learner.
+ */
+function synthBackfill(seedPrice: number, bars: number): Candle[] {
+  const out: Candle[] = []
+  let p = seedPrice
+  const nowSec = Math.floor(Date.now() / 1000)
+  const stepSec = 60   // 1-minute bars
+  // Align end to current minute boundary
+  const endSec = Math.floor(nowSec / stepSec) * stepSec
+  let t = endSec - bars * stepSec
+  for (let i = 0; i < bars; i++) {
+    const o = p
+    let h = o, l = o
+    const ticks = 20
+    for (let j = 0; j < ticks; j++) {
+      const z = Math.random() * 2 - 1
+      p = p * Math.exp(0.0008 * z)
+      if (p > h) h = p
+      if (p < l) l = p
+    }
+    out.push({
+      time: t,
+      open: o, high: h, low: l, close: p,
+      volume: 1000 + Math.floor(Math.random() * 5000),
+    })
+    t += stepSec
+  }
+  return out
 }
 
 /**

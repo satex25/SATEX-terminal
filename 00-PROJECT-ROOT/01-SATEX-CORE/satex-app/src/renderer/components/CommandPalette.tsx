@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { useMarketStore, useAllQuotes } from '../stores/marketStore'
+import { WORKSPACE_TABS, type Workspace } from './TopBar'
 
 interface Item {
   icon: string
@@ -15,10 +16,10 @@ interface Item {
 interface Props {
   open: boolean
   onClose: () => void
-  onSetPreset: (i: number) => void
+  onSetWorkspace: (ws: Workspace) => void
 }
 
-export function CommandPalette({ open, onClose, onSetPreset }: Props) {
+export function CommandPalette({ open, onClose, onSetWorkspace }: Props) {
   const [q,   setQ]   = useState('')
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -37,11 +38,11 @@ export function CommandPalette({ open, onClose, onSetPreset }: Props) {
       label: `Go to symbol · ${qq.symbol} (${qq.name})`,
       run: () => { setSymbol(qq.symbol); onClose() },
     }))
-    const workspaceItems: Item[] = ['Trade', 'Analyze', 'Scan', 'Replay'].map((p, i) => ({
+    const workspaceItems: Item[] = WORKSPACE_TABS.map((ws, i) => ({
       icon: '⊞',
-      label: `Switch workspace · ${p}`,
+      label: `Switch workspace · ${ws}`,
       kbd:   `⌘${i + 1}`,
-      run:   () => { onSetPreset(i); onClose() },
+      run:   () => { onSetWorkspace(ws); onClose() },
     }))
     const systemItems: Item[] = [
       { icon: '◢', label: 'Arm kill switch (cancel all open orders)', kbd: '⌘⇧K',
@@ -54,7 +55,7 @@ export function CommandPalette({ open, onClose, onSetPreset }: Props) {
         run: () => { window.satex?.toggleFullscreen(); onClose() } },
     ]
     return [...workspaceItems, ...systemItems, ...symItems]
-  }, [quotes, setSymbol, onClose, onSetPreset])
+  }, [quotes, setSymbol, onClose, onSetWorkspace])
 
   const filtered = useMemo(
     () => items.filter(i => i.label.toLowerCase().includes(q.toLowerCase())),

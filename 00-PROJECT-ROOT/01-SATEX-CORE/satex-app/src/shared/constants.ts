@@ -15,8 +15,13 @@ export const BATCH_MS = 50
 
 export const DEFAULT_SYMBOL = 'NVDA'
 export const SPARKLINE_LENGTH = 30
-export const MAX_CANDLES_PER_SYMBOL = 1000
-export const SIMULATOR_CANDLE_INTERVAL_SEC = 5
+export const MAX_CANDLES_PER_SYMBOL = 3600
+export const SIMULATOR_CANDLE_INTERVAL_SEC = 1
+export const CHART_TIMEFRAMES = ['1s', '5s', '15s', '1m', '5m', '15m'] as const
+export type ChartTimeframe = typeof CHART_TIMEFRAMES[number]
+export const CHART_TIMEFRAME_SECONDS: Record<ChartTimeframe, number> = {
+  '1s': 1, '5s': 5, '15s': 15, '1m': 60, '5m': 300, '15m': 900,
+}
 
 export interface UniverseEntry {
   symbol: string
@@ -69,7 +74,9 @@ export const APRIL_TACTICS_DEFAULTS = {
   intervalMs: 30_000,
   notionalCapMin: 1_500,
   notionalCapMax: 3_000,
-  minCandles: 60,
+  // 300 × 1s candles = 5 minutes of warm-up; preserves prior semantics
+  // when SIMULATOR_CANDLE_INTERVAL_SEC dropped from 5 to 1.
+  minCandles: 300,
   cooldownMs: 300_000
 } as const
 
@@ -80,6 +87,13 @@ export const LEARNED_STOP_TP_FLOOR_RR = 2.5
 export const REPLAY_DEFAULT_SPEED = 5
 export const REPLAY_MIN_SPEED = 0.5
 export const REPLAY_MAX_SPEED = 100
+
+/** Symbols pre-checked in the Historical-Day importer UI when the user hasn't
+ *  explicitly picked any. Covers indices + the most-liquid mega-caps so bars
+ *  are reliably available on every US trading day, even far back. */
+export const HISTORICAL_BARS_FALLBACK_SYMBOLS: readonly string[] = [
+  'SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMD', 'META',
+] as const
 
 export const ALPACA_PAPER_HOST = 'paper-api.alpaca.markets'
 

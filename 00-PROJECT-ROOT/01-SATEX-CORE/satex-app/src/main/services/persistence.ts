@@ -10,11 +10,13 @@
  *   brain      — learned stop-loss / take-profit parameters
  *   watchlist  — user-configured symbol list
  */
+import fs from 'fs'
 import path from 'path'
 import { app } from 'electron'
 import type {
   Order, SessionRecord, PnlSnapshot, BrainParameter,
   Observation, PatternWeight, LearningCycle, MarketRegime,
+  TickTapeRow, ReplayBookmark, ReplayableSession,
 } from '@shared/types'
 import { createLogger } from './logger'
 
@@ -163,6 +165,32 @@ function migrate(db: DB): void {
       avg_error           REAL NOT NULL,
       note                TEXT NOT NULL DEFAULT ''
     );
+
+    -- Phase 9: Replay tape. Compressed quote snapshots, append-only.
+    -- One row per (session, timestamp_ms, symbol). Recorder writes from live
+    -- engine; ReplaySource streams back at controlled speed.
+    CREATE TABLE IF NOT EXISTS ticks (
+      session_id    TEXT NOT NULL,
+      ts            INTEGER NOT NULL,
+      symbol        TEXT NOT NULL,
+      last          REAL NOT NULL,
+      bid           REAL NOT NULL,
+      ask           REAL NOT NULL,
+      volume        REAL NOT NULL,
+      vwap          REAL NOT NULL,
+      PRIMARY KEY (session_id, ts, symbol)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ticks_session_ts ON ticks(session_id, ts);
+
+    -- Phase 9: User bookmarks on the replay scrubber. Independent of trades.
+    CREATE TABLE IF NOT EXISTS replay_bookmarks (
+      id            TEXT PRIMARY KEY,
+      session_id    TEXT NOT NULL,
+      ts            INTEGER NOT NULL,
+      label         TEXT NOT NULL,
+      created_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bookmarks_session_ts ON replay_bookmarks(session_id, ts);
   `)
   log.info('sqlite schema migrated')
 }
@@ -414,7 +442,263 @@ export function listLearningCycles(limit = 50): LearningCycle[] {
     }))
 }
 
+// ─── Phase 9: Replay tape (ticks) ────────────────────────────────────────────
+
+/** Batch-insert tape rows in a single transaction. Returns rows written. */
+export function insertTickBatch(rows: TickTapeRow[]): number {
+  if (rows.length === 0) return 0
+  const db = openDB()
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO ticks
+      (session_id, ts, symbol, last, bid, ask, volume, vwap)
+    VALUES (?,?,?,?,?,?,?,?)
+  `)
+  type TxDB = DB & { transaction?: <T extends (...args: unknown[]) => unknown>(fn: T) => T }
+  const txDb = db as TxDB
+  const exec = (): void => {
+    for (const r of rows) {
+      stmt.run(r.sessionId, r.ts, r.symbol, r.last, r.bid, r.ask, r.volume, r.vwap)
+    }
+  }
+  if (typeof txDb.transaction === 'function') (txDb.transaction(exec))()
+  else exec()
+  return rows.length
+}
+
+/** Page through tape rows in [fromTs, toTs] ordered by ts asc. */
+export function readTapeRange(
+  sessionId: string, fromTs: number, toTs: number, limit = 5000,
+): TickTapeRow[] {
+  return (openDB()
+    .prepare(`
+      SELECT * FROM ticks
+      WHERE session_id=? AND ts>=? AND ts<=?
+      ORDER BY ts ASC
+      LIMIT ?
+    `)
+    .all(sessionId, fromTs, toTs, limit) as Array<Record<string, unknown>>)
+    .map(rowToTick)
+}
+
+/** Inclusive (firstTs, lastTs, count) bounds for a session's tape. */
+export function getTapeBounds(sessionId: string): {
+  firstTs: number | null; lastTs: number | null; count: number
+} {
+  const r = openDB().prepare(`
+    SELECT MIN(ts) AS first_ts, MAX(ts) AS last_ts, COUNT(*) AS cnt
+    FROM ticks WHERE session_id=?
+  `).get(sessionId) as { first_ts: number | null; last_ts: number | null; cnt: number } | undefined
+  return {
+    firstTs: r?.first_ts ?? null,
+    lastTs:  r?.last_ts ?? null,
+    count:   r?.cnt ?? 0,
+  }
+}
+
+/** Distinct symbols recorded for a session — used by ReplaySource on warm-up. */
+export function getTapeSymbols(sessionId: string): string[] {
+  return (openDB()
+    .prepare('SELECT DISTINCT symbol FROM ticks WHERE session_id=? ORDER BY symbol')
+    .all(sessionId) as Array<Record<string, unknown>>)
+    .map(r => String(r['symbol']))
+}
+
+/** Sessions that have at least one recorded tick, joined with session metadata. */
+export function listReplayableSessions(limit = 50): ReplayableSession[] {
+  return (openDB()
+    .prepare(`
+      SELECT
+        s.id           AS session_id,
+        s.started_at   AS started_at,
+        s.ended_at     AS ended_at,
+        s.realized_pnl AS realized_pnl,
+        t.cnt          AS tick_count,
+        t.symbol_count AS symbol_count,
+        t.first_ts     AS first_ts,
+        t.last_ts      AS last_ts
+      FROM sessions s
+      INNER JOIN (
+        SELECT
+          session_id,
+          COUNT(*)                       AS cnt,
+          COUNT(DISTINCT symbol)         AS symbol_count,
+          MIN(ts)                        AS first_ts,
+          MAX(ts)                        AS last_ts
+        FROM ticks
+        GROUP BY session_id
+      ) t ON t.session_id = s.id
+      ORDER BY s.started_at DESC
+      LIMIT ?
+    `)
+    .all(limit) as Array<Record<string, unknown>>)
+    .map(r => {
+      const firstTs = r['first_ts'] != null ? Number(r['first_ts']) : null
+      const lastTs  = r['last_ts']  != null ? Number(r['last_ts'])  : null
+      return {
+        sessionId:   String(r['session_id']),
+        startedAt:   Number(r['started_at']),
+        endedAt:     r['ended_at']     != null ? Number(r['ended_at']) : null,
+        realizedPnl: Number(r['realized_pnl'] ?? 0),
+        tickCount:   Number(r['tick_count'] ?? 0),
+        symbols:     Number(r['symbol_count'] ?? 0),
+        firstTickTs: firstTs,
+        lastTickTs:  lastTs,
+        durationMs:  firstTs != null && lastTs != null ? Math.max(0, lastTs - firstTs) : 0,
+      }
+    })
+}
+
+function rowToTick(r: Record<string, unknown>): TickTapeRow {
+  return {
+    sessionId: String(r['session_id']),
+    ts:        Number(r['ts']),
+    symbol:    String(r['symbol']),
+    last:      Number(r['last']),
+    bid:       Number(r['bid']),
+    ask:       Number(r['ask']),
+    volume:    Number(r['volume']),
+    vwap:      Number(r['vwap']),
+  }
+}
+
+// ─── Phase 9: Replay bookmarks ───────────────────────────────────────────────
+
+export function insertBookmark(b: ReplayBookmark): void {
+  openDB().prepare(`
+    INSERT OR REPLACE INTO replay_bookmarks (id, session_id, ts, label, created_at)
+    VALUES (?,?,?,?,?)
+  `).run(b.id, b.sessionId, b.ts, b.label, b.createdAt)
+}
+
+export function deleteBookmark(id: string): void {
+  openDB().prepare('DELETE FROM replay_bookmarks WHERE id=?').run(id)
+}
+
+export function listBookmarks(sessionId: string): ReplayBookmark[] {
+  return (openDB()
+    .prepare('SELECT * FROM replay_bookmarks WHERE session_id=? ORDER BY ts ASC')
+    .all(sessionId) as Array<Record<string, unknown>>)
+    .map(r => ({
+      id:        String(r['id']),
+      sessionId: String(r['session_id']),
+      ts:        Number(r['ts']),
+      label:     String(r['label']),
+      createdAt: Number(r['created_at']),
+    }))
+}
+
+/** Wipe every tape row for a session — used when discarding a historical
+ *  import. Live trading sessions should never be passed here. */
+export function deleteTapeForSession(sessionId: string): number {
+  const r = openDB().prepare('DELETE FROM ticks WHERE session_id=?').run(sessionId)
+  return Number(r.changes)
+}
+
+/**
+ * Bounded-retention prune for the tape table.
+ *
+ * Deletes tick rows older than `maxAgeMs` from now. Sessions remain in the
+ * `sessions` table (cheap metadata) so historical PnL and trade counts stay
+ * intact — only the bulky tick-level tape gets pruned. Returns the number
+ * of rows deleted.
+ *
+ * Sized to keep overnight sessions usable: at ~30 MB/h, a 7-day window caps
+ * the DB at roughly 5 GB worst case. Default retention is 7 days but the
+ * caller picks the value so it stays explicit.
+ */
+export function pruneOldTicks(maxAgeMs: number): number {
+  if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) return 0
+  const cutoff = Date.now() - maxAgeMs
+  const r = openDB().prepare('DELETE FROM ticks WHERE ts < ?').run(cutoff)
+  const pruned = Number(r.changes)
+  if (pruned > 0) {
+    // VACUUM is expensive — defer to incremental_vacuum if pragma is set, else
+    // skip. SQLite reclaims space lazily, that's fine.
+    try { openDB().exec('PRAGMA incremental_vacuum') } catch { /* ignore */ }
+  }
+  return pruned
+}
+
+export function deleteBookmarksForSession(sessionId: string): number {
+  const r = openDB().prepare('DELETE FROM replay_bookmarks WHERE session_id=?').run(sessionId)
+  return Number(r.changes)
+}
+
+export function deleteSessionRow(sessionId: string): number {
+  const r = openDB().prepare('DELETE FROM sessions WHERE id=?').run(sessionId)
+  return Number(r.changes)
+}
+
+/**
+ * Path on disk for the SATEX database, or null if the no-op fallback is active
+ * (no Electron app available — typically test contexts).
+ */
+export function dbPath(): string | null {
+  try { return path.join(app.getPath('userData'), 'satex.db') }
+  catch { return null }
+}
+
+/** Current on-disk size of the database file in bytes. 0 when missing. */
+export function dbSizeBytes(): number {
+  const p = dbPath()
+  if (!p) return 0
+  try { return fs.statSync(p).size }
+  catch { return 0 }
+}
+
+/**
+ * One-shot maintenance: if the DB file exceeds `thresholdBytes`, run VACUUM
+ * to physically reclaim space freed by prior DELETEs. Synchronous and blocking
+ * — on a 1 GB DB this can take 10-30s. Call BEFORE the window shows so the
+ * user doesn't see a UI hang.
+ *
+ * Returns { ran: true, beforeBytes, afterBytes } when VACUUM ran, otherwise
+ * { ran: false, beforeBytes, afterBytes: beforeBytes }.
+ */
+export function compactIfLarge(thresholdBytes: number): {
+  ran: boolean; beforeBytes: number; afterBytes: number
+} {
+  const before = dbSizeBytes()
+  if (before <= thresholdBytes) return { ran: false, beforeBytes: before, afterBytes: before }
+  try {
+    log.warn('db over threshold — running VACUUM (this may take a while)', {
+      beforeMb: Math.round(before / 1024 / 1024),
+      thresholdMb: Math.round(thresholdBytes / 1024 / 1024),
+    })
+    const t0 = Date.now()
+    openDB().exec('VACUUM')
+    const after = dbSizeBytes()
+    log.info('VACUUM complete', {
+      durationMs: Date.now() - t0,
+      beforeMb: Math.round(before  / 1024 / 1024),
+      afterMb:  Math.round(after   / 1024 / 1024),
+      reclaimedMb: Math.round((before - after) / 1024 / 1024),
+    })
+    return { ran: true, beforeBytes: before, afterBytes: after }
+  } catch (err) {
+    log.error('VACUUM failed', { err: String(err) })
+    return { ran: false, beforeBytes: before, afterBytes: before }
+  }
+}
+
+/**
+ * Graceful shutdown:
+ *   1. Force a WAL checkpoint with TRUNCATE so the -wal sidecar file shrinks
+ *      back to 0 bytes (otherwise it can accumulate during heavy write loads).
+ *   2. Close the connection.
+ *
+ * Both steps wrapped in try/catch — we never want shutdown to throw and
+ * orphan the engine in a half-closed state.
+ */
 export function closeDB(): void {
-  _db?.close()
+  if (!_db) return
+  try {
+    _db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    log.info('WAL checkpoint TRUNCATE complete on shutdown')
+  } catch (err) {
+    log.warn('WAL checkpoint failed', { err: String(err) })
+  }
+  try { _db.close() }
+  catch (err) { log.warn('DB close failed', { err: String(err) }) }
   _db = null
 }

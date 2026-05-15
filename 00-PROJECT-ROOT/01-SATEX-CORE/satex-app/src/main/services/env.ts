@@ -39,9 +39,8 @@ export function loadEnv(): SatexEnv {
   const feed      = feedRaw === 'sip' ? 'sip' : 'iex'
 
   if (!useSimulator && (!keyId || !secretKey)) {
-    log.warn(
-      'Alpaca credentials not set. Falling back to simulator. ' +
-      'Set ALPACA_KEY_ID + ALPACA_SECRET_KEY in .env.local to enable live feeds.'
+    log.info(
+      'Alpaca env credentials not set. Engine will use stored credentials (if any) or fall back to simulator.'
     )
   }
 
@@ -58,7 +57,11 @@ export function loadEnv(): SatexEnv {
     alpacaBaseUrl:    baseUrl,
     alpacaDataUrl:    dataUrl,
     alpacaFeed:       feed,
-    useSimulator:     useSimulator || !keyId || !secretKey,
+    // useSimulator now means "explicitly forced via SATEX_USE_SIMULATOR=true".
+    // The engine separately decides to fall back to simulator when no usable
+    // keys exist (env OR credential store). Pre-2026-05-13 this flag also
+    // turned true when env keys were missing, which masked stored keypairs.
+    useSimulator,
     rngSeed,
     dailyLossLimitPct,
     maxOpenPositions,

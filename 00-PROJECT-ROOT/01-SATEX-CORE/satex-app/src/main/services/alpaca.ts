@@ -10,7 +10,8 @@
  *   wss://paper-api.alpaca.markets/stream           — trade_updates
  */
 import type { AlpacaTradeUpdate, Candle, OrderRequest, Position } from '@shared/types'
-import { ALPACA_PAPER_HOST } from '@shared/constants'
+import { ALPACA_PAPER_HOST, findUniverseEntry } from '@shared/constants'
+import { isLive } from './live-mode'
 import { createLogger } from './logger'
 
 const log = createLogger('alpaca')
@@ -62,6 +63,21 @@ export class AlpacaClient {
   private connected        = false
   private accountConnected = false
   private lastDataMessageAt = 0
+  /** Exponential-backoff state for market-WS reconnects. Reset to 0 on
+   *  successful authenticate; capped at MAX_BACKOFF_MS so we never sleep too
+   *  long during a transient outage. */
+  private reconnectAttempts = 0
+  private staleWatchdog: NodeJS.Timeout | null = null
+  /** Absolute deadline before which reconnect attempts must wait. Set when the
+   *  server reports code 406 (connection-limit exceeded) so an orphan socket on
+   *  the server side has time to time out before we try to grab the slot. */
+  private connectionLimitCooldownUntil = 0
+  private static MIN_BACKOFF_MS    = 1_000
+  private static MAX_BACKOFF_MS    = 30_000
+  private static STALE_THRESHOLD_MS = 60_000   // force reconnect if no msg in 60s
+  /** Cooldown applied when the Alpaca stream reports code 406 (connection
+   *  limit). Long enough for a stuck server-side socket to drop. */
+  private static CONNECTION_LIMIT_COOLDOWN_MS = 60_000
 
   constructor(cfg: AlpacaConfig) { this.cfg = cfg }
 
@@ -111,7 +127,24 @@ export class AlpacaClient {
   }
 
   async submitOrder(req: OrderRequest): Promise<OrderResult> {
-    if (!this.isPaperEndpoint) throw new Error(`alpaca: refusing non-paper submit — baseUrl=${this.cfg.baseUrl}`)
+    // Live-endpoint guard. Pre-2026-05-13 this was an unconditional hard-block
+    // ("never submit if not paper"). Phase 4 lifts the block when — and ONLY
+    // when — the user has armed the typed-phrase interlock via live-mode.ts.
+    //
+    // Other safety walls remain in place upstream:
+    //   • OrderManager Gate 7 enforces a per-order notional cap.
+    //   • Gates 0-6, 8 (freshness, kill switch, market-hours, daily-loss,
+    //     concentration, buying power, tactics) all still run before this.
+    // This guard is the LAST line — orders that survive everything else still
+    // get rejected here if interlock is not armed.
+    if (!this.isPaperEndpoint && !isLive()) {
+      throw new Error('Live trading requires explicit consent — arm the typed-phrase interlock first (Markets → ● LIVE mode).')
+    }
+    if (!this.isPaperEndpoint) {
+      // Loud, structured log every time real capital is about to move. Easy to
+      // grep for in audit logs (`level:warn ns:alpaca msg:"LIVE submit"`).
+      log.warn('LIVE submit', { symbol: req.symbol, side: req.side, qty: req.quantity, type: req.type, hasStops: req.stopLoss !== undefined })
+    }
     const body: Record<string, unknown> = {
       symbol: req.symbol, qty: req.quantity, side: req.side, type: req.type, time_in_force: 'day'
     }
@@ -143,18 +176,43 @@ export class AlpacaClient {
     }))
   }
 
+  /**
+   * Filter symbols for a given Alpaca data feed.
+   *
+   * IEX (free tier) covers only US equities + index ETFs. Subscribing to
+   * futures / crypto on IEX causes the v2 stream to close with code 1006
+   * — that's the reconnect-storm root cause we hit during smoke testing.
+   *
+   * SIP (paid) covers all US-listed equities. Crypto/futures still aren't
+   * on the equity stream — those would need /crypto/{exchange} endpoints.
+   */
+  private subscribableSymbols(symbols: string[]): string[] {
+    return symbols.filter(sym => {
+      const entry = findUniverseEntry(sym)
+      const cls = entry?.assetClass ?? 'equity'
+      // Equity feeds cover equity + index ETFs only.
+      return cls === 'equity' || cls === 'index'
+    })
+  }
+
   // ── Market Data WebSocket ─────────────────────────────────────────────────
   async connectMarketStream(symbols: string[]): Promise<void> {
     if (!this.isConfigured) { log.warn('skipping market stream — no credentials'); return }
     if (this.marketWs) return
+    const subscribable = this.subscribableSymbols(symbols)
+    const skipped = symbols.length - subscribable.length
+    if (subscribable.length === 0) {
+      log.warn('no subscribable symbols for feed — refusing to open WS', { feed: this.cfg.feed, total: symbols.length })
+      return
+    }
     const url = `wss://stream.data.alpaca.markets/v2/${this.cfg.feed}`
-    log.info('connecting market WS', { url, symbols: symbols.length })
+    log.info('connecting market WS', { url, symbols: subscribable.length, skipped, feed: this.cfg.feed })
     const ws = await openWS(url)
     if (!ws) { log.error('no WS implementation — market stream unavailable'); return }
     this.marketWs = ws
 
     ws.onopen = () => ws.send(JSON.stringify({ action: 'auth', key: this.cfg.keyId, secret: this.cfg.secretKey }))
-    ws.onmessage = (ev) => { const f = frame(ev.data); if (f) for (const m of f) this.onDataMsg(m, symbols) }
+    ws.onmessage = (ev) => { const f = frame(ev.data); if (f) for (const m of f) this.onDataMsg(m, subscribable) }
     ws.onclose = (ev) => {
       log.warn('market WS closed', { code: ev.code })
       this.connected = false; this.marketWs = null
@@ -165,24 +223,95 @@ export class AlpacaClient {
 
   disconnectMarketStream(): void {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
+    if (this.staleWatchdog)  { clearInterval(this.staleWatchdog);  this.staleWatchdog  = null }
     try { this.marketWs?.close() } catch { /* ignore */ }
     this.marketWs = null; this.connected = false
+    this.reconnectAttempts = 0
   }
 
+  /**
+   * Reconnect with exponential backoff: 1s, 2s, 4s, 8s, 16s, then capped at
+   * MAX_BACKOFF_MS. Reset on successful auth. This is the difference between
+   * politely waiting out an Alpaca blip and storming them with thousands of
+   * connect attempts during an outage.
+   */
   private scheduleReconnect(symbols: string[]): void {
     if (this.reconnectTimer) return
-    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; void this.connectMarketStream(symbols) }, 3000)
+    const backoff = Math.min(
+      AlpacaClient.MAX_BACKOFF_MS,
+      AlpacaClient.MIN_BACKOFF_MS * Math.pow(2, this.reconnectAttempts),
+    )
+    // Honor a connection-limit cooldown (code 406) — wait whichever is longer
+    // so we don't immediately storm back through a slot we just lost.
+    const cooldown = Math.max(0, this.connectionLimitCooldownUntil - Date.now())
+    const delay = Math.max(backoff, cooldown)
+    this.reconnectAttempts++
+    log.info('scheduling market WS reconnect', {
+      attempt: this.reconnectAttempts,
+      delayMs: delay,
+      ...(cooldown > 0 ? { cooldownMs: cooldown } : {}),
+    })
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      void this.connectMarketStream(symbols)
+    }, delay)
+  }
+
+  /**
+   * Watchdog: if no message has arrived in STALE_THRESHOLD_MS, force-close the
+   * socket so scheduleReconnect can rebuild it. Runs at 1/4 the stale window
+   * so detection latency is bounded.
+   */
+  private startStaleWatchdog(symbols: string[]): void {
+    if (this.staleWatchdog) return
+    const period = Math.max(5_000, Math.floor(AlpacaClient.STALE_THRESHOLD_MS / 4))
+    this.staleWatchdog = setInterval(() => {
+      if (!this.marketWs || !this.connected) return
+      const idle = Date.now() - this.lastDataMessageAt
+      if (this.lastDataMessageAt > 0 && idle > AlpacaClient.STALE_THRESHOLD_MS) {
+        log.warn('market WS stale — forcing reconnect', { idleMs: idle })
+        try { this.marketWs.close(4000) } catch { /* ignore */ }
+        // close handler will call scheduleReconnect(symbols)
+      }
+    }, period)
+    // Save symbols closure target via outer scope; clearing handled in disconnect.
+    void symbols
   }
 
   private onDataMsg(m: Record<string, unknown>, symbols: string[]): void {
     this.lastDataMessageAt = Date.now()
     if (m['T'] === 'success' && m['msg'] === 'authenticated') {
       this.connected = true
+      this.reconnectAttempts = 0                 // reset backoff on success
+      this.startStaleWatchdog(symbols)
       log.info('market stream authenticated')
       this.marketWs?.send(JSON.stringify({ action: 'subscribe', trades: symbols, quotes: symbols, bars: symbols }))
       this.subscribed = new Set(symbols); return
     }
-    if (m['T'] === 'subscription') { log.info('subscription confirmed'); return }
+    // Error messages from Alpaca's stream protocol — surface them so we can
+    // diagnose subscription/auth issues. Without this, a 1006 close right
+    // after "subscription confirmed" looks identical to a network blip.
+    if (m['T'] === 'error') {
+      const code = Number(m['code'] ?? 0)
+      log.warn('market stream error from server', { code, msg: m['msg'] })
+      // Code 406 = "connection limit exceeded" — Alpaca only allows 1 concurrent
+      // WS to the IEX feed per account. Pile-driving reconnects makes it worse;
+      // apply a long cooldown so the orphan socket can time out server-side.
+      if (code === 406) {
+        this.connectionLimitCooldownUntil = Date.now() + AlpacaClient.CONNECTION_LIMIT_COOLDOWN_MS
+        log.warn('alpaca connection limit hit — cooling down', {
+          cooldownMs: AlpacaClient.CONNECTION_LIMIT_COOLDOWN_MS,
+        })
+      }
+      return
+    }
+    if (m['T'] === 'subscription') {
+      const t = (m['trades'] as unknown[])?.length ?? 0
+      const q = (m['quotes'] as unknown[])?.length ?? 0
+      const b = (m['bars']   as unknown[])?.length ?? 0
+      log.info('subscription confirmed', { trades: t, quotes: q, bars: b })
+      return
+    }
     if (m['T'] === 'q') {
       const bid = Number(m['bp'] ?? 0), ask = Number(m['ap'] ?? 0)
       const tick: AlpacaTick = { symbol: String(m['S'] ?? ''), price: (bid + ask) / 2, size: Number(m['bs'] ?? 0) + Number(m['as'] ?? 0), bid, ask, timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now() }

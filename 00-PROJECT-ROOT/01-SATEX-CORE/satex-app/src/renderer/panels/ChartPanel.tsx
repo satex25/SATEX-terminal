@@ -1,42 +1,312 @@
 /**
  * SATEX — Chart Panel (Lightweight Charts v5 candle chart)
  * Renders OHLCV candles, live price line, indicator overlays.
- * Header uses the reference's .chart-toolbar / .chart-shell class library.
+ * Server emits 1-second base candles; client aggregates to user's selected timeframe.
+ *
+ * Phase 11 — chart-indicator integration. The 6 indicators (EMA / RSI /
+ * Double Top / Double Bottom / Fibonacci / Pivot Points) are driven by
+ * useIndicatorStore. Compute lives in shared/chart-indicators (pure,
+ * tested). EMA color is conditioned on dominant HMM regime, matching the
+ * spec mapping: COMPRESSION=green, EXPANSION=cyan ("TREND"), MEAN-REVERT=
+ * orange, CAPITULATION=red ("PANIC").
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMarketStore, selectCandles } from '../stores/marketStore'
 import { useAccountStore } from '../stores/accountStore'
-import { findUniverseEntry } from '@shared/constants'
+import { useIndicatorStore } from '../stores/indicatorStore'
+import { useRegimeStore } from '../stores/regimeStore'
+import {
+  emaSeries as computeEmaSeries,
+  rsiSeries as computeRsiSeries,
+  detectDoubleTops,
+  detectDoubleBottoms,
+  computeFibonacci,
+  FIB_RATIOS,
+  type Candle as IndCandle,
+} from '@shared/chart-indicators'
+import {
+  findUniverseEntry, CHART_TIMEFRAMES, CHART_TIMEFRAME_SECONDS,
+  HISTORICAL_BARS_FALLBACK_SYMBOLS, UNIVERSE,
+  type ChartTimeframe,
+} from '@shared/constants'
+import type { Candle, ReplayStatus } from '@shared/types'
 import { fmt } from '../lib/format'
 
-const TIMEFRAMES = ['1m', '5m', '15m', '1H', '4H', '1D'] as const
-const TYPES      = ['Candles', 'Line', 'Area'] as const
+// ── Historical-day picker helpers ────────────────────────────────────────────
+
+/** YYYY-MM-DD in local time — what <input type="date"> expects. */
+function isoDateLocal(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+function todayIsoLocal(): string { return isoDateLocal(new Date()) }
+
+/** Most recent weekday, in local time. Default chart date — Alpaca has bars. */
+function defaultHistoricalDate(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1)
+  return isoDateLocal(d)
+}
+
+/** Symbols eligible for the historical-bars endpoint (equity + index ETFs). */
+const HISTORICAL_ELIGIBLE = new Set(
+  UNIVERSE.filter(u => u.assetClass === 'equity' || u.assetClass === 'index').map(u => u.symbol)
+)
+
+/** Pull YYYY-MM-DD out of a `hist_YYYY-MM-DD_<tf>_<hash>` session id. */
+function dateFromHistSessionId(id: string | null | undefined): string | null {
+  if (!id || !id.startsWith('hist_')) return null
+  const m = /^hist_(\d{4}-\d{2}-\d{2})_/.exec(id)
+  return m?.[1] ?? null
+}
+
+// ── Indicator-overlay helpers ─────────────────────────────────────────────────
+
+/**
+ * Maps a dominant HMM regime state to its EMA accent color, per the Phase 11
+ * spec. Codebase uses EXPANSION/MEAN-REVERT/COMPRESSION/CAPITULATION; the spec
+ * named the last two TREND/PANIC. Mapping is explicit so the rename is safe.
+ */
+function emaColorForRegime(state: string | null | undefined): string {
+  switch (state) {
+    case 'COMPRESSION':  return '#21c97a' // green
+    case 'EXPANSION':    return '#00c8ff' // cyan (spec: "TREND")
+    case 'MEAN-REVERT':  return '#f5a623' // orange
+    case 'CAPITULATION': return '#ff4655' // red (spec: "PANIC")
+    default:             return '#9aa1ad' // neutral mute
+  }
+}
+
+/** Visual differentiation across EMA periods on the same chart. */
+const EMA_PERIOD_OPACITY: Record<number, number> = { 9: 1.00, 21: 0.78, 50: 0.58, 200: 0.42 }
+
+/** Fibonacci level palette — gold/silver/bronze trio per spec, with the
+ *  two outer levels rendered in neutral grey so the eye lands on 61.8 / 50 / 38.2. */
+const FIB_COLORS: Record<number, string> = {
+  0.236: 'rgba(160,160,168,0.55)',
+  0.382: '#cd7f32', // bronze
+  0.500: '#c0c0c0', // silver
+  0.618: '#c9a04a', // gold (matches --bb-gold)
+  0.786: 'rgba(160,160,168,0.55)',
+}
+
+/** Convert a hex color to rgba(...) with the given alpha. Returns the input
+ *  unchanged for non-hex strings (so an `rgba(...)` color can pass through). */
+function applyOpacity(color: string, alpha: number): string {
+  if (!color.startsWith('#')) return color
+  const h = color.length === 4
+    ? color.slice(1).split('').map(c => c + c).join('')
+    : color.slice(1)
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
+}
+
+function aggregate(candles: readonly Candle[], bucketSec: number): Candle[] {
+  if (bucketSec <= 1 || candles.length === 0) return candles.slice()
+  const out: Candle[] = []
+  let cur: Candle | null = null
+  let curStart = 0
+  for (const c of candles) {
+    const bucket = Math.floor(c.time / bucketSec) * bucketSec
+    if (!cur || bucket !== curStart) {
+      if (cur) out.push(cur)
+      cur = { time: bucket, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }
+      curStart = bucket
+    } else {
+      cur.high = Math.max(cur.high, c.high)
+      cur.low  = Math.min(cur.low, c.low)
+      cur.close = c.close
+      cur.volume += c.volume
+    }
+  }
+  if (cur) out.push(cur)
+  return out
+}
 
 export function ChartPanel() {
   const symbol   = useMarketStore(s => s.symbol)
   const quote    = useMarketStore(s => s.quotes.get(symbol))
   const candles  = useMarketStore(selectCandles(symbol))
   const indicators = useAccountStore(s => s.indicators.get(symbol))
+  const indSettings = useIndicatorStore(s => s.settings)
+  const regimeSnap  = useRegimeStore(s => s.snapshot)
   const entry    = findUniverseEntry(symbol)
   const dp       = entry?.dp ?? 2
 
-  const [tf,   setTf]   = useState<typeof TIMEFRAMES[number]>('5m')
-  const [type, setType] = useState<typeof TYPES[number]>('Candles')
+  // Dominant HMM state drives EMA color when "ema" is enabled. Falls back to
+  // neutral when no regime snapshot has arrived yet (engine cold-start) or
+  // when the HMM is degenerate. Recomputed only when the snapshot changes.
+  const dominantRegime = useMemo(() => {
+    const arr = regimeSnap?.hmm
+    if (!arr || arr.length === 0) return null
+    let best = arr[0]!
+    for (let i = 1; i < arr.length; i++) if (arr[i]!.p > best.p) best = arr[i]!
+    return best.name
+  }, [regimeSnap])
+  const emaColor = emaColorForRegime(dominantRegime)
+
+  // Prior-day H/L/C powers Pivot Points. Refetched on symbol change AND on
+  // pivot-points enable so toggling without changing symbols still works.
+  const [priorHlc, setPriorHlc] = useState<{ high: number; low: number; close: number; date: string } | null>(null)
+
+  // Insufficient-data notes — collected during indicator reconciliation and
+  // surfaced via the .chart-ind-warn watermark. Per-indicator granularity.
+  const [warnings, setWarnings] = useState<string[]>([])
+
+  const [tf, setTf] = useState<ChartTimeframe>('5s')
+  const bucketSec = CHART_TIMEFRAME_SECONDS[tf]
+
+  // ── Historical-day replay state ────────────────────────────────────────────
+  const [histDate,  setHistDate]  = useState<string>(defaultHistoricalDate())
+  const [histBusy,  setHistBusy]  = useState(false)
+  const [histErr,   setHistErr]   = useState<string | null>(null)
+  const [replayStatus, setReplayStatus] = useState<ReplayStatus | null>(null)
+
+  // Subscribe to replay status — drives "in replay?" UI branching.
+  useEffect(() => {
+    let cancelled = false
+    void window.satex?.replay?.getStatus()
+      .then(s => { if (!cancelled) setReplayStatus(s) })
+      .catch(() => {})
+    const unsub = window.satex?.replay?.onStatus(s => { if (!cancelled) setReplayStatus(s) })
+    return () => { cancelled = true; unsub?.() }
+  }, [])
+
+  const inReplay        = replayStatus?.mode === 'playing' || replayStatus?.mode === 'paused'
+  const replaySessionId = inReplay ? replayStatus?.sessionId ?? null : null
+  const replayDate      = dateFromHistSessionId(replaySessionId)
+  const replayMode      = replayStatus?.mode ?? null
+  const replayCursor    = replayStatus?.cursorTs ?? null
+
+  // Auto-dismiss error after 6s so the toolbar doesn't stay polluted.
+  useEffect(() => {
+    if (!histErr) return
+    const t = setTimeout(() => setHistErr(null), 6_000)
+    return () => clearTimeout(t)
+  }, [histErr])
+
+  /**
+   * Load a previous calendar day into the chart via Phase 9.1 historical
+   * replay. Pipeline:
+   *
+   *   1. Build symbol set — current chart symbol first, then watchlist + fallback,
+   *      filtered to equity/index (the only classes Alpaca bars cover), capped at 16.
+   *   2. importHistorical — Alpaca bars → synthetic tape under `hist_<date>_…`.
+   *   3. If a replay is already active, stop it first so the engine cleanly
+   *      swaps sources.
+   *   4. start(replay) at speed=1, pause immediately, seek to tapeEnd. The
+   *      seek warms up the chart with the full day's bars synchronously, so
+   *      the user sees the whole session as soon as loading finishes.
+   *
+   * Side effect: while replay is active, live order submission is blocked
+   * (existing TradingEngine guardrail). User clicks "Return to Live" to resume.
+   */
+  async function loadHistoricalDay(): Promise<void> {
+    if (histBusy) return
+    setHistBusy(true); setHistErr(null)
+    try {
+      const watchSyms = Array.from(useMarketStore.getState().quotes.keys())
+      const candidates = [symbol, ...watchSyms, ...HISTORICAL_BARS_FALLBACK_SYMBOLS]
+      const symbols: string[] = []
+      const seen = new Set<string>()
+      for (const s of candidates) {
+        const up = s.toUpperCase()
+        if (seen.has(up) || !HISTORICAL_ELIGIBLE.has(up)) continue
+        seen.add(up); symbols.push(up)
+        if (symbols.length >= 16) break
+      }
+      if (symbols.length === 0) {
+        setHistErr(`${symbol} has no historical bars (equity/index ETFs only).`)
+        return
+      }
+
+      const importRes = await window.satex?.replay?.importHistorical({
+        date: histDate, symbols, timeframe: '1Min',
+      })
+      if (!importRes?.ok || !importRes.sessionId) {
+        setHistErr(importRes?.reason ?? 'Import failed')
+        return
+      }
+
+      // Hot-swap: stop any active replay so we don't pile sources on each other.
+      if (inReplay) {
+        await window.satex?.replay?.stop()
+      }
+
+      const startRes = await window.satex?.replay?.start({
+        sessionId: importRes.sessionId, speed: 1,
+      })
+      if (!startRes?.ok) {
+        setHistErr(startRes?.reason ?? 'Replay start failed')
+        return
+      }
+
+      await window.satex?.replay?.pause()
+      // Seek to end so warmup re-emits the whole day into the chart synchronously.
+      const st = await window.satex?.replay?.getStatus()
+      if (st?.tapeEndTs && st?.tapeStartTs) {
+        // Clear candle store BEFORE the seek so the upcoming warmup emit
+        // builds the chart fresh instead of being appended to whatever
+        // stragglers the initial start-warmup pushed (typically just the
+        // first tape row near tapeStart). useIPC's mode-transition reset
+        // fires on idle→playing but not on subsequent seeks.
+        useMarketStore.getState().resetCandles()
+        // Stop 1 ms shy of tapeEnd to avoid tripping the auto-pause-at-end path.
+        await window.satex?.replay?.seek(Math.max(st.tapeStartTs, st.tapeEndTs - 1))
+      }
+    } catch (e) {
+      setHistErr(String(e))
+    } finally {
+      setHistBusy(false)
+    }
+  }
+
+  async function exitReplay(): Promise<void> {
+    setHistErr(null)
+    try { await window.satex?.replay?.stop() } catch (e) { setHistErr(String(e)) }
+  }
+
+  // Aggregate raw 1s candles into the user's selected timeframe.
+  const view = useMemo(() => aggregate(candles, bucketSec), [candles, bucketSec])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef     = useRef<unknown>(null)
   const seriesRef    = useRef<unknown>(null)
-  const ema9Ref      = useRef<unknown>(null)
-  const ema21Ref     = useRef<unknown>(null)
+  /** Cached lightweight-charts module — kept for indicator reconciliation
+   *  effects to add/remove series without re-importing. */
+  const lwcModRef    = useRef<unknown>(null)
+  /** EMA series keyed by period — lets us add/remove individual periods
+   *  in response to indicator-store changes without nuking the whole chart. */
+  const emaSeriesMap = useRef<Map<number, unknown>>(new Map())
+  /** RSI series lives in pane index 1 (sub-pane). Created on demand,
+   *  destroyed when the indicator is toggled off. */
+  const rsiSeriesRef       = useRef<unknown>(null)
+  const rsiOverboughtRef   = useRef<unknown>(null)
+  const rsiOversoldRef     = useRef<unknown>(null)
+  /** Horizontal price lines for Fibonacci (5 levels) and Pivot Points
+   *  (PP + R1..R3 + S1..S3 = 7 lines). Tracked so we can clear+redraw on
+   *  setting changes without leaking handles. */
+  const fibLineRefs        = useRef<unknown[]>([])
+  const pivotLineRefs      = useRef<unknown[]>([])
+  /** Pattern-marker handle (lightweight-charts v5 createSeriesMarkers). */
+  const markersHandleRef   = useRef<unknown>(null)
 
-  // Init chart once per mount
+  // Init chart once per mount. Indicator series are added by the
+  // reconciliation effect below — this effect only creates the chart and
+  // the main candlestick series.
   useEffect(() => {
     if (!containerRef.current) return
     let cancelled = false
 
     void (async () => {
       try {
-        const { createChart, CrosshairMode, CandlestickSeries, LineSeries } = await import('lightweight-charts')
+        const lwc = await import('lightweight-charts')
+        const { createChart, CrosshairMode, CandlestickSeries } = lwc
         if (cancelled || !containerRef.current) return
 
         const chart = createChart(containerRef.current, {
@@ -60,7 +330,9 @@ export function ChartPanel() {
           timeScale: {
             borderColor: 'rgba(47,44,52,0.85)',
             timeVisible:    true,
-            secondsVisible: false,
+            secondsVisible: true,
+            rightOffset: 6,
+            barSpacing: 8,
           },
           handleScroll: true,
           handleScale:  true,
@@ -74,17 +346,9 @@ export function ChartPanel() {
           lastValueVisible: true,
         })
 
-        const ema9 = chart.addSeries(LineSeries, {
-          color: 'rgba(233,75,60,0.9)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: 'EMA9',
-        })
-        const ema21 = chart.addSeries(LineSeries, {
-          color: 'rgba(245,158,11,0.85)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: 'EMA21',
-        })
-
         chartRef.current  = chart
         seriesRef.current = series
-        ema9Ref.current   = ema9
-        ema21Ref.current  = ema21
+        lwcModRef.current = lwc
 
         const ro = new ResizeObserver(() => {
           if (!containerRef.current) return
@@ -101,39 +365,323 @@ export function ChartPanel() {
       cancelled = true
       if (chartRef.current) {
         try { (chartRef.current as { remove: () => void }).remove() } catch { /* ignore */ }
-        chartRef.current = null; seriesRef.current = null
-        ema9Ref.current  = null; ema21Ref.current = null
+        chartRef.current     = null
+        seriesRef.current    = null
+        lwcModRef.current    = null
+        emaSeriesMap.current.clear()
+        rsiSeriesRef.current     = null
+        rsiOverboughtRef.current = null
+        rsiOversoldRef.current   = null
+        fibLineRefs.current      = []
+        pivotLineRefs.current    = []
+        markersHandleRef.current = null
       }
     }
   }, [])
 
-  // Bulk reset candles when symbol or array length changes
+  // Bulk reset when symbol, timeframe, or aggregated length changes
   useEffect(() => {
-    if (!seriesRef.current || candles.length === 0) return
+    if (!seriesRef.current || view.length === 0) return
     try {
       const s = seriesRef.current as { setData: (d: unknown) => void }
-      s.setData(candles.map(c => ({
+      s.setData(view.map(c => ({
         time: c.time as unknown,
         open: c.open, high: c.high, low: c.low, close: c.close,
       })))
     } catch { /* stale ref */ }
-  }, [symbol, candles.length])
+  }, [symbol, tf, view.length])
 
-  // Live update — in-flight candle
+  // Live update — in-flight candle. Updates on every tick (quote.last) and
+  // also on view.length transitions so the bar mutation stays smooth.
   useEffect(() => {
-    if (!seriesRef.current || candles.length === 0) return
+    if (!seriesRef.current || view.length === 0) return
     try {
-      const last = candles[candles.length - 1]!
+      const last = view[view.length - 1]!
       const s = seriesRef.current as { update: (d: unknown) => void }
       s.update({ time: last.time as unknown, open: last.open, high: last.high, low: last.low, close: last.close })
     } catch { /* ignore */ }
-  }, [quote?.last])
+  }, [quote?.last, quote?.timestamp, view])
+
+  // ── Prior-day H/L/C fetch for Pivot Points ──────────────────────────────────
+  // Refetches whenever the symbol changes or the user toggles pivots on, since
+  // the user may have flipped between symbols while the indicator was off.
+  // Clears the cache when the indicator is off so the legend doesn't keep
+  // stale data.
+  const pivotsOn = indSettings.enabled['pivot-points']
+  useEffect(() => {
+    if (!pivotsOn) {
+      setPriorHlc(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const hlc = await window.satex?.indicators?.getPriorDayHlc(symbol)
+        if (!cancelled) setPriorHlc(hlc ?? null)
+      } catch (e) {
+        console.warn('[chart] prior-day HLC fetch failed:', e)
+        if (!cancelled) setPriorHlc(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [symbol, pivotsOn])
+
+  // ── Indicator reconciliation ────────────────────────────────────────────────
+  // Single source of truth: read indicatorStore + regime + candles, sync the
+  // chart to match. Add missing series, remove unwanted, refresh data, update
+  // colors. Runs whenever indSettings, view (bar count), regime, or prior-day
+  // HLC changes — debouncing isn't needed because indSettings/regime updates
+  // are coarse, and view.length changes happen at most once per bucket.
+  useEffect(() => {
+    const chart  = chartRef.current as {
+      addSeries: (typ: unknown, opts: unknown, paneIndex?: number) => unknown
+      removeSeries: (s: unknown) => void
+      panes: () => Array<{ setHeight: (h: number) => void }>
+    } | null
+    const lwc    = lwcModRef.current as { LineSeries: unknown; createSeriesMarkers?: (s: unknown, m: unknown[]) => unknown } | null
+    const main   = seriesRef.current as {
+      createPriceLine: (opts: unknown) => unknown
+      removePriceLine: (l: unknown) => void
+      setMarkers?: (m: unknown[]) => void
+    } | null
+    if (!chart || !lwc || !main) return
+    if (view.length === 0) return
+
+    const notes: string[] = []
+    const indCandles = view as unknown as IndCandle[]
+
+    // ── 1. EMA series ─────────────────────────────────────────────────────────
+    const wantPeriods: number[] = indSettings.enabled.ema ? [...indSettings.emaPeriods] : []
+    const currentPeriods = Array.from(emaSeriesMap.current.keys())
+    // Remove EMAs we no longer want
+    for (const p of currentPeriods) {
+      if (!wantPeriods.includes(p)) {
+        try { chart.removeSeries(emaSeriesMap.current.get(p)) } catch { /* ignore */ }
+        emaSeriesMap.current.delete(p)
+      }
+    }
+    // Add/update enabled EMAs
+    for (const period of wantPeriods) {
+      const color = applyOpacity(emaColor, EMA_PERIOD_OPACITY[period] ?? 0.5)
+      let s = emaSeriesMap.current.get(period) as {
+        applyOptions: (o: unknown) => void
+        setData: (d: unknown) => void
+      } | undefined
+      if (!s) {
+        s = chart.addSeries(lwc.LineSeries, {
+          color,
+          lineWidth: 1.4,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          title: `EMA${period}`,
+        }) as typeof s
+        emaSeriesMap.current.set(period, s!)
+      }
+      if (view.length < period) {
+        notes.push(`EMA${period} needs ${period} bars (have ${view.length})`)
+        try { s!.setData([]) } catch { /* ignore */ }
+        continue
+      }
+      const series = computeEmaSeries(indCandles, period)
+      const data: Array<{ time: unknown; value: number }> = []
+      for (let i = 0; i < series.values.length; i++) {
+        const v = series.values[i]!
+        if (Number.isFinite(v)) data.push({ time: view[i]!.time as unknown, value: v })
+      }
+      try {
+        s!.applyOptions({ color, title: `EMA${period}` })
+        s!.setData(data)
+      } catch { /* ignore */ }
+    }
+
+    // ── 2. RSI sub-pane ───────────────────────────────────────────────────────
+    if (indSettings.enabled.rsi) {
+      const period = indSettings.rsiPeriod
+      if (view.length < period + 1) {
+        notes.push(`RSI${period} needs ${period + 1} bars (have ${view.length})`)
+        if (rsiSeriesRef.current) {
+          try { (rsiSeriesRef.current as { setData: (d: unknown) => void }).setData([]) } catch { /* ignore */ }
+        }
+      } else {
+        if (!rsiSeriesRef.current) {
+          const rsi = chart.addSeries(lwc.LineSeries, {
+            color: 'rgba(0,200,255,0.88)',
+            lineWidth: 1.2,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            title: `RSI${period}`,
+          }, 1) as {
+            createPriceLine: (o: unknown) => unknown
+            applyOptions: (o: unknown) => void
+            setData: (d: unknown) => void
+          }
+          rsiSeriesRef.current     = rsi
+          rsiOverboughtRef.current = rsi.createPriceLine({
+            price: 70, color: 'rgba(255,70,85,0.55)', lineWidth: 1,
+            lineStyle: 2, axisLabelVisible: true, title: '70',
+          })
+          rsiOversoldRef.current = rsi.createPriceLine({
+            price: 30, color: 'rgba(33,201,122,0.55)', lineWidth: 1,
+            lineStyle: 2, axisLabelVisible: true, title: '30',
+          })
+          // Pane height — RSI gets a fixed slice so the main chart stays usable.
+          try {
+            const panes = chart.panes()
+            if (panes[1]) panes[1].setHeight(110)
+          } catch { /* ignore */ }
+        }
+        const series = computeRsiSeries(indCandles, period)
+        const data: Array<{ time: unknown; value: number }> = []
+        for (let i = 0; i < series.values.length; i++) {
+          const v = series.values[i]!
+          if (Number.isFinite(v)) data.push({ time: view[i]!.time as unknown, value: v })
+        }
+        try {
+          const rsi = rsiSeriesRef.current as {
+            applyOptions: (o: unknown) => void
+            setData: (d: unknown) => void
+          }
+          rsi.applyOptions({ title: `RSI${period}` })
+          rsi.setData(data)
+        } catch { /* ignore */ }
+      }
+    } else if (rsiSeriesRef.current) {
+      // Disabled — tear down the sub-pane series.
+      try { chart.removeSeries(rsiSeriesRef.current) } catch { /* ignore */ }
+      rsiSeriesRef.current     = null
+      rsiOverboughtRef.current = null
+      rsiOversoldRef.current   = null
+    }
+
+    // ── 3. Fibonacci retracement (horizontal price lines) ────────────────────
+    for (const l of fibLineRefs.current) {
+      try { main.removePriceLine(l) } catch { /* ignore */ }
+    }
+    fibLineRefs.current = []
+    if (indSettings.enabled.fibonacci) {
+      const lookback = indSettings.fibLookback
+      if (view.length < lookback) {
+        notes.push(`Fibonacci needs ${lookback} bars (have ${view.length})`)
+      } else {
+        const fib = computeFibonacci(indCandles, { lookback })
+        // computeFibonacci emits one level per FIB_RATIOS entry in order, so
+        // we can map index→ratio without parsing the label string.
+        for (let i = 0; i < fib.levels.length; i++) {
+          const lvl = fib.levels[i]!
+          const ratio = FIB_RATIOS[i] ?? 0
+          const color = FIB_COLORS[ratio] ?? 'rgba(160,160,168,0.55)'
+          const line = main.createPriceLine({
+            price: lvl.price,
+            color,
+            lineWidth: ratio === 0.618 ? 2 : 1,
+            lineStyle: 0, // solid
+            axisLabelVisible: true,
+            title: `FIB ${(ratio * 100).toFixed(1)}`,
+          })
+          fibLineRefs.current.push(line)
+        }
+      }
+    }
+
+    // ── 4. Pivot Points (standard floor) ─────────────────────────────────────
+    for (const l of pivotLineRefs.current) {
+      try { main.removePriceLine(l) } catch { /* ignore */ }
+    }
+    pivotLineRefs.current = []
+    if (indSettings.enabled['pivot-points']) {
+      if (!priorHlc) {
+        notes.push('Pivot Points awaiting prior-day H/L/C')
+      } else {
+        const H = priorHlc.high, L = priorHlc.low, C = priorHlc.close
+        const pp = (H + L + C) / 3
+        const R1 = 2 * pp - L, S1 = 2 * pp - H
+        const R2 = pp + (H - L), S2 = pp - (H - L)
+        const R3 = H + 2 * (pp - L), S3 = L - 2 * (H - pp)
+        // Resistance stack (red gradient), pivot in cyan, support stack (green gradient).
+        const levels: Array<{ price: number; title: string; color: string; width: number }> = [
+          { price: R3, title: 'R3', color: 'rgba(255,70,85,0.42)', width: 1 },
+          { price: R2, title: 'R2', color: 'rgba(255,70,85,0.62)', width: 1 },
+          { price: R1, title: 'R1', color: 'rgba(255,70,85,0.82)', width: 1 },
+          { price: pp, title: 'PP', color: 'rgba(0,200,255,0.95)', width: 2 },
+          { price: S1, title: 'S1', color: 'rgba(33,201,122,0.82)', width: 1 },
+          { price: S2, title: 'S2', color: 'rgba(33,201,122,0.62)', width: 1 },
+          { price: S3, title: 'S3', color: 'rgba(33,201,122,0.42)', width: 1 },
+        ]
+        for (const lvl of levels) {
+          const line = main.createPriceLine({
+            price: lvl.price,
+            color: lvl.color,
+            lineWidth: lvl.width,
+            lineStyle: 2, // dashed
+            axisLabelVisible: true,
+            title: lvl.title,
+          })
+          pivotLineRefs.current.push(line)
+        }
+      }
+    }
+
+    // ── 5. Double Top / Double Bottom markers ────────────────────────────────
+    const markers: Array<{ time: unknown; position: string; color: string; shape: string; text: string }> = []
+    if (indSettings.enabled['double-top']) {
+      if (view.length < 20) {
+        notes.push('Double Top needs ≥20 bars')
+      } else {
+        const tops = detectDoubleTops(indCandles)
+        for (const t of tops) {
+          const confirmed = t.breakIndex != null
+          markers.push({
+            time: view[t.pointB.index]!.time as unknown,
+            position: 'aboveBar',
+            color: confirmed ? '#ff4655' : 'rgba(255,70,85,0.55)',
+            shape: confirmed ? 'arrowDown' : 'circle',
+            text:  confirmed ? `2T ${t.pointB.price.toFixed(2)} ✓` : `2T ${t.pointB.price.toFixed(2)}`,
+          })
+        }
+      }
+    }
+    if (indSettings.enabled['double-bottom']) {
+      if (view.length < 20) {
+        notes.push('Double Bottom needs ≥20 bars')
+      } else {
+        const bots = detectDoubleBottoms(indCandles)
+        for (const b of bots) {
+          const confirmed = b.breakIndex != null
+          markers.push({
+            time: view[b.pointB.index]!.time as unknown,
+            position: 'belowBar',
+            color: confirmed ? '#21c97a' : 'rgba(33,201,122,0.55)',
+            shape: confirmed ? 'arrowUp' : 'circle',
+            text:  confirmed ? `2B ${b.pointB.price.toFixed(2)} ✓` : `2B ${b.pointB.price.toFixed(2)}`,
+          })
+        }
+      }
+    }
+    // Lightweight-charts v5 moved markers to a separate helper —
+    // `createSeriesMarkers(series, markers)` returns a handle whose
+    // `.setMarkers(next)` updates in place. The v4 path is `series.setMarkers`.
+    try {
+      if (lwc.createSeriesMarkers) {
+        if (markersHandleRef.current) {
+          (markersHandleRef.current as { setMarkers: (m: unknown[]) => void }).setMarkers(markers)
+        } else if (markers.length > 0) {
+          markersHandleRef.current = lwc.createSeriesMarkers(main, markers)
+        }
+      } else if (typeof main.setMarkers === 'function') {
+        main.setMarkers(markers)
+      }
+    } catch (e) {
+      console.warn('[chart] pattern marker render failed:', e)
+    }
+
+    setWarnings(notes)
+  }, [view, indSettings, dominantRegime, emaColor, priorHlc])
 
   const up = (quote?.changePct ?? 0) >= 0
 
-  const hi = candles.length ? Math.max(...candles.map(c => c.high)) : undefined
-  const lo = candles.length ? Math.min(...candles.map(c => c.low))  : undefined
-  const vol = candles.reduce((a, c) => a + c.volume, 0)
+  const hi = view.length ? Math.max(...view.map(c => c.high)) : undefined
+  const lo = view.length ? Math.min(...view.map(c => c.low))  : undefined
+  const vol = view.reduce((a, c) => a + c.volume, 0)
 
   return (
     <div className="chart-shell">
@@ -173,25 +721,133 @@ export function ChartPanel() {
         </div>
         <div className="chart-tools">
           <div className="seg accent">
-            {TIMEFRAMES.map(t => (
+            {CHART_TIMEFRAMES.map(t => (
               <button key={t} type="button" className={tf === t ? 'on' : ''} onClick={() => setTf(t)}>{t}</button>
             ))}
           </div>
-          <div className="seg">
-            {TYPES.map(t => (
-              <button key={t} type="button" className={type === t ? 'on' : ''} onClick={() => setType(t)}>{t}</button>
-            ))}
+
+          <div className="chart-histday" role="group" aria-label="Historical day replay">
+            {inReplay ? (
+              <>
+                <span
+                  className={`chart-histday-pill ${replayMode === 'paused' ? 'paused' : 'playing'}`}
+                  title={replayCursor ? `Cursor: ${new Date(replayCursor).toLocaleString()}` : undefined}
+                >
+                  <span className="dot" />
+                  REPLAY · {replayDate ?? (replaySessionId?.slice(0, 12) ?? '—')}
+                  {replayMode && <em>{replayMode}</em>}
+                </span>
+                <button
+                  type="button"
+                  className="chart-histday-btn danger"
+                  onClick={() => void exitReplay()}
+                  title="Stop replay and return to live data"
+                >
+                  ■ Return to Live
+                </button>
+              </>
+            ) : (
+              <>
+                <input
+                  type="date"
+                  className="chart-histday-date"
+                  value={histDate}
+                  max={todayIsoLocal()}
+                  disabled={histBusy}
+                  onChange={e => setHistDate(e.target.value)}
+                  aria-label="Historical date"
+                  title="Pick a US-market session day"
+                />
+                <button
+                  type="button"
+                  className="chart-histday-btn"
+                  onClick={() => void loadHistoricalDay()}
+                  disabled={histBusy}
+                  title="Fetch Alpaca bars for the chosen day and load into the chart"
+                >
+                  {histBusy ? '⟳ Loading…' : '⤓ Load Day'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
 
+      {histErr && (
+        <div className="chart-histday-err" role="alert">
+          <span>{histErr}</span>
+          <button type="button" onClick={() => setHistErr(null)} aria-label="Dismiss error">×</button>
+        </div>
+      )}
+
       <div className="chart-canvas-wrap">
         <div ref={containerRef} className="chart-canvas" />
+        {inReplay && (
+          <div className={`chart-replay-badge ${replayMode === 'paused' ? 'paused' : 'playing'}`} aria-hidden>
+            <span className="lbl">HISTORICAL REPLAY</span>
+            <span className="val">{replayDate ?? '—'}</span>
+            {replayCursor && (
+              <span className="cur">
+                {new Date(replayCursor).toLocaleTimeString('en-US', { hour12: false })}
+              </span>
+            )}
+          </div>
+        )}
         <div className="chart-watermark">SATEX</div>
-        <div className="chart-overlay">
-          <div className="row"><span className="swatch" style={{ background: 'rgba(233,75,60,0.9)' }} />EMA 9</div>
-          <div className="row"><span className="swatch" style={{ background: 'rgba(245,158,11,0.85)' }} />EMA 21</div>
-        </div>
+
+        {/* Indicator legend (Phase 11) — driven by useIndicatorStore. Hidden
+            when no overlay is enabled so the chart canvas isn't cluttered. */}
+        {(indSettings.enabled.ema
+          || indSettings.enabled.rsi
+          || indSettings.enabled.fibonacci
+          || indSettings.enabled['pivot-points']
+          || indSettings.enabled['double-top']
+          || indSettings.enabled['double-bottom']) && (
+          <div className="chart-ind-legend">
+            {indSettings.enabled.ema && indSettings.emaPeriods.map(p => (
+              <div className="row" key={`ema-${p}`}>
+                <span className="swatch" style={{ background: applyOpacity(emaColor, EMA_PERIOD_OPACITY[p] ?? 0.5) }} />
+                EMA {p}{dominantRegime ? ` · ${dominantRegime}` : ''}
+              </div>
+            ))}
+            {indSettings.enabled.rsi && (
+              <div className="row">
+                <span className="swatch" style={{ background: 'rgba(0,200,255,0.88)' }} />
+                RSI {indSettings.rsiPeriod}
+              </div>
+            )}
+            {indSettings.enabled.fibonacci && (
+              <div className="row">
+                <span className="swatch" style={{ background: '#c9a04a' }} />
+                FIB · {indSettings.fibLookback}b
+              </div>
+            )}
+            {indSettings.enabled['pivot-points'] && (
+              <div className="row">
+                <span className="swatch" style={{ background: 'rgba(0,200,255,0.95)' }} />
+                PP {priorHlc ? `· ${priorHlc.date}` : '· awaiting'}
+              </div>
+            )}
+            {indSettings.enabled['double-top'] && (
+              <div className="row">
+                <span className="swatch" style={{ background: '#ff4655' }} />
+                2T pattern
+              </div>
+            )}
+            {indSettings.enabled['double-bottom'] && (
+              <div className="row">
+                <span className="swatch" style={{ background: '#21c97a' }} />
+                2B pattern
+              </div>
+            )}
+          </div>
+        )}
+
+        {warnings.length > 0 && (
+          <div className="chart-ind-warn">
+            {warnings.map((w, i) => <div key={i}>{w}</div>)}
+          </div>
+        )}
         {quote && (
           <div className="chart-readout">
             <span><i>BID</i><b>{fmt.px(quote.bid, dp)}</b></span>

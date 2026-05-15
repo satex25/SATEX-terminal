@@ -53,14 +53,18 @@ export const IPC = {
   CREDENTIALS_GET_MASKED: 'satex:credentials:getMasked',
   CREDENTIALS_SET:    'satex:credentials:set',
   CREDENTIALS_CLEAR:  'satex:credentials:clear',
-  ANTHROPIC_GET_MASKED: 'satex:anthropic:getMasked',
-  ANTHROPIC_SET:      'satex:anthropic:set',
+  BAIDU_GET_MASKED:   'satex:baidu:getMasked',
+  BAIDU_SET:          'satex:baidu:set',
   ALPACA_RECONNECT:   'satex:alpaca:reconnect',
   HEALTH_CHECK:       'satex:health:check',
 
   // Live-mode interlock
   LIVE_MODE_GET:      'satex:liveMode:get',
   LIVE_MODE_SET:      'satex:liveMode:set',
+
+  // Alpaca endpoint mode (paper vs live URL)
+  ALPACA_MODE_GET:    'satex:alpacaMode:get',
+  ALPACA_MODE_SET:    'satex:alpacaMode:set',
 
   // AI brain
   BRAIN_DECISION:     'satex:brain:decision',
@@ -80,10 +84,16 @@ export const IPC = {
   WINDOW_SET_ZOOM:    'satex:window:setZoom',
   WINDOW_GET_ZOOM:    'satex:window:getZoom',
 
-  // Autonomous (future)
-  AUTONOMOUS_ENABLE:  'satex:autonomous:enable',
-  AUTONOMOUS_DISABLE: 'satex:autonomous:disable',
-  AUTONOMOUS_STATUS:  'satex:autonomous:status',
+  // Autonomous paper trader (Phase C, 2026-05-13)
+  // Push (main → renderer)
+  AUTONOMOUS_STATS:   'satex:autonomous:stats',
+  // Invoke (renderer → main)
+  AUTONOMOUS_ENABLE:      'satex:autonomous:enable',
+  AUTONOMOUS_DISABLE:     'satex:autonomous:disable',
+  AUTONOMOUS_STATUS:      'satex:autonomous:status',
+  AUTONOMOUS_RECENT:      'satex:autonomous:recent',
+  AUTONOMOUS_CONFIG_GET:  'satex:autonomous:configGet',
+  AUTONOMOUS_CONFIG_SET:  'satex:autonomous:configSet',
 
   // ── Phase 8: Continuous Observer / PatternLearner / Vault ─────────────────
   // Push (main → renderer)
@@ -96,6 +106,48 @@ export const IPC = {
   LEARNER_WEIGHTS:    'satex:learner:weights',
   VAULT_GET:          'satex:vault:get',
   VAULT_CHECKPOINT:   'satex:vault:checkpoint',
+
+  // ── Phase 9: Replay engine ───────────────────────────────────────────────
+  // Push (main → renderer)
+  REPLAY_STATUS:      'satex:replay:status',
+  // Invoke (renderer → main)
+  REPLAY_SESSIONS:    'satex:replay:sessions',
+  REPLAY_START:       'satex:replay:start',
+  REPLAY_STOP:        'satex:replay:stop',
+  REPLAY_PAUSE:       'satex:replay:pause',
+  REPLAY_RESUME:      'satex:replay:resume',
+  REPLAY_SEEK:        'satex:replay:seek',
+  REPLAY_SET_SPEED:   'satex:replay:setSpeed',
+  REPLAY_BOOKMARK_ADD:'satex:replay:bookmark:add',
+  REPLAY_BOOKMARK_DEL:'satex:replay:bookmark:del',
+  REPLAY_BOOKMARKS:   'satex:replay:bookmarks',
+  REPLAY_STATUS_GET:  'satex:replay:get',
+  REPLAY_IMPORT_HISTORICAL: 'satex:replay:importHistorical',
+  REPLAY_DELETE_SESSION:    'satex:replay:deleteSession',
+
+  // ── Phase 10: SATEX Terminal v2 · Black Box ──────────────────────────────
+  // Push (main → renderer)
+  REGIME_UPDATE:      'satex:regime:update',
+  RISK_GATES_UPDATE:  'satex:riskGates:update',
+  MACRO_UPDATE:       'satex:macro:update',
+  LOGS_TAIL:          'satex:logs:tail',
+  DEPTH_UPDATE:       'satex:depth:update',
+  // Invoke (renderer → main)
+  REGIME_GET:         'satex:regime:get',
+  RISK_GATES_GET:     'satex:riskGates:get',
+  MACRO_GET:          'satex:macro:get',
+  LOGS_GET:           'satex:logs:get',
+  DEPTH_GET:          'satex:depth:get',
+  DEPTH_SUBSCRIBE:    'satex:depth:subscribe',
+
+  // ── Phase 11: Chart-indicator toggle persistence ─────────────────────────
+  // Invoke (renderer → main)
+  INDICATOR_SETTINGS_GET:  'satex:indicators:settingsGet',
+  INDICATOR_SETTINGS_SET:  'satex:indicators:settingsSet',
+  /** Returns the prior trading-day H/L/C for a symbol (Pivot Points indicator).
+   *  Null when the symbol is non-equity, Alpaca is offline, or no eligible
+   *  bar is available yet. */
+  INDICATOR_PRIOR_DAY_HLC: 'satex:indicators:priorDayHlc',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -114,6 +166,13 @@ export const PUSH_CHANNELS = [
   IPC.OBSERVER_STATS,
   IPC.LEARNER_STATS,
   IPC.VAULT_STATS,
+  IPC.REPLAY_STATUS,
+  IPC.AUTONOMOUS_STATS,
+  IPC.REGIME_UPDATE,
+  IPC.RISK_GATES_UPDATE,
+  IPC.MACRO_UPDATE,
+  IPC.LOGS_TAIL,
+  IPC.DEPTH_UPDATE,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

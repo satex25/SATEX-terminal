@@ -1,119 +1,73 @@
 /**
- * SATEX — Root Application Component
- * 4-row shell: MenuBar (40px) · TickerRail (32px) · Canvas (1fr) · OrderBar (56px).
- * Canvas is a 24-column CSS grid with widget placements coming from PRESETS.
- * All data flows via Zustand stores fed by useIPC.
+ * SATEX — Root Application Component (Phase 10 · Black Box)
+ *
+ * Fixed 5-row Black Box stage at 1920×1080 (BrowserWindow matches):
+ *   Row 1 (40px):  TopBar
+ *   Row 2 (26px):  TickerTape
+ *   Row 3 (1fr):   Main — Watchlist | QuadChart+Macro | Depth/Regime/Exec
+ *   Row 4 (172px): Secondary — Portfolio | Catalysts | RiskGates | SystemLogs
+ *   Row 5 (30px):  BottomBar
+ *
+ * Workspace tabs in TopBar drive the `workspace` state below; the center
+ * column re-renders to match. Active replay sessions (useReplayStore().active)
+ * force the Replay workspace so the scrubber can't be hidden mid-tape. The
+ * Phase 9 historical-day flow is unchanged — ChartPanel still owns the date
+ * picker.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIPC } from './hooks/useIPC'
+import { perf } from './lib/perf'
 import { useMarketStore } from './stores/marketStore'
-import { MenuBar, type ModalKind } from './components/MenuBar'
-import { TickerRail } from './components/TickerRail'
-import { OrderBar } from './components/OrderBar'
+import { useAccountStore } from './stores/accountStore'
+import { useReplayStore } from './stores/replayStore'
+import { TopBar, type ModalKind, type Workspace } from './components/TopBar'
+import { TickerTape } from './components/TickerTape'
+import { BottomBar } from './components/BottomBar'
 import { CommandPalette } from './components/CommandPalette'
-import { WidgetShell } from './components/WidgetShell'
+import { TweaksPanel } from './components/TweaksPanel'
 import { AboutModal } from './components/modals/AboutModal'
 import { ShortcutsModal } from './components/modals/ShortcutsModal'
 import { SettingsModal } from './components/modals/SettingsModal'
 import { LiveModeModal } from './components/modals/LiveModeModal'
 import { TacticsModal } from './components/modals/TacticsModal'
-import { WatchlistPanel }   from './panels/WatchlistPanel'
-import { ChartPanel }       from './panels/ChartPanel'
-import { OrderTicketPanel } from './panels/OrderTicketPanel'
-import { PortfolioPanel }   from './panels/PortfolioPanel'
-import { NewsPanel }        from './panels/NewsPanel'
-import { AIInsightsPanel }  from './panels/AIInsightsPanel'
-import { DepthPanel }       from './panels/DepthPanel'
-import { HeatmapPanel }     from './panels/HeatmapPanel'
-import { CalendarPanel }    from './panels/CalendarPanel'
+import { IndicatorsModal } from './components/modals/IndicatorsModal'
+import { useIndicatorStore } from './stores/indicatorStore'
+import { WatchlistPanel } from './panels/WatchlistPanel'
+import { QuadChartPanel } from './panels/QuadChartPanel'
+import { MacroStripPanel } from './panels/MacroStripPanel'
+import { DepthBookPanel } from './panels/DepthBookPanel'
+import { RegimeDashboardPanel } from './panels/RegimeDashboardPanel'
+import { ExecTicketPanel } from './panels/ExecTicketPanel'
+import { PortfolioMiniPanel } from './panels/PortfolioMiniPanel'
+import { CatalystsPanel } from './panels/CatalystsPanel'
+import { RiskGatePanel } from './panels/RiskGatePanel'
+import { SystemLogsPanel } from './panels/SystemLogsPanel'
+import { ChartPanel } from './panels/ChartPanel'
+import { ReplayPanel } from './panels/ReplayPanel'
+import { MarketsOverviewPanel } from './panels/MarketsOverviewPanel'
+import { AIInsightsPanel } from './panels/AIInsightsPanel'
+import { TimeSalesPanel } from './panels/TimeSalesPanel'
+import { JournalPanel } from './panels/JournalPanel'
 
-// ── Widget registry ───────────────────────────────────────────────────────────
-type WidgetId = 'watchlist' | 'chart' | 'ticket' | 'depth' | 'ai' | 'positions' | 'news' | 'heatmap' | 'calendar'
-
-interface WidgetDef {
-  title: string
-  meta?: string | null
-  flush?: boolean
-  render: () => JSX.Element
-}
-
-const WIDGETS: Record<WidgetId, WidgetDef> = {
-  watchlist: { title: 'WATCHLIST',  render: () => <WatchlistPanel /> },
-  chart:     { title: 'CHART',      flush: true, render: () => <ChartPanel /> },
-  ticket:    { title: 'ORDER TICKET', flush: true, render: () => <OrderTicketPanel /> },
-  depth:     { title: 'DEPTH · L2', meta: 'NBBO', flush: true, render: () => <DepthPanel /> },
-  ai:        { title: 'AI INSIGHTS', render: () => <AIInsightsPanel /> },
-  positions: { title: 'PORTFOLIO',   render: () => <PortfolioPanel /> },
-  news:      { title: 'CATALYSTS',   meta: 'live', render: () => <NewsPanel /> },
-  heatmap:   { title: 'SECTORS',     flush: true, render: () => <HeatmapPanel /> },
-  calendar:  { title: 'CALENDAR',    render: () => <CalendarPanel /> },
-}
-
-// ── Layout presets — 24-col × 16-row grid placements ──────────────────────────
-interface Cell { id: WidgetId; col: number; cs: number; row: number; rs: number }
-interface Preset { name: string; rows: number; layout: Cell[] }
-
-const PRESETS: Preset[] = [
-  {
-    name: 'Trade', rows: 16,
-    layout: [
-      { id: 'watchlist', col: 1,  cs: 4,  row: 1,  rs: 11 },
-      { id: 'chart',     col: 5,  cs: 13, row: 1,  rs: 11 },
-      { id: 'ticket',    col: 18, cs: 4,  row: 1,  rs: 11 },
-      { id: 'ai',        col: 22, cs: 3,  row: 1,  rs: 7  },
-      { id: 'depth',     col: 22, cs: 3,  row: 8,  rs: 4  },
-      { id: 'positions', col: 1,  cs: 8,  row: 12, rs: 5  },
-      { id: 'news',      col: 9,  cs: 9,  row: 12, rs: 5  },
-      { id: 'heatmap',   col: 18, cs: 7,  row: 12, rs: 5  },
-    ],
-  },
-  {
-    name: 'Analyze', rows: 16,
-    layout: [
-      { id: 'watchlist', col: 1,  cs: 4,  row: 1,  rs: 16 },
-      { id: 'chart',     col: 5,  cs: 14, row: 1,  rs: 11 },
-      { id: 'ai',        col: 19, cs: 6,  row: 1,  rs: 11 },
-      { id: 'heatmap',   col: 5,  cs: 9,  row: 12, rs: 5  },
-      { id: 'news',      col: 14, cs: 11, row: 12, rs: 5  },
-    ],
-  },
-  {
-    name: 'Scan', rows: 16,
-    layout: [
-      { id: 'watchlist', col: 1,  cs: 5,  row: 1,  rs: 16 },
-      { id: 'heatmap',   col: 6,  cs: 13, row: 1,  rs: 8  },
-      { id: 'chart',     col: 6,  cs: 13, row: 9,  rs: 8  },
-      { id: 'news',      col: 19, cs: 6,  row: 1,  rs: 10 },
-      { id: 'calendar',  col: 19, cs: 6,  row: 11, rs: 6  },
-    ],
-  },
-  {
-    name: 'Replay', rows: 16,
-    layout: [
-      { id: 'chart',     col: 1,  cs: 18, row: 1,  rs: 12 },
-      { id: 'ai',        col: 19, cs: 6,  row: 1,  rs: 8  },
-      { id: 'depth',     col: 19, cs: 6,  row: 9,  rs: 8  },
-      { id: 'positions', col: 1,  cs: 9,  row: 13, rs: 4  },
-      { id: 'news',      col: 10, cs: 9,  row: 13, rs: 4  },
-    ],
-  },
-]
-
-const PRESET_NAMES = PRESETS.map(p => p.name)
-
-// ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   useIPC()
 
-  const [presetIdx, setPresetIdx] = useState(0)
-  const [cmdOpen,   setCmdOpen]   = useState(false)
-  const [modal,     setModal]     = useState<ModalKind | null>(null)
-  const [focused,   setFocused]   = useState<WidgetId>('chart')
-  const [hidden,    setHidden]    = useState<Partial<Record<WidgetId, boolean>>>({})
-  const [layouts,   setLayouts]   = useState<Cell[][]>(() => PRESETS.map(p => p.layout.map(c => ({ ...c }))))
-  const [drag,      setDrag]      = useState<{ from: WidgetId | null; over: WidgetId | null }>({ from: null, over: null })
-  const [liveMode,  setLiveMode]  = useState(false)
+  const symbol = useMarketStore(s => s.symbol)
+  const account = useAccountStore(s => s.account)
+  const replayActive = useReplayStore(s => s.active)
 
+  const [cmdOpen,    setCmdOpen]    = useState(false)
+  const [tweaksOpen, setTweaksOpen] = useState(false)
+  const [modal,      setModal]      = useState<ModalKind | null>(null)
+  const [liveMode,   setLiveMode]   = useState(false)
+  const [workspace,  setWorkspace]  = useState<Workspace>('Trade')
+
+  // Active replay sessions force the Replay workspace so the user can't
+  // accidentally hide the scrubber while a historical tape is playing.
+  const effectiveWs: Workspace = replayActive ? 'Replay' : workspace
+
+  // Pull initial live-mode status; refresh after modal closes so the topbar
+  // reflects any interlock changes the user just made.
   useEffect(() => {
     void (async () => {
       try {
@@ -123,114 +77,158 @@ export default function App() {
     })()
   }, [modal])
 
-  // Tokyo Capital — vermilion is the brand accent and the :root default,
-  // so we only need to assert the theme on mount.
+  // Sync engine-side depth/regime focus when the user picks a new symbol in
+  // the watchlist. Without this, the right rail stays pinned to NVDA.
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', 'tokyo')
-  }, [])
+    void window.satex?.subscribeDepth?.(symbol)
+  }, [symbol])
+
+  // Renderer frame-budget watcher — logs long frames (> 32ms) to the console
+  // for performance regression detection. Disable with ?SATEX_PERF_OFF=1.
+  useEffect(() => perf.frameWatch(), [])
+
+  // Hydrate chart-indicator toggles from Vault/Settings/indicator-toggles.md
+  // once at mount. The store falls back to defaults if the file is missing
+  // or the IPC handler isn't installed — never blocks chart rendering.
+  useEffect(() => { void useIndicatorStore.getState().hydrate() }, [])
 
   // Keyboard shortcuts
   useEffect(() => {
+    // Map digit keys 1..5 to workspace tabs in TopBar order.
+    const WS_DIGITS: Record<string, Workspace> = {
+      '1': 'Trade', '2': 'Focus', '3': 'Markets', '4': 'Replay', '5': 'Quad',
+    }
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setCmdOpen(o => !o); return }
-      if (mod && e.key >= '1' && e.key <= '4') { e.preventDefault(); setPresetIdx(+e.key - 1); return }
+      if (mod && e.key === ',')               { e.preventDefault(); setTweaksOpen(o => !o); return }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); window.satex?.toggleDevTools(); return }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.satex?.killSwitch(true); return }
-      if (mod && e.key === 'Enter') { e.preventDefault(); window.satex?.toggleFullscreen(); return }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.satex?.killSwitch(!account.killSwitchArmed); return }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setModal(m => m === 'indicators' ? null : 'indicators'); return }
+      if (mod && e.key === 'Enter')           { e.preventDefault(); window.satex?.toggleFullscreen(); return }
+      // Workspace digits ⌘1..⌘5 — won't fire if focus is in an input, since
+      // typing a number into the qty field shouldn't switch workspaces.
+      if (mod && !e.shiftKey && WS_DIGITS[e.key]) {
+        const tag = (e.target as HTMLElement | null)?.tagName
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+          e.preventDefault()
+          setWorkspace(WS_DIGITS[e.key]!)
+        }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  const preset = PRESETS[presetIdx]!
-  const layout = layouts[presetIdx]!
-  const visible = useMemo(() => layout.filter(c => !hidden[c.id]), [layout, hidden])
-
-  // Force chart to remount when the symbol changes so lightweight-charts cleanly resets
-  const symbol = useMarketStore(s => s.symbol)
-
-  function onDragStart(id: WidgetId) { setDrag({ from: id, over: null }) }
-  function onDragOver(id: WidgetId, e: React.DragEvent) { e.preventDefault(); setDrag(d => ({ ...d, over: id })) }
-  function onDrop(target: WidgetId) {
-    if (!drag.from || drag.from === target) { setDrag({ from: null, over: null }); return }
-    setLayouts(prev => {
-      const next = prev.map(arr => arr.map(c => ({ ...c })))
-      const cur  = next[presetIdx]!
-      const a = cur.find(c => c.id === drag.from)
-      const b = cur.find(c => c.id === target)
-      if (a && b) {
-        const tmp = { col: a.col, cs: a.cs, row: a.row, rs: a.rs }
-        a.col = b.col; a.cs = b.cs; a.row = b.row; a.rs = b.rs
-        b.col = tmp.col; b.cs = tmp.cs; b.row = tmp.row; b.rs = tmp.rs
-      }
-      return next
-    })
-    setDrag({ from: null, over: null })
-  }
+  }, [account.killSwitchArmed])
 
   return (
-    <div className="app">
-      <MenuBar
+    <div className="bb-app">
+      <TopBar
         onCmd={() => setCmdOpen(true)}
         onOpenModal={setModal}
-        presetIdx={presetIdx}
-        setPresetIdx={setPresetIdx}
-        presets={PRESET_NAMES}
         liveModeEnabled={liveMode}
+        onTweaks={() => setTweaksOpen(o => !o)}
+        workspace={effectiveWs}
+        onWorkspace={setWorkspace}
       />
-      <TickerRail />
 
-      <div className="canvas" style={{ gridTemplateRows: `repeat(${preset.rows}, minmax(0, 1fr))` }}>
-        {visible.map(cell => {
-          const W = WIDGETS[cell.id]
-          return (
-            <div
-              key={cell.id}
-              style={{
-                gridColumn: `${cell.col} / span ${cell.cs}`,
-                gridRow:    `${cell.row} / span ${cell.rs}`,
-                minHeight: 0, minWidth: 0,
-              }}
-            >
-              <WidgetShell
-                title={W.title}
-                meta={W.meta}
-                flush={W.flush}
-                focused={focused === cell.id}
-                dragging={drag.from === cell.id}
-                dropTarget={drag.over === cell.id && drag.from !== cell.id}
-                onFocus={() => setFocused(cell.id)}
-                onClose={() => setHidden(h => ({ ...h, [cell.id]: true }))}
-                onDragStart={() => onDragStart(cell.id)}
-                onDragOver={e => onDragOver(cell.id, e)}
-                onDrop={() => onDrop(cell.id)}
-              >
-                {/* Force chart remount on symbol change; other panels memo via their own selectors. */}
-                {cell.id === 'chart' ? <ChartHost key={symbol} /> : W.render()}
-              </WidgetShell>
+      <TickerTape />
+
+      <div className="bb-main-row">
+        {/* Left rail: Watchlist */}
+        <div className="bb-col-left">
+          <WatchlistPanel />
+        </div>
+        <span className="bb-divider-v" />
+
+        {/* Center column — content swaps with the active workspace tab. The
+            Replay workspace overrides automatically when a tape is playing
+            (replayActive in useReplayStore). */}
+        <div className="bb-col-center">
+          {effectiveWs === 'Replay' && (
+            <div className="bb-replay-stack">
+              <ReplayPanel />
+              <span className="bb-divider-h" />
+              <ChartPanel key={symbol} />
             </div>
-          )
-        })}
+          )}
+          {effectiveWs === 'Quad' && (
+            <>
+              <div className="bb-center-chart"><QuadChartPanel /></div>
+              <span className="bb-divider-h" />
+              <MacroStripPanel />
+            </>
+          )}
+          {effectiveWs === 'Focus' && (
+            <>
+              <div className="bb-center-chart"><ChartPanel key={symbol} /></div>
+              <span className="bb-divider-h" />
+              <MacroStripPanel />
+            </>
+          )}
+          {effectiveWs === 'Markets' && (
+            <>
+              <div className="bb-center-chart" style={{ overflow: 'auto' }}>
+                <MarketsOverviewPanel />
+              </div>
+              <span className="bb-divider-h" />
+              <MacroStripPanel />
+            </>
+          )}
+          {effectiveWs === 'Trade' && (
+            <>
+              <div className="bb-center-chart bb-trade-stack">
+                <div className="bb-trade-chart"><ChartPanel key={symbol} /></div>
+                <span className="bb-divider-h" />
+                <div className="bb-trade-tape"><TimeSalesPanel /></div>
+                <span className="bb-divider-h" />
+                <div className="bb-trade-ai"><AIInsightsPanel /></div>
+                <span className="bb-divider-h" />
+                <div className="bb-trade-journal"><JournalPanel /></div>
+              </div>
+              <span className="bb-divider-h" />
+              <MacroStripPanel />
+            </>
+          )}
+        </div>
+        <span className="bb-divider-v" />
+
+        {/* Right rail: Depth / Regime / Exec */}
+        <div className="bb-col-right">
+          <div className="bb-right-depth"><DepthBookPanel /></div>
+          <span className="bb-divider-h" />
+          <div className="bb-right-regime"><RegimeDashboardPanel /></div>
+          <span className="bb-divider-h" />
+          <div className="bb-right-exec"><ExecTicketPanel /></div>
+        </div>
       </div>
 
-      <OrderBar />
+      {/* Secondary: Portfolio | Catalysts | Risk | Logs */}
+      <div className="bb-secondary-row">
+        <div className="bb-sec-portfolio"><PortfolioMiniPanel /></div>
+        <span className="bb-divider-v" />
+        <div className="bb-sec-catalysts"><CatalystsPanel /></div>
+        <span className="bb-divider-v" />
+        <div className="bb-sec-risk"><RiskGatePanel /></div>
+        <span className="bb-divider-v" />
+        <div className="bb-sec-logs"><SystemLogsPanel /></div>
+      </div>
+
+      <BottomBar />
 
       <CommandPalette
         open={cmdOpen}
         onClose={() => setCmdOpen(false)}
-        onSetPreset={setPresetIdx}
+        onSetWorkspace={setWorkspace}
       />
 
-      <AboutModal     open={modal === 'about'}     onClose={() => setModal(null)} />
-      <ShortcutsModal open={modal === 'shortcuts'} onClose={() => setModal(null)} />
-      <SettingsModal  open={modal === 'settings'}  onClose={() => setModal(null)} />
-      <LiveModeModal  open={modal === 'live'}      onClose={() => setModal(null)} />
-      <TacticsModal   open={modal === 'tactics'}   onClose={() => setModal(null)} />
+      <TweaksPanel open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
+
+      <AboutModal      open={modal === 'about'}      onClose={() => setModal(null)} />
+      <ShortcutsModal  open={modal === 'shortcuts'}  onClose={() => setModal(null)} />
+      <SettingsModal   open={modal === 'settings'}   onClose={() => setModal(null)} />
+      <LiveModeModal   open={modal === 'live'}       onClose={() => setModal(null)} />
+      <TacticsModal    open={modal === 'tactics'}    onClose={() => setModal(null)} />
+      <IndicatorsModal open={modal === 'indicators'} onClose={() => setModal(null)} />
     </div>
   )
-}
-
-function ChartHost() {
-  return <ChartPanel />
 }

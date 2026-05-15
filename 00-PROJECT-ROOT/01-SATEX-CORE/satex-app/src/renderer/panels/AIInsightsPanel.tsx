@@ -1,7 +1,7 @@
 /**
  * SATEX — AI Insights Panel
  * Computed indicators, signal bias, EMA stack, RSI/VWAP gating for the focused symbol.
- * Also surfaces the AI brain rationale (local model + optional Claude opus-4-7).
+ * Also surfaces the AI brain rationale (local model + optional Baidu ERNIE 5.1).
  */
 import { useEffect, useState } from 'react'
 import { useMarketStore } from '../stores/marketStore'
@@ -87,7 +87,7 @@ export function AIInsightsPanel() {
             </span>
           </div>
           <div className="body" style={{ fontSize: 11, color: 'var(--ink-1)', lineHeight: 1.5 }}>
-            {decision.llmRationale ?? <span style={{ color: 'var(--ink-3)' }}>Local model only — add Anthropic key for Claude rationale.</span>}
+            {decision.llmRationale ?? <span style={{ color: 'var(--ink-3)' }}>Local model only — add Baidu AI Studio token for ERNIE 5.1 rationale.</span>}
           </div>
         </div>
       )}

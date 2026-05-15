@@ -12,12 +12,18 @@ import type {
   Candle, OrderRequest, Quote, Account, Order,
   SystemStatus, IndicatorSnapshot, BrainParameter,
   SessionRecord, PnlSnapshot, AlpacaCredentialsStatus,
+  AlpacaModeStatus, AlpacaModeSetRequest,
   CredentialsMaskedStatus, CredentialsSetRequest,
-  AnthropicMaskedStatus, AiDecision,
+  BaiduMaskedStatus, AiDecision,
   LiveModeStatus, LiveModeSetRequest, TacticsStatus,
   ObserverStats, LearnerStats, VaultStats, PatternWeight,
   VaultCheckpointRequest,
+  ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
+  HistoricalImportRequest, HistoricalImportResult,
+  AutonomousStatus, AutonomousDecision,
+  RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
 } from '@shared/types'
+import type { IndicatorSettings } from '@shared/chart-indicators'
 
 // ── Typed listener wrapper ─────────────────────────────────────────────────────
 function on<T>(channel: PushChannel, cb: (payload: T) => void): () => void {
@@ -36,7 +42,8 @@ const satexApi = {
   onAccountUpdate:      (cb: (account: Account) => void)                              => on(IPC.ACCOUNT_UPDATE,     cb),
   onOrdersUpdate:       (cb: (orders: Order[]) => void)                               => on(IPC.ORDERS_UPDATE,      cb),
   onLogEvent:           (cb: (entry: unknown) => void)                                => on(IPC.LOG_EVENT,          cb),
-  onAutonomousDecision: (cb: (decision: unknown) => void)                             => on(IPC.AUTONOMOUS_DECISION,cb),
+  onAutonomousDecision: (cb: (decision: AutonomousDecision) => void)                  => on(IPC.AUTONOMOUS_DECISION,cb),
+  onAutonomousStats:    (cb: (s: AutonomousStatus) => void)                           => on(IPC.AUTONOMOUS_STATS,   cb),
 
   // ── Invoke calls (renderer → main) ────────────────────────────────────────
   subscribe:     (symbols: string[])               => ipcRenderer.invoke(IPC.SUBSCRIBE, symbols),
@@ -59,13 +66,25 @@ const satexApi = {
   getCredentialsMasked: ()                         => ipcRenderer.invoke(IPC.CREDENTIALS_GET_MASKED) as Promise<CredentialsMaskedStatus>,
   setCredentials: (req: CredentialsSetRequest)     => ipcRenderer.invoke(IPC.CREDENTIALS_SET, req) as Promise<{ ok: boolean; reason?: string }>,
   clearCredentials: ()                             => ipcRenderer.invoke(IPC.CREDENTIALS_CLEAR) as Promise<{ ok: boolean }>,
-  getAnthropicMasked: ()                           => ipcRenderer.invoke(IPC.ANTHROPIC_GET_MASKED) as Promise<AnthropicMaskedStatus>,
-  setAnthropicKey: (key: string)                   => ipcRenderer.invoke(IPC.ANTHROPIC_SET, key) as Promise<{ ok: boolean; reason?: string }>,
+  getBaiduMasked: ()                               => ipcRenderer.invoke(IPC.BAIDU_GET_MASKED) as Promise<BaiduMaskedStatus>,
+  setBaiduKey: (key: string)                       => ipcRenderer.invoke(IPC.BAIDU_SET, key) as Promise<{ ok: boolean; reason?: string }>,
   reconnectAlpaca: ()                              => ipcRenderer.invoke(IPC.ALPACA_RECONNECT) as Promise<{ ok: boolean; reason?: string }>,
 
   // ── Live mode (Phase 5) ─────────────────────────────────────────────────────
   getLiveMode: ()                                  => ipcRenderer.invoke(IPC.LIVE_MODE_GET) as Promise<LiveModeStatus>,
   setLiveMode: (req: LiveModeSetRequest)           => ipcRenderer.invoke(IPC.LIVE_MODE_SET, req) as Promise<{ ok: boolean; reason?: string }>,
+
+  // ── Alpaca endpoint mode (paper vs live URL) ────────────────────────────────
+  getAlpacaMode: ()                                => ipcRenderer.invoke(IPC.ALPACA_MODE_GET) as Promise<AlpacaModeStatus>,
+  setAlpacaMode: (req: AlpacaModeSetRequest)       => ipcRenderer.invoke(IPC.ALPACA_MODE_SET, req) as Promise<{ ok: boolean; reason?: string; baseUrl?: string }>,
+
+  // ── Autonomous paper trader (Phase C) ───────────────────────────────────────
+  enableAutonomous:     ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_ENABLE)  as Promise<{ ok: boolean; reason?: string }>,
+  disableAutonomous:    ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_DISABLE) as Promise<{ ok: boolean }>,
+  getAutonomousStatus:  ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_STATUS)  as Promise<AutonomousStatus>,
+  getAutonomousRecent:  ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_RECENT)  as Promise<AutonomousDecision[]>,
+  getAutonomousConfig:  ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_CONFIG_GET) as Promise<Record<string, number>>,
+  setAutonomousConfig:  (patch: Record<string, number>) => ipcRenderer.invoke(IPC.AUTONOMOUS_CONFIG_SET, patch) as Promise<Record<string, number>>,
 
   // ── AI brain decision (Phase 6) ─────────────────────────────────────────────
   getAiDecision: (symbol: string)                  => ipcRenderer.invoke(IPC.BRAIN_DECISION, symbol) as Promise<AiDecision>,
@@ -93,6 +112,44 @@ const satexApi = {
   toggleDevTools:   () => ipcRenderer.invoke(IPC.WINDOW_TOGGLE_DEVTOOLS),
   setZoom:  (factor: number) => ipcRenderer.invoke(IPC.WINDOW_SET_ZOOM, factor),
   getZoom:  ()               => ipcRenderer.invoke(IPC.WINDOW_GET_ZOOM) as Promise<number>,
+
+  // ── Phase 10: SATEX Terminal v2 · Black Box ───────────────────────────────
+  onRegimeUpdate:    (cb: (s: RegimeSnapshot)     => void) => on(IPC.REGIME_UPDATE,     cb),
+  getRegime:         ()                                    => ipcRenderer.invoke(IPC.REGIME_GET) as Promise<RegimeSnapshot>,
+  onRiskGatesUpdate: (cb: (s: RiskGatesSnapshot)  => void) => on(IPC.RISK_GATES_UPDATE, cb),
+  getRiskGates:      ()                                    => ipcRenderer.invoke(IPC.RISK_GATES_GET) as Promise<RiskGatesSnapshot>,
+  onMacroUpdate:     (cb: (s: MacroSnapshot)      => void) => on(IPC.MACRO_UPDATE,      cb),
+  getMacro:          ()                                    => ipcRenderer.invoke(IPC.MACRO_GET) as Promise<MacroSnapshot>,
+  onLogsTail:        (cb: (s: SystemLogsTail)     => void) => on(IPC.LOGS_TAIL,         cb),
+  getLogsTail:       ()                                    => ipcRenderer.invoke(IPC.LOGS_GET) as Promise<SystemLogsTail>,
+  onDepthUpdate:     (cb: (s: DepthSnapshot)      => void) => on(IPC.DEPTH_UPDATE,      cb),
+  getDepth:          (symbol?: string)                     => ipcRenderer.invoke(IPC.DEPTH_GET, symbol) as Promise<DepthSnapshot>,
+  subscribeDepth:    (symbol: string)                      => ipcRenderer.invoke(IPC.DEPTH_SUBSCRIBE, symbol) as Promise<{ ok: boolean }>,
+
+  // ── Replay engine (Phase 9) ────────────────────────────────────────────────
+  replay: {
+    onStatus:    (cb: (s: ReplayStatus) => void) => on(IPC.REPLAY_STATUS, cb),
+    listSessions: ()                                 => ipcRenderer.invoke(IPC.REPLAY_SESSIONS)    as Promise<ReplayableSession[]>,
+    start:        (req: ReplayStartRequest)          => ipcRenderer.invoke(IPC.REPLAY_START, req)  as Promise<{ ok: boolean; reason?: string }>,
+    stop:         ()                                 => ipcRenderer.invoke(IPC.REPLAY_STOP)        as Promise<{ ok: boolean }>,
+    pause:        ()                                 => ipcRenderer.invoke(IPC.REPLAY_PAUSE)       as Promise<{ ok: boolean }>,
+    resume:       ()                                 => ipcRenderer.invoke(IPC.REPLAY_RESUME)      as Promise<{ ok: boolean }>,
+    seek:         (ts: number)                       => ipcRenderer.invoke(IPC.REPLAY_SEEK, ts)    as Promise<{ ok: boolean }>,
+    setSpeed:     (speed: number)                    => ipcRenderer.invoke(IPC.REPLAY_SET_SPEED, speed) as Promise<{ ok: boolean; speed: number }>,
+    addBookmark:  (label: string)                    => ipcRenderer.invoke(IPC.REPLAY_BOOKMARK_ADD, label) as Promise<ReplayBookmark | null>,
+    deleteBookmark: (id: string)                     => ipcRenderer.invoke(IPC.REPLAY_BOOKMARK_DEL, id) as Promise<{ ok: boolean }>,
+    listBookmarks: (sessionId: string)               => ipcRenderer.invoke(IPC.REPLAY_BOOKMARKS, sessionId) as Promise<ReplayBookmark[]>,
+    getStatus:    ()                                 => ipcRenderer.invoke(IPC.REPLAY_STATUS_GET)  as Promise<ReplayStatus>,
+    importHistorical: (req: HistoricalImportRequest) => ipcRenderer.invoke(IPC.REPLAY_IMPORT_HISTORICAL, req) as Promise<HistoricalImportResult>,
+    deleteSession:    (sessionId: string)            => ipcRenderer.invoke(IPC.REPLAY_DELETE_SESSION, sessionId) as Promise<{ ok: boolean; reason?: string }>,
+  },
+
+  // ── Chart-indicator toggle persistence (Phase 11) ───────────────────────────
+  indicators: {
+    getSettings: ()                              => ipcRenderer.invoke(IPC.INDICATOR_SETTINGS_GET)      as Promise<IndicatorSettings>,
+    setSettings: (next: IndicatorSettings)       => ipcRenderer.invoke(IPC.INDICATOR_SETTINGS_SET, next) as Promise<IndicatorSettings>,
+    getPriorDayHlc: (symbol: string)             => ipcRenderer.invoke(IPC.INDICATOR_PRIOR_DAY_HLC, symbol) as Promise<{ high: number; low: number; close: number; date: string } | null>,
+  },
 }
 
 contextBridge.exposeInMainWorld('satex', satexApi)

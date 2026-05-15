@@ -1,9 +1,10 @@
 /**
  * SATEX — Order Manager (Risk Engine)
- * Eight-gate risk validation before every order submission.
+ * Nine-gate risk validation before every order submission.
  * Kill switch is global and cannot be bypassed by strategy signals.
  *
  * Gates (applied in order):
+ *   0. Quote freshness (refPriceAge ≤ MAX_QUOTE_AGE_MS)
  *   1. Kill switch armed
  *   2. Market closed (live mode + non-crypto)
  *   3. Daily loss limit exceeded
@@ -13,6 +14,7 @@
  *   7. Live-mode notional cap (live mode only)
  *   8. MAY-TACTICS pre-trade gate (entry orders, when graduated)
  */
+const MAX_QUOTE_AGE_MS = 5_000
 import type {
   Account, Order, OrderRequest, OrderStatus, OrderValidationResult, Position, StrategySignal
 } from '@shared/types'
@@ -24,6 +26,13 @@ import {
 export interface OrderValidationContext {
   /** Current quote/last price for the symbol — used for notional computation. */
   refPrice: number
+  /**
+   * Age in ms of the refPrice quote. Gate 0 rejects when this exceeds
+   * MAX_QUOTE_AGE_MS — prevents trading on stale data after a WS drop.
+   * Required for live-mode orders; ignored when liveMode=false to keep
+   * paper/simulator testing frictionless during deliberate offline sessions.
+   */
+  refPriceAge?: number
   /** When true, market-hours gate is checked. */
   liveMode: boolean
   /** Per-order notional cap (USD); only enforced when liveMode is true. */
@@ -86,6 +95,18 @@ export class OrderManager {
 
   // ── Validation ──────────────────────────────────────────────────────────────
   validate(req: OrderRequest, ctx?: OrderValidationContext): OrderValidationResult {
+    // Gate 0: quote freshness (live mode only; stop-loss/take-profit bypass — they reduce risk)
+    if (ctx?.liveMode
+        && req.triggeredBy !== 'stop-loss' && req.triggeredBy !== 'take-profit'
+        && ctx.refPriceAge !== undefined
+        && ctx.refPriceAge > MAX_QUOTE_AGE_MS) {
+      return {
+        ok: false,
+        reason: `Quote stale (${ctx.refPriceAge}ms > ${MAX_QUOTE_AGE_MS}ms) — refusing live order`,
+        gate: 'stale-quote',
+      }
+    }
+
     // Gate 1: kill switch (stop-loss/take-profit may bypass — they reduce risk)
     if (this.account.killSwitchArmed && req.triggeredBy !== 'stop-loss' && req.triggeredBy !== 'take-profit')
       return { ok: false, reason: 'Kill switch is armed', gate: 'kill-switch' }

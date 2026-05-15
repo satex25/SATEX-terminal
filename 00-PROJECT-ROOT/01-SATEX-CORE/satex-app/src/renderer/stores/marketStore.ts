@@ -17,10 +17,18 @@ interface MarketState {
   updateCandle:  (symbol: string, candle: Candle, isNew: boolean) => void
   appendNews:    (item: NewsItem) => void
   seedQuotes:    (quotes: Quote[]) => void
+  /** Wipe candle history. Called when the data source swaps (live ↔ replay)
+   *  so stale historical bars don't bleed across mode transitions. */
+  resetCandles:  () => void
 }
 
 const MAX_NEWS = 200
-const MAX_CANDLES = 1000
+// 1-second candle buckets × a full 6.5h US session = 23,400 candles per symbol.
+// Bumped from 1,000 (≈16 min capacity — sufficient for live but not for
+// historical replay) to 30,000 so Phase 9.2 historical-day loads can keep an
+// entire trading day in memory without truncation. ≈75 B per candle × 30k
+// × ~12 active symbols ≈ 27 MB worst case — well inside Electron's budget.
+const MAX_CANDLES = 30_000
 
 export const useMarketStore = create<MarketState>((set) => ({
   quotes:  new Map(UNIVERSE.map(u => [u.symbol, {
@@ -68,6 +76,8 @@ export const useMarketStore = create<MarketState>((set) => ({
   appendNews: (item) => set(state => ({
     news: [item, ...state.news].slice(0, MAX_NEWS)
   })),
+
+  resetCandles: () => set({ candles: new Map() }),
 }))
 
 // Selector helpers

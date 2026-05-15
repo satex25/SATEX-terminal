@@ -8,12 +8,12 @@
  *      P&L of each trade as the reward signal. Weights persist via the brain
  *      table in SQLite.
  *
- *   2. Optional Claude opus-4-7 decision agent (requires stored Anthropic key).
- *      Receives indicator snapshot + bias from local model and returns a brief
- *      rationale + veto/approve. Falls back gracefully when the key is missing.
+ *   2. Optional Baidu ERNIE 5.1 decision agent (requires stored AI Studio
+ *      access token). Calls the OpenAI-compatible chat-completions endpoint
+ *      at aistudio.baidu.com. Falls back gracefully when the key is missing.
  */
 import type { AiDecision, IndicatorSnapshot, Quote, OrderSide, BrainParameter } from '@shared/types'
-import { getAnthropicKey } from './credential-store'
+import { getBaiduKey } from './credential-store'
 import * as db from './persistence'
 import { createLogger } from './logger'
 
@@ -119,10 +119,10 @@ export class Brain {
     const local = this.decisionFromLocal(quote, ind)
     let llmRationale: string | null = null
 
-    const key = getAnthropicKey()
+    const key = getBaiduKey()
     if (key && local.confidence > 0.3) {
-      try { llmRationale = await callClaude(key, symbol, quote, ind, local) }
-      catch (e) { log.warn('claude call failed', { err: String(e) }) }
+      try { llmRationale = await callErnie(key, symbol, quote, ind, local) }
+      catch (e) { log.warn('ernie call failed', { err: String(e) }) }
     }
 
     return {
@@ -141,7 +141,7 @@ export class Brain {
 function clamp(n: number, lo: number, hi: number): number { return Math.max(lo, Math.min(hi, n)) }
 function confidenceOf(samples: number): number { return Math.min(1, samples / 40) }
 
-async function callClaude(
+async function callErnie(
   apiKey: string,
   symbol: string,
   quote: Quote,
@@ -149,25 +149,30 @@ async function callClaude(
   local: { bias: 'bullish' | 'bearish' | 'neutral'; localScore: number; confidence: number },
 ): Promise<string> {
   const body = {
-    model: 'claude-opus-4-7',
-    max_tokens: 220,
-    system: 'You are an institutional trading advisor. Given indicator snapshot, return ONE sentence (max 35 words) on tactical bias for the symbol. No disclaimers. No advice. Just describe the technical state and qualify it. Use direct prose.',
-    messages: [{
-      role: 'user',
-      content: `Symbol: ${symbol}\nLast: ${quote.last.toFixed(2)}  VWAP: ${ind.vwap.toFixed(2)}  RSI14: ${ind.rsi14.toFixed(1)}  ATR14: ${ind.atr14.toFixed(2)}\nEMA9/21/50: ${ind.ema9.toFixed(2)} / ${ind.ema21.toFixed(2)} / ${ind.ema50.toFixed(2)}\nTrend strength: ${ind.trendStrength.toFixed(2)}\nLocal model bias: ${local.bias} (score ${local.localScore.toFixed(2)})`,
-    }],
+    model: 'ernie-5.1',
+    max_tokens: 90,
+    temperature: 0.4,
+    messages: [
+      {
+        role: 'system',
+        content: 'You are an institutional trading advisor. Given indicator snapshot, return ONE sentence (max 35 words) on tactical bias for the symbol. No disclaimers. No advice. Just describe the technical state and qualify it. Use direct prose.',
+      },
+      {
+        role: 'user',
+        content: `Symbol: ${symbol}\nLast: ${quote.last.toFixed(2)}  VWAP: ${ind.vwap.toFixed(2)}  RSI14: ${ind.rsi14.toFixed(1)}  ATR14: ${ind.atr14.toFixed(2)}\nEMA9/21/50: ${ind.ema9.toFixed(2)} / ${ind.ema21.toFixed(2)} / ${ind.ema50.toFixed(2)}\nTrend strength: ${ind.trendStrength.toFixed(2)}\nLocal model bias: ${local.bias} (score ${local.localScore.toFixed(2)})`,
+      },
+    ],
   }
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('https://aistudio.baidu.com/llm/lmapi/v3/chat/completions', {
     method: 'POST',
     headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      'authorization': `Bearer ${apiKey}`,
       'content-type': 'application/json',
     },
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`claude ${res.status}: ${await res.text()}`)
-  const json = await res.json() as { content?: Array<{ text?: string }> }
-  const text = json.content?.[0]?.text ?? ''
+  if (!res.ok) throw new Error(`ernie ${res.status}: ${await res.text()}`)
+  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
+  const text = json.choices?.[0]?.message?.content ?? ''
   return text.trim()
 }

@@ -61,7 +61,29 @@ export interface OrderRequest {
   takeProfit?: number
   triggeredBy?: TriggeredBy
   source?: string
+  /** Trading-journal metadata (Phase 11 — modern-terminal-survey §6).
+   *  Carried from OrderTicketPanel through IPC into the engine; today the
+   *  fields are accepted-and-ignored downstream, so adding them is safe.
+   *  Wiring into vault-writer is a follow-up that will tag the closed trade
+   *  markdown frontmatter for Obsidian Dataview aggregates. */
+  tags?: string[]
+  /** 1–10 self-rated entry conviction. Maps to signalConfidence internally. */
+  conviction?: number
 }
+
+/** Curated tag set surfaced in OrderTicketPanel. Stored on the order request
+ *  for later journal aggregation. Keep this short and high-signal — proliferation
+ *  defeats the purpose. */
+export const JOURNAL_TAGS = [
+  'planned',
+  'breakout',
+  'fade',
+  'scalp',
+  'swing',
+  'revenge',
+  'FOMO',
+] as const
+export type JournalTag = (typeof JOURNAL_TAGS)[number]
 
 export interface Order {
   id: string
@@ -192,6 +214,25 @@ export interface AlpacaCredentialsStatus {
   paperEndpointConfirmed: boolean
 }
 
+/**
+ * Endpoint-mode toggle status. Owned by alpaca-mode.ts.
+ * Distinct from LiveModeStatus (the typed-phrase interlock) — this only
+ * selects which Alpaca REST URL the engine targets. The interlock still
+ * gates whether real-capital orders are actually allowed through.
+ */
+export interface AlpacaModeStatus {
+  mode: AccountMode
+  paperConfigured: boolean
+  liveConfigured: boolean
+  baseUrl: string
+  /** True iff the engine is currently connected through the resolved URL. */
+  connected: boolean
+}
+
+export interface AlpacaModeSetRequest {
+  mode: AccountMode
+}
+
 export interface AlpacaTradeUpdate {
   event: 'fill' | 'partial_fill' | 'canceled' | 'rejected' | 'new' | 'expired'
   orderId: string
@@ -235,18 +276,26 @@ export interface LiveModeSetRequest {
 
 export interface CredentialsMaskedStatus {
   paperConfigured: boolean
+  liveConfigured: boolean
   feed: 'iex' | 'sip'
+  /** Endpoint for the currently-active mode (paper or live). */
   endpoint: string
-  keyIdMasked: string
+  /** Masked key ID for the paper slot, or '' when not configured. */
+  paperKeyIdMasked: string
+  /** Masked key ID for the live slot, or '' when not configured. */
+  liveKeyIdMasked: string
 }
 
 export interface CredentialsSetRequest {
   keyId: string
   secretKey: string
   feed: 'iex' | 'sip'
+  /** Which slot to save into. Defaults to 'paper' if omitted (preserves
+   *  backward compatibility with callers from before dual-mode was added). */
+  mode?: AccountMode
 }
 
-export interface AnthropicMaskedStatus {
+export interface BaiduMaskedStatus {
   configured: boolean
 }
 
@@ -373,4 +422,199 @@ export interface CalendarContext {
   tradeRecommendation: 'TRADE' | 'CAUTION' | 'PAUSE'
   volatilityMultiplier: number
   timeUntilNextEvent: number | null
+}
+
+// ─── Replay engine (Phase 9) ─────────────────────────────────────────────────
+// Recorded-tape playback over the same MarketDataSource interface used by
+// MarketSimulator and LiveMarket. Same seed → bit-exact reproduction.
+
+export type ReplayMode = 'idle' | 'recording' | 'playing' | 'paused'
+
+/** One compressed snapshot per (timestamp, symbol). Append-only tape. */
+export interface TickTapeRow {
+  sessionId: string
+  ts: number          // unix milliseconds
+  symbol: string
+  last: number
+  bid: number
+  ask: number
+  volume: number      // cumulative session volume
+  vwap: number
+}
+
+/** Marker placed on the scrubber for jump-back analysis. */
+export interface ReplayBookmark {
+  id: string
+  sessionId: string
+  ts: number
+  label: string
+  createdAt: number
+}
+
+/** Sessions surfaced to the picker — annotated with tape-availability metadata. */
+export interface ReplayableSession {
+  sessionId: string
+  startedAt: number
+  endedAt: number | null
+  tickCount: number
+  symbols: number
+  firstTickTs: number | null
+  lastTickTs: number | null
+  durationMs: number
+  realizedPnl: number
+}
+
+/** Pushed to renderer at REPLAY_STATUS_HZ during playback. */
+export interface ReplayStatus {
+  mode: ReplayMode
+  sessionId: string | null
+  speed: number
+  /** Replay clock — current emitted timestamp inside the tape. */
+  cursorTs: number | null
+  /** Inclusive tape bounds for the active session. */
+  tapeStartTs: number | null
+  tapeEndTs:   number | null
+  /** Progress in [0..1]. Null when idle. */
+  progress: number | null
+  /** Total ticks emitted since playback start (for diagnostics). */
+  emittedTicks: number
+  /** Bookmark list for the active session, lightweight echo. */
+  bookmarks: ReplayBookmark[]
+  /** Reason the engine paused itself, if any (e.g. "end-of-tape"). */
+  autoPausedReason: string | null
+}
+
+export interface ReplayStartRequest {
+  sessionId: string
+  /** Optional jump-to timestamp inside the tape. */
+  fromTs?: number
+  /** Initial playback speed; clamped to [REPLAY_MIN_SPEED, REPLAY_MAX_SPEED]. */
+  speed?: number
+}
+
+/** Historical-day import. Pulls Alpaca bars for `date` × `symbols` and
+ *  materializes them as a synthetic replayable session in the tape table. */
+export type HistoricalTimeframe = '1Min' | '1Hour'
+
+export interface HistoricalImportRequest {
+  /** YYYY-MM-DD (US Eastern session). Weekends / holidays / future dates rejected. */
+  date: string
+  symbols: string[]
+  timeframe: HistoricalTimeframe
+}
+
+export interface HistoricalImportResult {
+  ok: boolean
+  reason?: string
+  sessionId?: string
+  tickCount?: number
+  symbolsImported?: string[]
+  skipped?: string[]
+}
+
+// ─── SATEX Terminal v2 · Black Box (Phase 10) ────────────────────────────────
+// Session-aware terminal UI: HMM regime, pre-trade risk gates, macro calendar,
+// system-log tail, real L2 depth. Each domain has its own main-process service
+// and renderer Zustand store, fed via the IPC channels in ipc-channels.ts.
+
+export type SessionId = 'TOKYO' | 'LONDON' | 'NY'
+
+/** Single regime metric — value in [0,1], directional trend, short text label. */
+export interface RegimeMetric { v: number; label: string; trend: number }
+
+export type HmmStateName = 'EXPANSION' | 'MEAN-REVERT' | 'COMPRESSION' | 'CAPITULATION'
+
+export interface RegimeSnapshot {
+  /** Single-line state header e.g. "EXPANSION · LONDON LIQUIDITY". */
+  state:       string
+  session:     SessionId
+  /** Symbol the snapshot was computed against (drives header context). */
+  symbol:      string
+  liquidity:   RegimeMetric
+  /** Inverted display: lower is better (tight spreads = healthy). */
+  spread:      RegimeMetric
+  volatility:  RegimeMetric
+  trend:       RegimeMetric
+  hmm:         { name: HmmStateName; p: number }[]
+  /** UTC ISO of last regime transition (state change), or null when stable. */
+  lastSwitchUtc: string | null
+  computedAt:  number
+}
+
+export type RiskGateStatus = 'OK' | 'WATCH' | 'BREACH'
+
+/** One pre-trade risk gate. `pct` is the progress-bar value in [0,1]. */
+export interface RiskGate {
+  key:    string
+  label:  string
+  pct:    number
+  status: RiskGateStatus
+  /** Free-form value string for display, e.g. "−2.0% / −6.4% buf". */
+  value:  string
+}
+
+export interface RiskGatesSnapshot {
+  gates: RiskGate[]
+  passingCount:  number
+  watchingCount: number
+  breachingCount: number
+  computedAt:    number
+}
+
+export type MacroImpact = 'high' | 'med' | 'low'
+
+export interface MacroEvent {
+  id:     string
+  /** Scheduled UTC ISO time. */
+  tsUtc:  string
+  label:  string
+  cons:   string
+  actual: string
+  impact: MacroImpact
+}
+
+export interface MacroSnapshot {
+  events:        MacroEvent[]
+  horizonHours:  number
+  computedAt:    number
+}
+
+/** Renderer-facing log entry. Mapped from main-process logger.LogEntry by
+ *  system-logs.ts — fields aligned so the renderer can render either directly. */
+export interface SystemLogEntry {
+  /** Unix milliseconds. */
+  ts:    number
+  /** Normalized level — main-process logger emits lowercase, system-logs uppercases. */
+  level: 'INFO' | 'WARN' | 'ERROR' | 'EVENT' | 'DEBUG' | 'TRACE'
+  /** Source namespace, e.g. "tape", "algo", "lat", "hmm", "risk", "cat". */
+  tag:   string
+  msg:   string
+}
+
+export interface SystemLogsTail {
+  /** Latest entries last. */
+  lines: SystemLogEntry[]
+}
+
+export interface DepthLevel {
+  /** Price. */
+  p:    number
+  /** Size at this level. */
+  size: number
+  /** Cumulative total from inside-the-book outward (top-of-book row first). */
+  tot:  number
+}
+
+export interface DepthSnapshot {
+  symbol:     string
+  mid:        number
+  /** Inside spread in price units. */
+  spread:     number
+  /** VPIN-like toxicity proxy in [0,1]. */
+  vpin:       number
+  /** Asks ascending in price (best ask = index 0). */
+  asks:       DepthLevel[]
+  /** Bids descending in price (best bid = index 0). */
+  bids:       DepthLevel[]
+  computedAt: number
 }

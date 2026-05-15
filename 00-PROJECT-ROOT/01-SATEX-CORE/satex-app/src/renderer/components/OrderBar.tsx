@@ -28,8 +28,9 @@ export function OrderBar() {
 
   const notional = (qty || 0) * last
   const riskPct = useMemo(() => {
-    if (!notional) return 0
-    return Math.min(100, (notional / Math.max(1, account.buyingPower)) * 100)
+    if (!notional || !Number.isFinite(notional)) return 0
+    const pct = (notional / Math.max(1, account.buyingPower)) * 100
+    return Math.max(0, Math.min(100, pct))
   }, [notional, account.buyingPower])
 
   async function place(side: 'buy' | 'sell') {
