@@ -22,18 +22,16 @@ Pulled from the 2026-05-15 audit. Fix #1 + Fix #4 shipped — see commit `e0fbfd
 | Fix | Status | Notes |
 |----:|:------:|:------|
 | #1 Symbol notes + wikilink resolution | ✅ shipped | 7 stub pages under [[#Symbols]] |
-| #2 Move audit docs into vault | open | `docs/MAY-TACTICS.md`, `docs/MASTER-FIX-PLAN.md`, `docs/SATEX-HANDOFF.md` should live at `Vault/00-Audit/` |
+| #2 Move audit docs into vault | ✅ shipped | now at `Vault/00-Audit/` — see [[#Open priorities]] links below |
 | #3 Index note | ✅ shipped | this file |
 | #4 Brain-checkpoint noise guard | ✅ shipped | guard at `vault-writer.ts:305`; takes effect on next dev-server restart |
 | #5 Daily notes wiring | open | `daily-notes` plugin enabled but no folder configured; pair with the `/daily` skill |
 
 Active deliverables from the institutional audit (read these before planning Week-1 work):
 
-- [[docs/SATEX-HANDOFF]] — current state, ~170–220h to v1.0
-- [[docs/MASTER-FIX-PLAN]] — root-cause fix sequencing
-- [[docs/MAY TACTICS]] — May tactical priorities
-
-> These three files live outside the vault today (in `docs/`). Fix #2 will relocate them under `Vault/00-Audit/` so backlinks form naturally.
+- [[Vault/00-Audit/SATEX-HANDOFF]] — current state, ~170–220h to v1.0
+- [[Vault/00-Audit/MASTER-FIX-PLAN]] — root-cause fix sequencing
+- [[Vault/00-Audit/MAY TACTICS]] — May tactical priorities
 
 ## Symbols
 
@@ -61,6 +59,7 @@ High-signal engineering retros. The most recent is the gold standard for Phase-N
 
 | Folder | Purpose | Status |
 |---|---|---|
+| `Vault/00-Audit/` | Institutional forensic audit deliverables | 3 docs — SATEX-HANDOFF, MASTER-FIX-PLAN, MAY TACTICS |
 | `Vault/Sessions/` | Session start + close pairs | 44 files — active |
 | `Vault/Trades/` | Per-trade outcomes (wins + loss-learnings) | 0 files — populates when paper trading runs |
 | `Vault/Tactics/` | MAY-TACTICS state transitions | 0 files — populates on regime changes |
