@@ -115,7 +115,7 @@ export class VaultWriter {
       '',
       '## Watchlist',
       '',
-      ...watchlist.map((sym) => `- [[${sym}]]`),
+      ...watchlist.map((sym) => `- [[Symbols/${sym}]]`),
       '',
       '## Notes',
       '',
@@ -236,6 +236,11 @@ export class VaultWriter {
       lines.push(extractWinLearnings({ pnl, holdMs, regimeAtEntry, tacticsAtEntry, aiDecision }))
     }
 
+    lines.push('')
+    lines.push('## Symbols')
+    lines.push('')
+    lines.push(`- [[Symbols/${order.request.symbol}]]`)
+
     await this.writeNote(
       'trade',
       `${ymdHms(closedAt)}-${order.request.symbol}-${outcome}.md`,
@@ -295,6 +300,9 @@ export class VaultWriter {
 
   async writeBrainCheckpoint(snapshot: { params: number; trades: number; bestKey: string | null; bestValue: number | null; note: string }): Promise<void> {
     if (!this.enabled) return
+    // Noise guard (Fix #4 — audit 2026-05-15): skip when brain has no state to
+    // checkpoint. The prior 277 zero-payload files were pure index pollution.
+    if (snapshot.params === 0) return
     const now = Date.now()
     const fm = {
       type: 'brain-checkpoint',
