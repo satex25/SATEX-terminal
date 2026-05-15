@@ -13,7 +13,7 @@ import {
   MAX_POSITION_CONCENTRATION,
 } from '@shared/constants'
 import { fmt } from '../lib/format'
-import type { OrderRequest, OrderType } from '@shared/types'
+import { JOURNAL_TAGS, type JournalTag, type OrderRequest, type OrderType } from '@shared/types'
 
 export function OrderTicketPanel() {
   const symbol  = useMarketStore(s => s.symbol)
@@ -31,6 +31,13 @@ export function OrderTicketPanel() {
   const [msg,  setMsg]  = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
 
+  // Journal metadata (modern-terminal-survey §6). Tags + conviction live on
+  // the order request; downstream pickup happens in the vault writer (follow-up).
+  const [tags, setTags] = useState<JournalTag[]>([])
+  const [conviction, setConviction] = useState(5)
+  const toggleTag = (t: JournalTag) =>
+    setTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])
+
   const last = quote?.last ?? 0
   const notional = (parseFloat(qty) || 0) * last
 
@@ -42,11 +49,19 @@ export function OrderTicketPanel() {
       ...(type === 'limit' && lp ? { limitPrice: parseFloat(lp) } : {}),
       ...(sl ? { stopLoss: parseFloat(sl) } : {}),
       ...(tp ? { takeProfit: parseFloat(tp) } : {}),
+      ...(tags.length > 0 ? { tags } : {}),
+      ...(conviction !== 5 ? { conviction } : {}),
       source: 'ticket',
     }
     try {
       const res = await window.satex.submitOrder(req)
       setMsg({ ok: res.ok, text: res.ok ? `Order submitted — ${res.orderId}` : res.reason ?? 'Rejected' })
+      if (res.ok) {
+        // Reset journal metadata after successful submit so it doesn't bleed
+        // into the next order. Keep core form state so user can fire follow-ups.
+        setTags([])
+        setConviction(5)
+      }
     } catch (e) {
       setMsg({ ok: false, text: String(e) })
     }
@@ -91,6 +106,31 @@ export function OrderTicketPanel() {
       <div className="ot-row">
         <span className="ot-lbl">TP</span>
         <input className="ot-input" type="number" value={tp} onChange={e => setTp(e.target.value)} placeholder="optional" />
+      </div>
+
+      {/* Journal: tag pills + conviction slider. Optional metadata that flows
+          with the order request for later vault-side journaling aggregates. */}
+      <div className="ot-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+        <span className="ot-lbl" style={{ fontSize: 9, color: 'var(--ink-3)' }}>JOURNAL TAGS</span>
+        <div className="ot-tags">
+          {JOURNAL_TAGS.map(t => (
+            <button
+              key={t}
+              type="button"
+              className={`ot-tag${tags.includes(t) ? ' on' : ''}`}
+              onClick={() => toggleTag(t)}
+            >{t}</button>
+          ))}
+        </div>
+      </div>
+      <div className="ot-row">
+        <span className="ot-lbl">CONV {conviction}/10</span>
+        <input
+          className="ot-conv"
+          type="range" min={1} max={10} step={1}
+          value={conviction}
+          onChange={e => setConviction(parseInt(e.target.value, 10))}
+        />
       </div>
 
       <div className="ot-summary">
