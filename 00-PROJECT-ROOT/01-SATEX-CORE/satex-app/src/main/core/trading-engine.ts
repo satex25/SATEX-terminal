@@ -726,12 +726,25 @@ export class TradingEngine {
    * NOTE: This only changes which endpoint we *talk to*. It does NOT bypass
    * the live-mode typed-phrase interlock (live-mode.ts). And alpaca.ts:114
    * still hard-blocks submitOrder against the live REST endpoint until that
-   * interlock is loosened — so flipping to 'live' here is safe for data /
-   * account viewing only.
+   * interlock is loosened.
+   *
+   * S0-4 dependency guard: we now require the typed-phrase interlock to be
+   * armed BEFORE the endpoint can flip to 'live'. Previously the two walls
+   * were independent, which let an operator flip the endpoint, then hit a
+   * confusing "Live trading requires explicit consent" error from
+   * alpaca.ts:114 when they tried to submit. That error implies the
+   * endpoint is wrong, but the actual missing wall is the interlock — the
+   * dependency-order guard surfaces the right diagnostic up front.
    */
   async setAlpacaModeMode(req: AlpacaModeSetRequest): Promise<{ ok: boolean; reason?: string; baseUrl?: string }> {
     if (this.replay) return { ok: false, reason: 'Stop replay before switching modes.' }
     if (req.mode === 'live') {
+      if (!isLive()) {
+        return {
+          ok: false,
+          reason: 'Live-mode interlock not armed. Open Live Mode panel, type the confirmation phrase, then retry.',
+        }
+      }
       const liveStored = getAlpacaCreds('live')
       if (!liveStored?.keyId || !liveStored?.secretKey) {
         return { ok: false, reason: 'No live credentials configured. Paste live keys in Settings first.' }
