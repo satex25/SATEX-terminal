@@ -3054,3 +3054,50 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   margin-bottom: 2px;
 }
 
+/* ── Kill-switch arm-hold overlay (S1-5 · 2026-05-16) ────────────────────── */
+.kill-arm-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 6, 7, 0.55);
+  z-index: 9999;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+.kill-arm-card {
+  background: rgba(20, 12, 14, 0.94);
+  border: 1px solid var(--bear-glow, #ff4655);
+  border-radius: 6px;
+  padding: 18px 26px;
+  min-width: 360px;
+  text-align: center;
+  box-shadow: 0 0 24px rgba(255, 70, 85, 0.35);
+  font-family: var(--font-mono);
+}
+.kill-arm-title {
+  color: var(--bear-glow, #ff4655);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  margin-bottom: 12px;
+}
+.kill-arm-bar {
+  height: 6px;
+  width: 100%;
+  background: rgba(255, 70, 85, 0.15);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.kill-arm-bar-fill {
+  height: 100%;
+  background: var(--bear-glow, #ff4655);
+  transition: width 60ms linear;
+}
+.kill-arm-hint {
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}

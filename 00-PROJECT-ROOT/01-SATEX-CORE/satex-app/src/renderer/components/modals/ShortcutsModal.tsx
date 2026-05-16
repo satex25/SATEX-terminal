@@ -36,9 +36,10 @@ const SECTIONS: Array<{ title: string; note?: string; rows: Array<[string, strin
   },
   {
     title: 'Risk',
-    note:  'Global — works anywhere in the app.',
+    note:  'Global — works anywhere. Arming requires a 2-second hold to prevent finger-slip; disarm is instant.',
     rows: [
-      ['Arm / disarm kill switch', '⌘⇧K'],
+      ['Arm kill switch (hold 2s)',  '⌘⇧K (hold)'],
+      ['Disarm kill switch',         '⌘⇧K (tap)'],
     ],
   },
   {

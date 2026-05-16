@@ -14,7 +14,7 @@
  * Phase 9 historical-day flow is unchanged — ChartPanel still owns the date
  * picker.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useIPC } from './hooks/useIPC'
 import { perf } from './lib/perf'
 import { useMarketStore } from './stores/marketStore'
@@ -62,6 +62,12 @@ export default function App() {
   const [tweaksOpen, setTweaksOpen] = useState(false)
   const [modal,      setModal]      = useState<ModalKind | null>(null)
   const [liveMode,   setLiveMode]   = useState(false)
+  // S1-5: kill-switch arm-confirm chord state. progress in [0,1] while the
+  // user is holding the chord; null when idle or already armed. Disarm stays
+  // instant (single press) — operators need the fast path back to trading.
+  const [armProgress, setArmProgress] = useState<number | null>(null)
+  const armTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const armStartRef  = useRef<number>(0)
 
   // Workspace state is sourced from the workspace store so the user's last
   // selection (and Quad symbol set) restore on app boot. The store hydrates
@@ -109,12 +115,49 @@ export default function App() {
     const WS_DIGITS: Record<string, Workspace> = {
       '1': 'Trade', '2': 'Focus', '3': 'Markets', '4': 'Replay', '5': 'Quad',
     }
+
+    // S1-5: cancel any in-flight arm-hold timer cleanly. Idempotent.
+    const cancelArmHold = (): void => {
+      if (armTimerRef.current) {
+        clearTimeout(armTimerRef.current)
+        armTimerRef.current = null
+      }
+      setArmProgress(null)
+    }
+
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
-      if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setCmdOpen(o => !o); return }
+      if (mod && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setCmdOpen(o => !o); return }
       if (mod && e.key === ',')               { e.preventDefault(); setTweaksOpen(o => !o); return }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); window.satex?.toggleDevTools(); return }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.satex?.killSwitch(!account.killSwitchArmed); return }
+      // S1-5: ⌘⇧K. DISARM is instant (operator wants fast return to trading).
+      // ARM requires a 2-second hold of the chord so a finger-slip can't halt
+      // the session by accident. Auto-key-repeat is no-op'd by checking the
+      // existing timer ref.
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        if (account.killSwitchArmed) {
+          cancelArmHold()
+          window.satex?.killSwitch(false)
+          return
+        }
+        if (armTimerRef.current) return   // already counting down
+        armStartRef.current = Date.now()
+        setArmProgress(0)
+        const tick = (): void => {
+          const elapsed = Date.now() - armStartRef.current
+          if (elapsed >= 2000) {
+            armTimerRef.current = null
+            setArmProgress(null)
+            window.satex?.killSwitch(true)
+            return
+          }
+          setArmProgress(elapsed / 2000)
+          armTimerRef.current = setTimeout(tick, 50)
+        }
+        armTimerRef.current = setTimeout(tick, 50)
+        return
+      }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setModal(m => m === 'indicators' ? null : 'indicators'); return }
       if (mod && e.key === 'Enter')           { e.preventDefault(); window.satex?.toggleFullscreen(); return }
       // Workspace digits ⌘1..⌘5 — won't fire if focus is in an input, since
@@ -127,8 +170,25 @@ export default function App() {
         }
       }
     }
+
+    // S1-5: releasing any of the chord modifiers cancels the in-flight
+    // arm-hold. Covers users who let go of Shift/Meta/Ctrl while still holding
+    // K, as well as the straight-up release of K.
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if (!armTimerRef.current) return
+      const k = e.key.toLowerCase()
+      if (k === 'k' || k === 'shift' || k === 'meta' || k === 'control') {
+        cancelArmHold()
+      }
+    }
+
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keyup',   onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keyup',   onKeyUp)
+      cancelArmHold()
+    }
   }, [account.killSwitchArmed])
 
   return (
@@ -241,6 +301,21 @@ export default function App() {
       <TacticsModal    open={modal === 'tactics'}    onClose={() => setModal(null)} />
       <IndicatorsModal open={modal === 'indicators'} onClose={() => setModal(null)} />
       <ExitReflectionModal />
+
+      {/* S1-5: arm-hold progress overlay. Renders only while the user is
+          holding the ⌘⇧K chord; auto-clears on release or after the 2s
+          completes (whichever fires first). */}
+      {armProgress !== null && (
+        <div className="kill-arm-overlay" role="alert">
+          <div className="kill-arm-card">
+            <div className="kill-arm-title">HOLD ⌘⇧K TO ARM KILL SWITCH</div>
+            <div className="kill-arm-bar">
+              <div className="kill-arm-bar-fill" style={{ width: `${Math.round(armProgress * 100)}%` }} />
+            </div>
+            <div className="kill-arm-hint">release to cancel · cancels all open orders + halts trading</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
