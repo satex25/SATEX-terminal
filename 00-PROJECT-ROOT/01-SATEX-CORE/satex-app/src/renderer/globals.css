@@ -3144,12 +3144,24 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .jp-slip.bull { background: rgba(34, 197, 94, 0.16);  color: var(--bull-glow, #21c97a); }
 
 /* ── VPIN flow-toxicity overlay (C13 / F2 · 2026-05-16) ──────────────────── */
+/* Pre-2026-05-16: a radial-gradient red wash filled the entire chart canvas
+ * (rgba(239,68,68,0.10) at top fading to transparent at bottom + 1.0 peak
+ * opacity from the pulse animation). The combined effect read as "broken
+ * chart" — candles disappeared behind the wash whenever VPIN crossed the
+ * threshold, which in dev/sim mode can be a sustained state.
+ *
+ * Replaced with a thin inset perimeter ring + soft inner glow: clearly
+ * communicates "danger" framing without occluding chart data. The corner
+ * .chart-vpin-badge still surfaces the numeric VPIN value + TOXIC FLOW
+ * label, so the user gets both visual urgency AND the precise reading. */
 .chart-vpin-wash {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at top, rgba(239, 68, 68, 0.10) 0%, rgba(239, 68, 68, 0.04) 60%, transparent 100%);
   pointer-events: none;
-  animation: vpin-pulse 2s ease-in-out infinite;
+  box-shadow:
+    inset 0 0 0 1.5px rgba(239, 68, 68, 0.85),
+    inset 0 0 28px   rgba(239, 68, 68, 0.18);
+  animation: vpin-pulse 2.4s ease-in-out infinite;
   z-index: 4;
 }
 .chart-vpin-badge {
@@ -3169,7 +3181,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   z-index: 5;
 }
 @keyframes vpin-pulse {
-  0%, 100% { opacity: 0.55; }
+  0%, 100% { opacity: 0.65; }
   50%      { opacity: 1.00; }
 }
 

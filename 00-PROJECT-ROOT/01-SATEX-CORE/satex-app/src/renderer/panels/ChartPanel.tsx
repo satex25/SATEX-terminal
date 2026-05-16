@@ -143,7 +143,12 @@ export function ChartPanel() {
   // vpin crosses the threshold so the chart isn't constantly tinted.
   const depthSnap   = useDepthStore(s => s.snapshot)
   const vpinValue   = depthSnap && depthSnap.symbol === symbol ? depthSnap.vpin : null
-  const VPIN_THRESHOLD = 0.8
+  // VPIN threshold. 0.85 (was 0.8) — the simulator's depth EMA can drift
+  // into the 0.8-0.85 range during sustained book imbalance without
+  // representing real toxic flow, so the higher floor cuts false positives
+  // in dev/sim mode while still firing for genuine ≥0.85 signal on live
+  // feeds where the proxy maps more directly to informed-trade probability.
+  const VPIN_THRESHOLD = 0.85
   const vpinHot     = vpinValue !== null && vpinValue >= VPIN_THRESHOLD
   const entry    = findUniverseEntry(symbol)
   const dp       = entry?.dp ?? 2
