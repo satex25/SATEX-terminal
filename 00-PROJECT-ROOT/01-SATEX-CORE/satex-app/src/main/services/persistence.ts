@@ -65,7 +65,14 @@ function openDB(): DB {
 }
 
 function migrate(db: DB): void {
+  // PRAGMA auto_vacuum must be set BEFORE any CREATE TABLE to take effect on
+  // a fresh DB. On an existing DB it's a silent no-op (SQLite ignores it
+  // unless you also run a full VACUUM, which we deliberately don't do at
+  // boot anymore). Net result: brand-new SATEX installs get incremental
+  // vacuum from day one; legacy DBs keep auto_vacuum=NONE until a user
+  // explicitly triggers a full VACUUM via the manual maintenance IPC.
   db.exec(`
+    PRAGMA auto_vacuum=INCREMENTAL;
     PRAGMA journal_mode=WAL;
     PRAGMA foreign_keys=ON;
 
@@ -647,6 +654,132 @@ export function dbSizeBytes(): number {
 }
 
 /**
+ * Delete tick rows belonging to sessions older than the cutoff. Async + chunked
+ * so the main thread stays responsive while big sessions are pruned.
+ *
+ * Why chunked: a single `DELETE FROM ticks WHERE session_id=?` on a 1 M-row
+ * session blocks the synchronous better-sqlite3 call for ~2-5 s. With IPC,
+ * frame timers, and the tick recorder all sharing the main thread, that
+ * shows up as user-visible lag during the maintenance window. By limiting
+ * each DELETE to `chunkSize` rows (default 10 000 → ~30-80 ms per call) and
+ * yielding via `setImmediate` between chunks, the event loop continues to
+ * drain between bites.
+ *
+ * Why session-id-based: uses the existing `idx_ticks_session_ts` covering
+ * index (leading column = session_id) so both the LIMIT subquery and the
+ * rowid IN delete are index-driven — orders of magnitude faster than the
+ * timestamp-only `pruneOldTicks` on multi-GB DBs that lack `idx_ticks_ts`.
+ *
+ * Stock SQLite doesn't support `DELETE … LIMIT` without
+ * SQLITE_ENABLE_UPDATE_DELETE_LIMIT, so we approximate via
+ * `DELETE … WHERE rowid IN (SELECT rowid … LIMIT N)` which works on every
+ * better-sqlite3 build.
+ *
+ * Sessions metadata stays intact (cheap rows in `sessions`) so historical
+ * PnL and trade counts survive the prune. Returns how much was deleted.
+ */
+export async function pruneOldSessionTicks(
+  cutoffMs: number,
+  chunkSize = 10_000,
+): Promise<{ sessionsAffected: number; rowsDeleted: number }> {
+  if (!Number.isFinite(cutoffMs) || cutoffMs <= 0) {
+    return { sessionsAffected: 0, rowsDeleted: 0 }
+  }
+  if (!Number.isFinite(chunkSize) || chunkSize <= 0) chunkSize = 10_000
+  const db = openDB()
+  const oldSessions = db
+    .prepare('SELECT id FROM sessions WHERE started_at < ?')
+    .all(cutoffMs) as Array<{ id: string }>
+  if (oldSessions.length === 0) return { sessionsAffected: 0, rowsDeleted: 0 }
+
+  const chunkStmt = db.prepare(
+    'DELETE FROM ticks WHERE rowid IN (SELECT rowid FROM ticks WHERE session_id = ? LIMIT ?)',
+  )
+
+  let rowsDeleted = 0
+  for (const s of oldSessions) {
+    try {
+      // Drain this session's tape in chunks. Stop when DELETE reports 0
+      // changes — either the session is empty or it never had ticks.
+      while (true) {
+        const changes = Number(chunkStmt.run(s.id, chunkSize).changes)
+        if (changes === 0) break
+        rowsDeleted += changes
+        // Yield to the event loop. setImmediate runs in the macrotask phase
+        // AFTER I/O callbacks, so the tick recorder + IPC handlers get a
+        // turn before the next DELETE chunk fires.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    } catch (e) {
+      log.warn('chunked per-session prune failed', { sessionId: s.id, err: String(e) })
+    }
+  }
+  return { sessionsAffected: oldSessions.length, rowsDeleted }
+}
+
+/**
+ * Background DB maintenance — fire-and-forget, fully off the boot critical
+ * path. Replaces the pre-2026-05-16 synchronous `compactIfLarge` call that
+ * locked the main process for 20-30s on multi-GB DBs (and cascaded into the
+ * renderer dom-ready watchdog firing).
+ *
+ * Schedule of work, on a `setTimeout(delayMs).unref()` so it never holds the
+ * process alive past shutdown:
+ *   1. Prune tick rows from sessions older than `pruneOlderThanMs`.
+ *   2. Run `PRAGMA incremental_vacuum` to release freed pages.
+ *      (No-op on legacy DBs where auto_vacuum=NONE — safe.)
+ *   3. Log the before/after size delta so trends are visible in the rotating
+ *      file log.
+ *
+ * All steps wrapped in try/catch — maintenance failures must NEVER take down
+ * the trading engine. The full-file VACUUM that physically shrinks a legacy
+ * DB is deliberately NOT run here; that requires the manual maintenance
+ * IPC (which warns the user about the lock duration).
+ */
+export function scheduleBackgroundMaintenance(opts: {
+  delayMs?: number
+  pruneOlderThanMs?: number
+  chunkSize?: number
+} = {}): void {
+  const delayMs = opts.delayMs ?? 30_000
+  const pruneOlderThanMs = opts.pruneOlderThanMs ?? 7 * 24 * 60 * 60 * 1000
+  const chunkSize = opts.chunkSize ?? 10_000
+
+  const run = async (): Promise<void> => {
+    const startedAt = Date.now()
+    try {
+      const beforeMb = Math.round(dbSizeBytes() / 1024 / 1024)
+      log.info('background db maintenance starting', {
+        beforeMb, pruneOlderThanHours: pruneOlderThanMs / 3_600_000, chunkSize,
+      })
+      const cutoff = Date.now() - pruneOlderThanMs
+      let pruned = { sessionsAffected: 0, rowsDeleted: 0 }
+      try { pruned = await pruneOldSessionTicks(cutoff, chunkSize) }
+      catch (e) { log.warn('chunked session-tick prune failed', { err: String(e) }) }
+      try { openDB().exec('PRAGMA incremental_vacuum') }
+      catch (e) { log.warn('incremental_vacuum failed', { err: String(e) }) }
+      const afterMb = Math.round(dbSizeBytes() / 1024 / 1024)
+      log.info('background db maintenance complete', {
+        beforeMb, afterMb, reclaimedMb: beforeMb - afterMb,
+        sessionsPruned: pruned.sessionsAffected,
+        rowsDeleted: pruned.rowsDeleted,
+        durationMs: Date.now() - startedAt,
+      })
+    } catch (e) {
+      log.error('background db maintenance crashed', { err: String(e), stack: (e as Error)?.stack })
+    }
+  }
+
+  const t = setTimeout(() => { void run() }, delayMs)
+  // Unref so a pending maintenance timer doesn't keep the Electron process
+  // alive after the user closes the window.
+  if (typeof (t as { unref?: () => void }).unref === 'function') {
+    (t as { unref: () => void }).unref()
+  }
+  log.info('background db maintenance scheduled', { delayMs, pruneOlderThanMs, chunkSize })
+}
+
+/**
  * One-shot maintenance: if the DB file exceeds `thresholdBytes`, run VACUUM
  * to physically reclaim space freed by prior DELETEs. Synchronous and blocking
  * — on a 1 GB DB this can take 10-30s. Call BEFORE the window shows so the
@@ -654,6 +787,11 @@ export function dbSizeBytes(): number {
  *
  * Returns { ran: true, beforeBytes, afterBytes } when VACUUM ran, otherwise
  * { ran: false, beforeBytes, afterBytes: beforeBytes }.
+ *
+ * @deprecated since 2026-05-16: blocks the main process and is no longer
+ * called from engine init. Kept exported for explicit user-initiated
+ * maintenance (e.g., a "Compact database" button in Settings). New callers
+ * should prefer `scheduleBackgroundMaintenance` for routine cleanup.
  */
 export function compactIfLarge(thresholdBytes: number): {
   ran: boolean; beforeBytes: number; afterBytes: number

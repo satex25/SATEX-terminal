@@ -209,13 +209,34 @@ export class TradingEngine {
     configureLogger(env.logLevel, this.logs.ingest)
     log.info('engine initializing', { mode: env.useSimulator ? 'simulator' : 'alpaca' })
 
-    // ── Pre-init DB maintenance (Phase 4.2, 2026-05-13) ────────────────────────
-    // Synchronous VACUUM if the file is over the threshold. Runs BEFORE the
-    // window shows so the user doesn't see a UI hang during reclamation. After
-    // the prune cron started running (2026-05-13), DELETEs free pages but the
-    // file doesn't shrink unless VACUUM is invoked.
-    const VACUUM_THRESHOLD_BYTES = 1024 * 1024 * 1024  // 1 GB
-    db.compactIfLarge(VACUUM_THRESHOLD_BYTES)
+    // ── DB maintenance (2026-05-16 follow-up to Phase 4.2) ─────────────────
+    // Pre-fix: a synchronous `db.compactIfLarge(1 GB)` call here blocked the
+    // engine for 20-30s on multi-GB DBs (observed 22s on a 2.9 GB DB), which
+    // cascaded into the renderer dom-ready watchdog firing and forcing a
+    // reload. Boot critical path is now under 1s in all cases.
+    //
+    // Maintenance is deferred 30s post-init so the engine + renderer are
+    // both fully wired before any DELETE / incremental_vacuum work runs.
+    // The prune itself is chunked + yielded so per-chunk blocking stays
+    // under ~50 ms — IPC, frame timers, and the tick recorder all keep
+    // running during the maintenance window.
+    //
+    // Retention: 48 hours. Covers the most recent two trading days so
+    // yesterday's tape is still replay-ready, while still pruning anything
+    // older. Tighter than the original 7-day window because tick density
+    // (~360 rows/sec × 18 symbols ≈ 23 K rows/min) makes weekly retention
+    // accumulate to multi-GB faster than the engine compacts. Change here
+    // is the single source of truth — the persistence layer keeps its own
+    // 7-day default as a defensive fallback for callers that don't pass
+    // pruneOlderThanMs explicitly.
+    //
+    // Heavy file-shrinking VACUUM is intentionally NOT triggered here —
+    // that requires an explicit user-initiated operation (see Settings →
+    // Compact database).
+    db.scheduleBackgroundMaintenance({
+      delayMs: 30_000,
+      pruneOlderThanMs: 48 * 60 * 60 * 1000,
+    })
 
     // Session record
     db.insertSession({

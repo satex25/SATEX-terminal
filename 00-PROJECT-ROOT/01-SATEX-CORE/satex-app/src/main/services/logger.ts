@@ -40,17 +40,44 @@ export function configureLogger(level: LogLevel, push?: (e: LogEntry) => void): 
 
 /** Enable file persistence. Called once from main/index.ts after app.getPath
  *  becomes available. Idempotent — re-calling with the same dir is a no-op,
- *  with a different dir rotates the active sink. */
+ *  with a different dir rotates the active sink.
+ *
+ *  Emits three info-level log lines so the audit trail can always answer
+ *  "what userData path did this process resolve, and did mkdir succeed?":
+ *    1. file sink init starting    — resolved userDataDir + target
+ *    2. file sink ready            — confirmation + created/existed flag
+ *    3. (on failure) file sink init failed — stderr-direct, includes stack
+ */
 export function enableFileSink(userDataDir: string): void {
-  if (!userDataDir) return
+  // Bootstrap logger for this function only. Cannot rely on the caller's
+  // logger being configured yet (configureLogger() typically runs after).
+  const boot = createLogger('logger')
+  if (!userDataDir) {
+    boot.warn('enableFileSink called with empty userDataDir — file sink disabled')
+    return
+  }
   const target = join(userDataDir, 'logs')
+  boot.info('file sink init starting', { userDataDir, target })
   try {
+    const existedBefore = existsSync(target)
     mkdirSync(target, { recursive: true })
+    // Verify post-condition: mkdirSync can return silently on some FS
+    // races even when the dir wasn't actually created. existsSync after
+    // proves we have what we asked for.
+    if (!existsSync(target)) {
+      throw new Error(`mkdirSync returned but directory still absent: ${target}`)
+    }
     fileSinkDir = target
+    boot.info('file sink ready', { dir: fileSinkDir, created: !existedBefore })
   } catch (e) {
+    // Directory creation failure goes LOUD on stderr — without file logs,
+    // post-crash forensics rely entirely on stdout/stderr capture, which
+    // may be lost by the time someone investigates. Include the stack so
+    // ENOENT-vs-EACCES-vs-EPERM is unambiguous.
     process.stderr.write(JSON.stringify({
-      ts: Date.now(), level: 'warn', ns: 'logger', msg: 'file sink init failed',
-      data: { dir: target, err: String(e) },
+      ts: Date.now(), level: 'error', ns: 'logger',
+      msg: 'file sink init failed',
+      data: { dir: target, err: String(e), stack: (e as Error)?.stack ?? null },
     }) + '\n')
     fileSinkDir = null
   }
