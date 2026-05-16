@@ -244,7 +244,7 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
     <div className="bb-topbar">
       {/* Brand */}
       <div className="bb-brand">
-        <Dragonfly size={20} />
+        <Dragonfly size={28} title="SATEX" />
         <div className="bb-brand-text">
           <span className="bb-brand-name">SATEX</span>
           <span className="bb-brand-version">v0.5.0 · 取引端末</span>

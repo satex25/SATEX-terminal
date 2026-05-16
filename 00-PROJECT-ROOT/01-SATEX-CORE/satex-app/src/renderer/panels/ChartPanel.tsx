@@ -405,14 +405,30 @@ export function ChartPanel() {
   // Previously included `quote?.timestamp`, which ticks 20Hz even when the
   // price is flat — that caused this effect to re-fire on every quote regardless
   // of whether the chart needed to repaint, driving boot-time frame stalls
-  // up to 125ms. With timestamp dropped, the effect fires only on actual
-  // price change or when the candle view rotates.
+  // up to 125ms.
+  //
+  // 2026-05-16 fix: paint the in-flight bar using `quote.last` (the live
+  // simulator/Alpaca price) instead of `last.close` (which is the bucket's
+  // OPENING price — the candle source only re-emits a candle event on the
+  // 1-second roll boundary, so view[last] stays a doji until then). High and
+  // low ratchet against quote.last so the wick grows correctly within the bar.
+  // Without this, every chart showed a doji-then-jump pattern that read as
+  // "flat lines" to the user.
   useEffect(() => {
-    if (!seriesRef.current || view.length === 0) return
+    if (!seriesRef.current || view.length === 0 || !quote) return
     try {
       const last = view[view.length - 1]!
+      const liveClose = quote.last
+      const liveHigh  = Math.max(last.high, liveClose)
+      const liveLow   = Math.min(last.low,  liveClose)
       const s = seriesRef.current as { update: (d: unknown) => void }
-      s.update({ time: last.time as unknown, open: last.open, high: last.high, low: last.low, close: last.close })
+      s.update({
+        time: last.time as unknown,
+        open: last.open,
+        high: liveHigh,
+        low:  liveLow,
+        close: liveClose,
+      })
     } catch { /* ignore */ }
   }, [quote?.last, view])
 
