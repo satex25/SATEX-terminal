@@ -9,3 +9,8 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+
+# Playwright E2E artifacts
+playwright-results/
+test-results/
+playwright-report/
