@@ -43,7 +43,6 @@ const satexApi = {
   onSystemStatus:       (cb: (status: SystemStatus) => void)                          => on(IPC.SYSTEM_STATUS,      cb),
   onAccountUpdate:      (cb: (account: Account) => void)                              => on(IPC.ACCOUNT_UPDATE,     cb),
   onOrdersUpdate:       (cb: (orders: Order[]) => void)                               => on(IPC.ORDERS_UPDATE,      cb),
-  onLogEvent:           (cb: (entry: unknown) => void)                                => on(IPC.LOG_EVENT,          cb),
   onAutonomousDecision: (cb: (decision: AutonomousDecision) => void)                  => on(IPC.AUTONOMOUS_DECISION,cb),
   onAutonomousStats:    (cb: (s: AutonomousStatus) => void)                           => on(IPC.AUTONOMOUS_STATS,   cb),
 

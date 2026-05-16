@@ -3,8 +3,7 @@
  *
  * Wraps the existing structured logger with a ring buffer of recent entries.
  * The renderer's SystemLogsPanel subscribes to LOGS_TAIL push for live "last 6s"
- * style tail. Existing LOG_EVENT push is preserved for any other consumers
- * (DevTools, future detail panel).
+ * style tail — this is the only renderer-side consumer of log events.
  *
  * Wire-up: register `ingest` as the logger's push callback in main/index.ts
  * BEFORE the engine initializes so we don't miss boot-time entries.

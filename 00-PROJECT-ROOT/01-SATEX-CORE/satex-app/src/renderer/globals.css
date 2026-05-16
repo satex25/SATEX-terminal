@@ -841,7 +841,11 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .news-title {
   font-size: 11.5px; line-height: 1.4; color: var(--ink-0);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden; word-break: break-word;
+  /* S0-7: cap at 2 lines × 1.4 line-height × 11.5px ≈ 32px + buffer. The
+     line-clamp alone breaks on widgets <90px tall where the cell forces
+     a shorter render. The max-height hard ceiling stops the text from
+     clipping mid-sentence at small heights. */
+  max-height: 48px; overflow: hidden; word-break: break-word;
 }
 .news-meta  {
   font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-3); margin-top: 3px; letter-spacing: 0.04em;
@@ -903,7 +907,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .cal-event-title {
   font-size: 11.5px; color: var(--ink-0); line-height: 1.35;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden; word-break: break-word;
+  /* S0-7: see .news-title — same line-clamp fallback issue. */
+  max-height: 48px; overflow: hidden; word-break: break-word;
 }
 .cal-event-meta  {
   font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-3); margin-top: 2px;

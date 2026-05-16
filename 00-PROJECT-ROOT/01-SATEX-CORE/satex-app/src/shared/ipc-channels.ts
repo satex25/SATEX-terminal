@@ -14,10 +14,7 @@ export const IPC = {
   SYSTEM_STATUS:      'satex:system:status',
   ACCOUNT_UPDATE:     'satex:account:update',
   ORDERS_UPDATE:      'satex:orders:update',
-  INDICATORS_UPDATE:  'satex:indicators:update',
-  BRAIN_UPDATE:       'satex:brain:update',
   AUTONOMOUS_DECISION:'satex:autonomous:decision',
-  LOG_EVENT:          'satex:log:event',
 
   // ── Invoke: renderer → main ───────────────────────────────────────────────
   // Subscription
@@ -68,7 +65,6 @@ export const IPC = {
 
   // AI brain
   BRAIN_DECISION:     'satex:brain:decision',
-  BRAIN_OUTCOME:      'satex:brain:outcome',
 
   // MAY-TACTICS
   TACTICS_STATUS:     'satex:tactics:status',
@@ -181,10 +177,7 @@ export const PUSH_CHANNELS = [
   IPC.SYSTEM_STATUS,
   IPC.ACCOUNT_UPDATE,
   IPC.ORDERS_UPDATE,
-  IPC.INDICATORS_UPDATE,
-  IPC.BRAIN_UPDATE,
   IPC.AUTONOMOUS_DECISION,
-  IPC.LOG_EVENT,
   IPC.OBSERVER_STATS,
   IPC.LEARNER_STATS,
   IPC.VAULT_STATS,

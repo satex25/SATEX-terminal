@@ -18,7 +18,11 @@ win:
     - target: nsis
       arch: [x64]
   icon: resources/icon.png
-  requestedExecutionLevel: requireAdministrator
+  # S0-6: was requireAdministrator with no documented justification — forced
+  # UAC on every launch + expanded blast radius if the renderer ever gets
+  # compromised. Default asInvoker is correct for an Electron app whose
+  # writes stay inside userData.
+  requestedExecutionLevel: asInvoker
 
 nsis:
   oneClick: false

@@ -1,7 +1,8 @@
 /**
  * SATEX — Structured Logger
  * Lightweight structured logger for the main process.
- * Outputs JSON-structured lines to stdout; renderer receives LOG_EVENT push.
+ * Outputs JSON-structured lines to stdout. The renderer's SystemLogsPanel
+ * consumes log entries via LOGS_TAIL (ring-buffered tail, see system-logs.ts).
  */
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error'
