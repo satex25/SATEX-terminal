@@ -51,6 +51,49 @@ type TradeUpdateHandler = (update: AlpacaTradeUpdate) => void
 
 interface OrderResult { id: string; clientOrderId: string; status: string; filledQty: number; filledAvgPrice: number | null }
 
+/** S1-3 — REST token bucket. Alpaca enforces 200 req/min per key on the trading
+ *  endpoint. A reconnect storm (e.g., the 406-cooldown loop on a flaky network)
+ *  can otherwise eat the budget invisibly until Alpaca returns 429s. The bucket
+ *  fails closed (throws) when empty so callers see an explicit error rather
+ *  than blocked-by-Alpaca silence. Soft-warns at <20% headroom, throttled to
+ *  once per 10s so the warning stays readable. */
+class AlpacaRateLimiter {
+  private readonly capacity = 200
+  private readonly windowMs = 60_000
+  private tokens: number = 200
+  private lastRefill: number = Date.now()
+  private lastWarnAt = 0
+
+  gate(label: string): void {
+    this.refill()
+    if (this.tokens < 1) {
+      throw new Error(`alpaca rate limit (${this.capacity}/min) reached — ${label} blocked, retry in a moment`)
+    }
+    this.tokens -= 1
+    if (this.tokens < this.capacity * 0.2) {
+      const now = Date.now()
+      if (now - this.lastWarnAt > 10_000) {
+        this.lastWarnAt = now
+        log.warn('alpaca rate-limit headroom low', {
+          remaining: Math.floor(this.tokens), capacity: this.capacity, label,
+        })
+      }
+    }
+  }
+
+  private refill(): void {
+    const now = Date.now()
+    const elapsed = Math.min(now - this.lastRefill, this.windowMs)
+    if (elapsed <= 0) return
+    const refillRate = this.capacity / this.windowMs
+    this.tokens = Math.min(this.capacity, this.tokens + elapsed * refillRate)
+    this.lastRefill = now
+  }
+
+  /** Inspection helper — exposed for tests / future telemetry. */
+  available(): number { this.refill(); return Math.floor(this.tokens) }
+}
+
 export class AlpacaClient {
   private cfg: AlpacaConfig
   private marketWs: WS | null = null
@@ -78,6 +121,9 @@ export class AlpacaClient {
   /** Cooldown applied when the Alpaca stream reports code 406 (connection
    *  limit). Long enough for a stuck server-side socket to drop. */
   private static CONNECTION_LIMIT_COOLDOWN_MS = 60_000
+  /** S1-3 — per-key REST rate limiter. Trading + data endpoints share the
+   *  same 200/min budget, so one bucket gates both `rest()` and `getBars()`. */
+  private readonly rateLimiter = new AlpacaRateLimiter()
 
   constructor(cfg: AlpacaConfig) { this.cfg = cfg }
 
@@ -94,6 +140,7 @@ export class AlpacaClient {
 
   private async rest<T>(method: string, path: string, body?: unknown): Promise<T> {
     if (!this.isConfigured) throw new Error('alpaca: missing credentials')
+    this.rateLimiter.gate(`${method} ${path}`)
     const res = await fetch(`${this.cfg.baseUrl}${path}`, {
       method, headers: this.headers(),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {})
@@ -165,6 +212,8 @@ export class AlpacaClient {
   async cancelOrder(id: string): Promise<void> { await this.rest<void>('DELETE', `/v2/orders/${id}`) }
 
   async getBars(symbol: string, tf: '1Min' | '5Min' | '15Min' | '1Hour' | '1Day', startIso: string, endIso?: string): Promise<Candle[]> {
+    if (!this.isConfigured) throw new Error('alpaca: missing credentials')
+    this.rateLimiter.gate(`GET /v2/stocks/${symbol}/bars`)
     const p = new URLSearchParams({ timeframe: tf, start: startIso, limit: '10000' })
     if (endIso) p.set('end', endIso)
     const res = await fetch(`${this.cfg.dataUrl}/v2/stocks/${symbol}/bars?${p}`, { headers: this.headers() })
