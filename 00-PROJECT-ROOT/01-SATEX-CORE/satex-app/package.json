@@ -13,6 +13,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "lint:types": "npm run typecheck",
+    "lint": "eslint src tests",
+    "knip": "knip",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "electron-vite dev",
@@ -38,6 +40,7 @@
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^1.0.1",
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.60.0",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^20.16.10",
@@ -50,10 +53,15 @@
     "electron-builder": "^25.1.7",
     "electron-rebuild": "^3.2.9",
     "electron-vite": "^2.3.0",
+    "eslint": "^10.4.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "knip": "^6.14.1",
     "playwright": "^1.60.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2",
+    "typescript-eslint": "^8.59.3",
     "vite": "^5.4.8",
     "vitest": "^2.1.2"
   }
