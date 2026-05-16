@@ -8,8 +8,18 @@ import { app, BrowserWindow, ipcMain, Notification, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { z, type ZodTypeAny } from 'zod'
 import { TradingEngine } from './core/trading-engine'
 import { IPC } from '@shared/ipc-channels'
+import {
+  OrderSubmitReq, OrderCancelReq, KillSwitchReq, CandlesGetReq, SymbolOnlyReq,
+  OptionalSymbolReq, SubscribeReq, WatchlistSetReq, SessionIdReq, OptionalSessionIdReq,
+  CredentialsSetReq, BaiduSetReq, LiveModeSetReq, AlpacaModeSetReq, BrainDecisionReq,
+  AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
+  ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq,
+  IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
+  WindowZoomReq,
+} from '@shared/ipc-schemas'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
 import { IndicatorSettingsService } from './services/indicator-settings'
@@ -379,22 +389,44 @@ function wireAutonomousEvents(): void {
   engine.onAutonomousDecision((d)     => push(IPC.AUTONOMOUS_DECISION, d))
 }
 
+// ── IPC payload validation wrapper (S0-8) ────────────────────────────────────
+// Every handler that takes a payload runs raw input through a Zod schema BEFORE
+// the engine sees it. A bad shape throws here, which surfaces as a rejected
+// ipcRenderer.invoke() on the renderer side — same error contract callers
+// already handle. Without this wrapper, TypeScript's compile-time types are
+// erased and the engine trusts whatever the renderer sends.
+function validated<S extends ZodTypeAny, R>(
+  schema: S,
+  handler: (req: z.infer<S>) => R | Promise<R>,
+): (event: Electron.IpcMainInvokeEvent, raw: unknown) => Promise<R> {
+  return async (_event, raw) => {
+    const parsed = schema.safeParse(raw)
+    if (!parsed.success) {
+      const first = parsed.error.issues[0]
+      const detail = first ? `${first.path.join('.') || '<root>'}: ${first.message}` : 'unknown shape'
+      log.warn('ipc validation rejected', { issues: parsed.error.issues.slice(0, 3) })
+      throw new Error(`Invalid IPC payload — ${detail}`)
+    }
+    return handler(parsed.data)
+  }
+}
+
 // ── IPC Handlers (renderer → main) ────────────────────────────────────────────
 function registerIpcHandlers(): void {
   // ── Orders ──────────────────────────────────────────────────────────────────
-  ipcMain.handle(IPC.ORDER_SUBMIT, async (_e, req) => engine.submitOrder(req))
-  ipcMain.handle(IPC.ORDER_CANCEL, async (_e, id)  => engine.cancelOrder(id))
+  ipcMain.handle(IPC.ORDER_SUBMIT, validated(OrderSubmitReq, (req) => engine.submitOrder(req)))
+  ipcMain.handle(IPC.ORDER_CANCEL, validated(OrderCancelReq, (id)  => engine.cancelOrder(id)))
 
   // ── Risk ─────────────────────────────────────────────────────────────────────
-  ipcMain.handle(IPC.RISK_KILL, (_e, arm: boolean) => {
+  ipcMain.handle(IPC.RISK_KILL, validated(KillSwitchReq, (arm) => {
     if (arm) engine.armKillSwitch()
     else     engine.disarmKillSwitch()
-  })
+  }))
 
   // ── Market data ──────────────────────────────────────────────────────────────
-  ipcMain.handle(IPC.CANDLES_GET,   (_e, { symbol, limit })  => engine.getCandles(symbol, limit))
-  ipcMain.handle(IPC.INDICATORS_GET,(_e, symbol: string)     => engine.getIndicators(symbol))
-  ipcMain.handle(IPC.SUBSCRIBE,     (_e, symbols: string[])  => {
+  ipcMain.handle(IPC.CANDLES_GET,    validated(CandlesGetReq, ({ symbol, limit }) => engine.getCandles(symbol, limit)))
+  ipcMain.handle(IPC.INDICATORS_GET, validated(SymbolOnlyReq, (symbol)            => engine.getIndicators(symbol)))
+  ipcMain.handle(IPC.SUBSCRIBE,      validated(SubscribeReq,  (symbols) => {
     log.debug('renderer subscribed', { symbols })
     // Push current snapshot immediately
     const quotes = engine.getAllQuotes()
@@ -403,96 +435,95 @@ function registerIpcHandlers(): void {
     // the renderer has its IPC listeners attached. Idempotent — guarded by
     // engine.seedBroadcastDone so HMR remounts don't re-flood.
     engine.broadcastInitialSeed()
-  })
+  }))
 
   // ── Watchlist ────────────────────────────────────────────────────────────────
-  ipcMain.handle(IPC.WATCHLIST_GET, ()           => engine.getWatchlist())
-  ipcMain.handle(IPC.WATCHLIST_SET, (_e, syms)   => engine.setWatchlist(syms))
+  ipcMain.handle(IPC.WATCHLIST_GET, ()                              => engine.getWatchlist())
+  ipcMain.handle(IPC.WATCHLIST_SET, validated(WatchlistSetReq, (syms) => engine.setWatchlist(syms)))
 
   // ── Orders history ───────────────────────────────────────────────────────────
-  ipcMain.handle(IPC.ORDERS_HISTORY,   (_e, sessionId) => engine.getOrdersHistory(sessionId))
+  ipcMain.handle(IPC.ORDERS_HISTORY, validated(OptionalSessionIdReq, (sessionId) => engine.getOrdersHistory(sessionId)))
 
   // ── Sessions / PnL ──────────────────────────────────────────────────────────
-  ipcMain.handle(IPC.SESSIONS_LIST,     ()          => engine.getSessions())
-  ipcMain.handle(IPC.SESSIONS_SNAPSHOTS,(_e, sessId)=> engine.getPnlSnapshots(sessId))
+  ipcMain.handle(IPC.SESSIONS_LIST,      ()                              => engine.getSessions())
+  ipcMain.handle(IPC.SESSIONS_SNAPSHOTS, validated(SessionIdReq, (sessId) => engine.getPnlSnapshots(sessId)))
 
   // ── Brain ────────────────────────────────────────────────────────────────────
   ipcMain.handle(IPC.BRAIN_GET, () => engine.getBrainParams())
 
   // ── Credentials / health ─────────────────────────────────────────────────────
-  ipcMain.handle(IPC.CREDENTIALS_STATUS,     ()        => engine.getCredentialsStatus())
-  ipcMain.handle(IPC.CREDENTIALS_GET_MASKED, ()        => engine.getCredentialsMasked())
-  ipcMain.handle(IPC.CREDENTIALS_SET,        (_e, req) => engine.setCredentials(req))
-  ipcMain.handle(IPC.CREDENTIALS_CLEAR,      ()        => engine.clearCredentials())
-  ipcMain.handle(IPC.BAIDU_GET_MASKED,       ()        => engine.getBaiduMasked())
-  ipcMain.handle(IPC.BAIDU_SET,              (_e, key: string) => engine.setBaiduKey(key))
-  ipcMain.handle(IPC.ALPACA_RECONNECT,       async ()  => engine.reconnectAlpaca())
-  ipcMain.handle(IPC.HEALTH_CHECK,           ()        => engine.healthCheck())
+  ipcMain.handle(IPC.CREDENTIALS_STATUS,     ()                                => engine.getCredentialsStatus())
+  ipcMain.handle(IPC.CREDENTIALS_GET_MASKED, ()                                => engine.getCredentialsMasked())
+  ipcMain.handle(IPC.CREDENTIALS_SET,        validated(CredentialsSetReq, (req) => engine.setCredentials(req)))
+  ipcMain.handle(IPC.CREDENTIALS_CLEAR,      ()                                => engine.clearCredentials())
+  ipcMain.handle(IPC.BAIDU_GET_MASKED,       ()                                => engine.getBaiduMasked())
+  ipcMain.handle(IPC.BAIDU_SET,              validated(BaiduSetReq, (key)       => engine.setBaiduKey(key)))
+  ipcMain.handle(IPC.ALPACA_RECONNECT,       async ()                          => engine.reconnectAlpaca())
+  ipcMain.handle(IPC.HEALTH_CHECK,           ()                                => engine.healthCheck())
 
   // ── Live mode (Phase 5) ──────────────────────────────────────────────────────
-  ipcMain.handle(IPC.LIVE_MODE_GET, ()           => engine.getLiveMode())
-  ipcMain.handle(IPC.LIVE_MODE_SET, (_e, req)    => engine.setLiveMode(req))
+  ipcMain.handle(IPC.LIVE_MODE_GET, ()                              => engine.getLiveMode())
+  ipcMain.handle(IPC.LIVE_MODE_SET, validated(LiveModeSetReq, (req) => engine.setLiveMode(req)))
 
   // ── Alpaca endpoint mode (paper vs live URL) ────────────────────────────────
-  ipcMain.handle(IPC.ALPACA_MODE_GET, ()         => engine.getAlpacaModeStatus())
-  ipcMain.handle(IPC.ALPACA_MODE_SET, async (_e, req) => engine.setAlpacaModeMode(req))
+  ipcMain.handle(IPC.ALPACA_MODE_GET, ()                                => engine.getAlpacaModeStatus())
+  ipcMain.handle(IPC.ALPACA_MODE_SET, validated(AlpacaModeSetReq, (req) => engine.setAlpacaModeMode(req)))
 
   // ── Autonomous paper trader (Phase C) ───────────────────────────────────────
-  ipcMain.handle(IPC.AUTONOMOUS_ENABLE,     ()           => engine.enableAutonomous())
-  ipcMain.handle(IPC.AUTONOMOUS_DISABLE,    ()           => engine.disableAutonomous())
-  ipcMain.handle(IPC.AUTONOMOUS_STATUS,     ()           => engine.getAutonomousStatus())
-  ipcMain.handle(IPC.AUTONOMOUS_RECENT,     ()           => engine.getAutonomousRecent())
-  ipcMain.handle(IPC.AUTONOMOUS_CONFIG_GET, ()           => engine.getAutonomousConfig())
-  ipcMain.handle(IPC.AUTONOMOUS_CONFIG_SET, (_e, patch)  => engine.setAutonomousConfig(patch))
+  ipcMain.handle(IPC.AUTONOMOUS_ENABLE,     ()                                       => engine.enableAutonomous())
+  ipcMain.handle(IPC.AUTONOMOUS_DISABLE,    ()                                       => engine.disableAutonomous())
+  ipcMain.handle(IPC.AUTONOMOUS_STATUS,     ()                                       => engine.getAutonomousStatus())
+  ipcMain.handle(IPC.AUTONOMOUS_RECENT,     ()                                       => engine.getAutonomousRecent())
+  ipcMain.handle(IPC.AUTONOMOUS_CONFIG_GET, ()                                       => engine.getAutonomousConfig())
+  ipcMain.handle(IPC.AUTONOMOUS_CONFIG_SET, validated(AutonomousConfigSetReq, (patch) => engine.setAutonomousConfig(patch)))
 
   // ── AI brain decision (Phase 6) ──────────────────────────────────────────────
-  ipcMain.handle(IPC.BRAIN_DECISION, async (_e, symbol: string) => engine.getAiDecision(symbol))
+  ipcMain.handle(IPC.BRAIN_DECISION, validated(BrainDecisionReq, (symbol) => engine.getAiDecision(symbol)))
 
   // ── MAY-TACTICS (Phase 7) ────────────────────────────────────────────────────
   ipcMain.handle(IPC.TACTICS_STATUS,    ()  => engine.getTacticsStatus())
   ipcMain.handle(IPC.TACTICS_GRADUATE,  ()  => engine.graduateTactics())
 
   // ── Continuous Observer / PatternLearner / Vault (Phase 8) ──────────────────
-  ipcMain.handle(IPC.OBSERVER_GET,      ()  => engine.getObserverStats())
-  ipcMain.handle(IPC.LEARNER_GET,       ()  => engine.getLearnerStats())
-  ipcMain.handle(IPC.LEARNER_WEIGHTS,   ()  => engine.getLearnerWeights())
-  ipcMain.handle(IPC.VAULT_GET,         ()  => engine.getVaultStats())
-  ipcMain.handle(IPC.VAULT_CHECKPOINT,  async (_e, req) => engine.manualVaultCheckpoint(req))
+  ipcMain.handle(IPC.OBSERVER_GET,     ()                                  => engine.getObserverStats())
+  ipcMain.handle(IPC.LEARNER_GET,      ()                                  => engine.getLearnerStats())
+  ipcMain.handle(IPC.LEARNER_WEIGHTS,  ()                                  => engine.getLearnerWeights())
+  ipcMain.handle(IPC.VAULT_GET,        ()                                  => engine.getVaultStats())
+  ipcMain.handle(IPC.VAULT_CHECKPOINT, validated(VaultCheckpointReq, (req) => engine.manualVaultCheckpoint(req)))
 
   // ── Replay engine (Phase 9) ─────────────────────────────────────────────────
-  ipcMain.handle(IPC.REPLAY_SESSIONS,   ()                              => engine.listReplayableSessions())
-  ipcMain.handle(IPC.REPLAY_START,      async (_e, req)                 => engine.startReplay(req))
-  ipcMain.handle(IPC.REPLAY_STOP,       ()                              => engine.stopReplay())
-  ipcMain.handle(IPC.REPLAY_PAUSE,      ()                              => engine.pauseReplay())
-  ipcMain.handle(IPC.REPLAY_RESUME,     ()                              => engine.resumeReplay())
-  ipcMain.handle(IPC.REPLAY_SEEK,       (_e, ts: number)                => engine.seekReplay(ts))
-  ipcMain.handle(IPC.REPLAY_SET_SPEED,  (_e, speed: number)             => engine.setReplaySpeed(speed))
-  ipcMain.handle(IPC.REPLAY_BOOKMARK_ADD, (_e, label: string)           => engine.addReplayBookmark(label))
-  ipcMain.handle(IPC.REPLAY_BOOKMARK_DEL, (_e, id: string)              => engine.deleteReplayBookmark(id))
-  ipcMain.handle(IPC.REPLAY_BOOKMARKS,  (_e, sessionId: string)         => engine.listReplayBookmarks(sessionId))
-  ipcMain.handle(IPC.REPLAY_STATUS_GET, ()                              => engine.getReplayStatus())
-  ipcMain.handle(IPC.REPLAY_IMPORT_HISTORICAL, async (_e, req)          => engine.importHistoricalDay(req))
-  ipcMain.handle(IPC.REPLAY_DELETE_SESSION,    (_e, sessionId: string)  => engine.deleteReplaySession(sessionId))
+  ipcMain.handle(IPC.REPLAY_SESSIONS,          ()                                            => engine.listReplayableSessions())
+  ipcMain.handle(IPC.REPLAY_START,             validated(ReplayStartReq,        (req)        => engine.startReplay(req)))
+  ipcMain.handle(IPC.REPLAY_STOP,              ()                                            => engine.stopReplay())
+  ipcMain.handle(IPC.REPLAY_PAUSE,             ()                                            => engine.pauseReplay())
+  ipcMain.handle(IPC.REPLAY_RESUME,            ()                                            => engine.resumeReplay())
+  ipcMain.handle(IPC.REPLAY_SEEK,              validated(ReplaySeekReq,         (ts)         => engine.seekReplay(ts)))
+  ipcMain.handle(IPC.REPLAY_SET_SPEED,         validated(ReplaySpeedReq,        (speed)      => engine.setReplaySpeed(speed)))
+  ipcMain.handle(IPC.REPLAY_BOOKMARK_ADD,      validated(ReplayBookmarkAddReq,  (label)      => engine.addReplayBookmark(label)))
+  ipcMain.handle(IPC.REPLAY_BOOKMARK_DEL,      validated(ReplayBookmarkDelReq,  (id)         => engine.deleteReplayBookmark(id)))
+  ipcMain.handle(IPC.REPLAY_BOOKMARKS,         validated(SessionIdReq,          (sessionId)  => engine.listReplayBookmarks(sessionId)))
+  ipcMain.handle(IPC.REPLAY_STATUS_GET,        ()                                            => engine.getReplayStatus())
+  ipcMain.handle(IPC.REPLAY_IMPORT_HISTORICAL, validated(HistoricalImportReq,   (req)        => engine.importHistoricalDay(req)))
+  ipcMain.handle(IPC.REPLAY_DELETE_SESSION,    validated(SessionIdReq,          (sessionId)  => engine.deleteReplaySession(sessionId)))
 
   // ── Chart-indicator toggle persistence (Phase 11) ────────────────────────────
-  ipcMain.handle(IPC.INDICATOR_SETTINGS_GET, () => indicatorSettings.get())
-  ipcMain.handle(IPC.INDICATOR_SETTINGS_SET, (_e, next) => indicatorSettings.set(next))
-  ipcMain.handle(IPC.INDICATOR_PRIOR_DAY_HLC, (_e, symbol: string) => engine.getPriorDayHlc(symbol))
+  ipcMain.handle(IPC.INDICATOR_SETTINGS_GET,  ()                                          => indicatorSettings.get())
+  ipcMain.handle(IPC.INDICATOR_SETTINGS_SET,  validated(IndicatorSettingsSetReq, (next)    => indicatorSettings.set(next)))
+  ipcMain.handle(IPC.INDICATOR_PRIOR_DAY_HLC, validated(SymbolOnlyReq,           (symbol)  => engine.getPriorDayHlc(symbol)))
 
   // ── Workspace state persistence (Phase 12) ───────────────────────────────────
-  ipcMain.handle(IPC.WORKSPACE_STATE_GET, () => workspaceState.get())
-  ipcMain.handle(IPC.WORKSPACE_STATE_SET, (_e, next) => workspaceState.set(next))
+  ipcMain.handle(IPC.WORKSPACE_STATE_GET, ()                                       => workspaceState.get())
+  ipcMain.handle(IPC.WORKSPACE_STATE_SET, validated(WorkspaceStateSetReq, (next)   => workspaceState.set(next)))
 
   // ── Trading journal (P0-2) ───────────────────────────────────────────────────
-  ipcMain.handle(IPC.CLOSED_TRADES_GET, () => engine.getClosedTrades(500))
-  ipcMain.handle(IPC.JOURNAL_REFLECT, (_e, req: { id: string; lesson: string; emotionTag?: import('@shared/types').JournalTag }) =>
-    engine.applyTradeReflection(req.id, req.lesson, req.emotionTag))
+  ipcMain.handle(IPC.CLOSED_TRADES_GET, ()                                  => engine.getClosedTrades(500))
+  ipcMain.handle(IPC.JOURNAL_REFLECT,   validated(JournalReflectReq, (req)  => engine.applyTradeReflection(req.id, req.lesson, req.emotionTag)))
 
   // ── Layout + CSV export ──────────────────────────────────────────────────────
-  ipcMain.handle(IPC.LAYOUT_SAVE,       (_e, payload: unknown) => {
+  ipcMain.handle(IPC.LAYOUT_SAVE, validated(LayoutSaveReq, (payload) => {
     log.debug('layout save requested', { hasPayload: !!payload })
     return { ok: true }
-  })
+  }))
   ipcMain.handle(IPC.ORDERS_EXPORT_CSV, async () => {
     try {
       const orders = engine.getOrdersHistory()
@@ -517,12 +548,12 @@ function registerIpcHandlers(): void {
   })
 
   // ── Phase 10: SATEX Terminal v2 · Black Box ──────────────────────────────
-  ipcMain.handle(IPC.REGIME_GET,       ()              => engine.getRegime())
-  ipcMain.handle(IPC.RISK_GATES_GET,   ()              => engine.getRiskGates())
-  ipcMain.handle(IPC.MACRO_GET,        ()              => engine.getMacro())
-  ipcMain.handle(IPC.LOGS_GET,         ()              => engine.getLogsTail())
-  ipcMain.handle(IPC.DEPTH_GET,        (_e, symbol)    => engine.getDepth(symbol as string | undefined))
-  ipcMain.handle(IPC.DEPTH_SUBSCRIBE,  (_e, symbol)    => { engine.subscribeDepth(symbol as string); return { ok: true } })
+  ipcMain.handle(IPC.REGIME_GET,      ()                                       => engine.getRegime())
+  ipcMain.handle(IPC.RISK_GATES_GET,  ()                                       => engine.getRiskGates())
+  ipcMain.handle(IPC.MACRO_GET,       ()                                       => engine.getMacro())
+  ipcMain.handle(IPC.LOGS_GET,        ()                                       => engine.getLogsTail())
+  ipcMain.handle(IPC.DEPTH_GET,       validated(OptionalSymbolReq, (symbol)    => engine.getDepth(symbol)))
+  ipcMain.handle(IPC.DEPTH_SUBSCRIBE, validated(SymbolOnlyReq,     (symbol)    => { engine.subscribeDepth(symbol); return { ok: true } }))
 
   // ── Window controls ──────────────────────────────────────────────────────────
   ipcMain.handle(IPC.WINDOW_TOGGLE_FULLSCREEN, () => {
@@ -531,9 +562,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.WINDOW_TOGGLE_DEVTOOLS, () => {
     mainWindow?.webContents.toggleDevTools()
   })
-  ipcMain.handle(IPC.WINDOW_SET_ZOOM, (_e, factor: number) => {
+  ipcMain.handle(IPC.WINDOW_SET_ZOOM, validated(WindowZoomReq, (factor) => {
     mainWindow?.webContents.setZoomFactor(Math.max(0.5, Math.min(2.0, factor)))
-  })
+  }))
   ipcMain.handle(IPC.WINDOW_GET_ZOOM, () => mainWindow?.webContents.getZoomFactor() ?? 1.0)
 
   log.info('IPC handlers registered', { count: Object.keys(IPC).length })
