@@ -62,6 +62,28 @@ const indicatorSettings = new IndicatorSettingsService(resolveVaultProjectRoot()
 const workspaceState    = new WorkspaceStateService(resolveVaultProjectRoot())
 let mainWindow: BrowserWindow | null = null
 
+// ── Process-level crash safety (S0-1) ───────────────────────────────────────
+// Without these handlers any unhandled error in main terminates silently:
+// session lost, orders stranded, no audit trail. gracefulShutdown drains the
+// engine (idempotent — every timer/service handles null) then forces exit so
+// a stuck shutdown can't deadlock the process. Re-entrant calls are no-ops.
+let shuttingDown = false
+function gracefulShutdown(label: string, cause: unknown): void {
+  if (shuttingDown) return
+  shuttingDown = true
+  log.error(`graceful shutdown · ${label}`, {
+    cause: String(cause),
+    stack: (cause as Error)?.stack,
+  })
+  try { engine.shutdown() } catch (e) {
+    log.error('engine.shutdown threw during graceful shutdown', { err: String(e) })
+  }
+  // Hard-stop after 5s in case anything is still hanging on an async write.
+  setTimeout(() => { try { app.exit(1) } catch { process.exit(1) } }, 5_000).unref()
+}
+process.on('uncaughtException', (err) => gracefulShutdown('uncaughtException', err))
+process.on('unhandledRejection', (reason) => gracefulShutdown('unhandledRejection', reason))
+
 function resolveVaultProjectRoot(): string {
   // electron-vite builds main into <repo>/00-PROJECT-ROOT/01-SATEX-CORE/satex-app/out/main/
   // and the vault lives at <repo-root>/Vault/. app.getAppPath() returns the
@@ -151,8 +173,32 @@ function createWindow(): void {
     }
   }, 8000)
 
+  // ── Renderer crash recovery (S0-2) ────────────────────────────────────────
+  // On crash, auto-reload the renderer instead of leaving the user with a
+  // frozen window. State restoration happens automatically: the renderer's
+  // useIPC hook re-fires IPC.SUBSCRIBE on mount, which triggers
+  // engine.broadcastInitialSeed() + the snapshot push block in
+  // app.whenReady() (QUOTES_TICK / ACCOUNT_UPDATE / ORDERS_UPDATE / etc.).
+  // Crash-loop guard: if we exceed 3 reloads in 60s, the renderer is broken
+  // beyond auto-recovery — log it and stop reloading so we don't burn CPU.
+  const crashHistory: number[] = []
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     log.error('renderer crashed', { reason: details.reason, exitCode: details.exitCode })
+    if (details.reason === 'clean-exit') return
+    const now = Date.now()
+    while (crashHistory.length > 0 && now - crashHistory[0]! > 60_000) crashHistory.shift()
+    crashHistory.push(now)
+    if (crashHistory.length > 3) {
+      log.error('renderer crash-loop detected — giving up on auto-reload', { count: crashHistory.length })
+      return
+    }
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      log.warn('reloading renderer after crash', { attempt: crashHistory.length })
+      try { mainWindow.reload() } catch (e) {
+        log.error('renderer reload failed', { err: String(e) })
+      }
+    }, 200)
   })
   mainWindow.webContents.on('console-message', (_e, level, message, line, source) => {
     log.info('renderer-console', { level, message, line, source })
