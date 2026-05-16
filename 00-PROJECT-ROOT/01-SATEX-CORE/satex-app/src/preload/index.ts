@@ -22,8 +22,10 @@ import type {
   HistoricalImportRequest, HistoricalImportResult,
   AutonomousStatus, AutonomousDecision,
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
+  ClosedTrade, JournalTag, Trade,
 } from '@shared/types'
 import type { IndicatorSettings } from '@shared/chart-indicators'
+import type { WorkspaceState } from '@shared/types'
 
 // ── Typed listener wrapper ─────────────────────────────────────────────────────
 function on<T>(channel: PushChannel, cb: (payload: T) => void): () => void {
@@ -149,6 +151,28 @@ const satexApi = {
     getSettings: ()                              => ipcRenderer.invoke(IPC.INDICATOR_SETTINGS_GET)      as Promise<IndicatorSettings>,
     setSettings: (next: IndicatorSettings)       => ipcRenderer.invoke(IPC.INDICATOR_SETTINGS_SET, next) as Promise<IndicatorSettings>,
     getPriorDayHlc: (symbol: string)             => ipcRenderer.invoke(IPC.INDICATOR_PRIOR_DAY_HLC, symbol) as Promise<{ high: number; low: number; close: number; date: string } | null>,
+  },
+
+  // ── Workspace state persistence (Phase 12) ──────────────────────────────────
+  workspace: {
+    getState: ()                                 => ipcRenderer.invoke(IPC.WORKSPACE_STATE_GET)      as Promise<WorkspaceState>,
+    setState: (next: WorkspaceState)             => ipcRenderer.invoke(IPC.WORKSPACE_STATE_SET, next) as Promise<WorkspaceState>,
+  },
+
+  // ── Footprint trade stream (P0-1) ──────────────────────────────────────────
+  /** Subscribe to raw Trade events. Batched per market tick. Forwarder for
+   *  the renderer's footprintStore + DeltaStrip / FootprintOverlay. */
+  onTradesTick: (cb: (trades: Trade[]) => void) => on<Trade[]>(IPC.TRADES_TICK, cb),
+
+  // ── Trading journal (P0-2) ─────────────────────────────────────────────────
+  journal: {
+    /** Stream of closed-trade records — one event per position close. */
+    onTradeClosed: (cb: (t: ClosedTrade) => void) => on<ClosedTrade>(IPC.TRADE_CLOSED, cb),
+    /** Hydrate the panel with whatever is in the engine's in-memory ring. */
+    getClosed:     ()                              => ipcRenderer.invoke(IPC.CLOSED_TRADES_GET) as Promise<ClosedTrade[]>,
+    /** Attach a lesson + emotion tag to a closed trade (post-exit prompt). */
+    reflect:       (req: { id: string; lesson: string; emotionTag?: JournalTag }) =>
+                     ipcRenderer.invoke(IPC.JOURNAL_REFLECT, req) as Promise<ClosedTrade | null>,
   },
 }
 

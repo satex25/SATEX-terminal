@@ -29,6 +29,7 @@ import { writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type {
   AiDecision,
+  ClosedTrade,
   Order,
   Position,
   SessionRecord,
@@ -247,6 +248,72 @@ export class VaultWriter {
       fm,
       lines.join('\n'),
     )
+  }
+
+  /**
+   * Append a post-exit reflection (lesson + emotion tag) to a trade-close
+   * note. Falls back to writing a standalone reflection note when the matching
+   * trade-close file can't be located on disk — keeps the audit trail
+   * complete even after long sessions that have rolled past the in-memory
+   * trade ring.
+   *
+   * Idempotent enough — appends `## Reflection` block to the matching file
+   * (or creates a sidecar Trades/<ts>-<symbol>-reflection.md when no match
+   * exists). The file format keeps Dataview queries working since the
+   * `reflection`/`emotion` keys live in the markdown body, not frontmatter
+   * (no schema change required).
+   */
+  async appendTradeReflection(trade: ClosedTrade): Promise<void> {
+    if (!this.enabled) return
+    if (!trade.lesson && !trade.emotionTag) return
+    const block: string[] = []
+    block.push('')
+    block.push('## Reflection')
+    block.push('')
+    if (trade.emotionTag) block.push(`- Emotion: \`${trade.emotionTag}\``)
+    if (trade.lesson)     block.push(`- Lesson: ${trade.lesson.trim()}`)
+    block.push(`- Captured: ${isoOf(Date.now())}`)
+    const body = block.join('\n')
+
+    // Locate the matching trade-close note by symbol + outcome. The vault
+    // writes trade-close files as `<ymdHms>-<symbol>-<outcome>.md` under
+    // <vaultRoot>/Vault/Trades/. The trade.closedAt and the original close
+    // file's ymdHms typically agree to the second, but we fall back to a
+    // sidecar reflection file when the original isn't on disk.
+    const outcome = trade.pnl > 0 ? 'win' : trade.pnl < 0 ? 'loss' : 'flat'
+    const ts = ymdHms(trade.closedAt)
+    const targetName = `${ts}-${trade.symbol}-${outcome}.md`
+    if (!this.vaultRoot) return
+    const dir = join(this.vaultRoot, VAULT_SUBDIR, SCOPE_DIRS.trade)
+    const target = join(dir, targetName)
+    try {
+      // Append to the close note if it exists; otherwise drop a sidecar.
+      if (existsSync(target)) {
+        const fs = await import('node:fs/promises')
+        const existing = await fs.readFile(target, 'utf8')
+        await fs.writeFile(target, existing + '\n' + body, 'utf8')
+        return
+      }
+      const fm = {
+        type: 'trade-reflection',
+        orderId: trade.id,
+        symbol: trade.symbol,
+        outcome,
+        pnl: trade.pnl,
+        emotion: trade.emotionTag ?? null,
+        ts: isoOf(trade.closedAt),
+        tags: ['satex', 'reflection', `symbol/${trade.symbol}`],
+      }
+      await this.writeNote(
+        'trade',
+        `${ts}-${trade.symbol}-reflection.md`,
+        fm,
+        `# Reflection · ${trade.symbol} ${outcome.toUpperCase()}\n${body}`,
+      )
+    } catch (e) {
+      // Surface via caller's logger — vault failures must never crash trade flow.
+      throw new Error(`appendTradeReflection failed: ${String(e)}`)
+    }
   }
 
   async writeTacticsTransition(prev: TacticsStatus | null, next: TacticsStatus, reason: string): Promise<void> {

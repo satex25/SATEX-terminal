@@ -87,6 +87,13 @@ export const LEARNED_STOP_TP_FLOOR_RR = 2.5
 export const REPLAY_DEFAULT_SPEED = 5
 export const REPLAY_MIN_SPEED = 0.5
 export const REPLAY_MAX_SPEED = 100
+/** Replay-source emit cadence (Hz). Decoupled from the live-simulator
+ *  TICK_HZ because replay benefits from finer-grained ticks: at 60Hz each
+ *  tick advances the cursor by ~16.67ms × speed instead of 50ms × speed,
+ *  so high-speed playback animates against a 60fps display without 50ms
+ *  gaps between frames. 60Hz aligns the emit rate with the typical
+ *  display refresh — no painted frame is ever "stale". */
+export const REPLAY_TICK_HZ = 60
 
 /** Symbols pre-checked in the Historical-Day importer UI when the user hasn't
  *  explicitly picked any. Covers indices + the most-liquid mega-caps so bars

@@ -32,11 +32,14 @@ import type {
   TacticsStatus, ObserverStats, LearnerStats, VaultStats,
   AlpacaModeStatus,
 } from '@shared/types'
+// Phase 12: Workspace + WORKSPACE_TABS moved to shared/types so the main
+// process can sanitize persisted state. Re-export here for back-compat with
+// existing renderer imports (App.tsx, CommandPalette.tsx).
+import { WORKSPACE_TABS, type Workspace } from '@shared/types'
+export { WORKSPACE_TABS }
+export type { Workspace }
 
 export type ModalKind = 'about' | 'shortcuts' | 'settings' | 'live' | 'tactics' | 'indicators'
-
-export const WORKSPACE_TABS = ['Trade', 'Focus', 'Markets', 'Replay', 'Quad'] as const
-export type Workspace = typeof WORKSPACE_TABS[number]
 
 const WORKSPACE_TITLES: Record<Workspace, string> = {
   Trade:   'Single chart + AI insights — trading-focused layout',

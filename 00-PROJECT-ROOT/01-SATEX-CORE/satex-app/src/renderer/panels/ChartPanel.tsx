@@ -15,6 +15,7 @@ import { useMarketStore, selectCandles } from '../stores/marketStore'
 import { useAccountStore } from '../stores/accountStore'
 import { useIndicatorStore } from '../stores/indicatorStore'
 import { useRegimeStore } from '../stores/regimeStore'
+import { DeltaStrip } from '../components/DeltaStrip'
 import {
   emaSeries as computeEmaSeries,
   rsiSeries as computeRsiSeries,
@@ -779,6 +780,11 @@ export function ChartPanel() {
           <button type="button" onClick={() => setHistErr(null)} aria-label="Dismiss error">×</button>
         </div>
       )}
+
+      {/* P0-1 — DeltaStrip directly above the chart shows net order-flow
+          delta per 1-second candle in real time. The aggregator is fed via
+          IPC trades-tick; FootprintAggregator handles the bid/ask split. */}
+      <DeltaStrip symbol={symbol} height={28} label={`Δ · ${symbol}`} />
 
       <div className="chart-canvas-wrap">
         <div ref={containerRef} className="chart-canvas" />

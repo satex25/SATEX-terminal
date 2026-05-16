@@ -6,7 +6,7 @@
 import {
   SIMULATOR_CANDLE_INTERVAL_SEC, SPARKLINE_LENGTH, TICK_HZ, UNIVERSE, type UniverseEntry
 } from '@shared/constants'
-import type { Candle, NewsItem, Quote } from '@shared/types'
+import type { Candle, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
 import { shortId } from './id-generator'
 import { mulberry32, randomSeed, type Rng } from './rng'
 import { createLogger } from './logger'
@@ -20,6 +20,10 @@ export interface MarketDataSource {
   onQuotes(fn: (quotes: Quote[]) => void): Unsub
   onCandle(fn: (symbol: string, candle: Candle, isNew: boolean) => void): Unsub
   onNews(fn: (item: NewsItem) => void): Unsub
+  /** P0-1 Footprint — per-trade event stream. MarketSimulator infers from
+   *  tick direction; LiveMarket forwards Alpaca SIP trades when entitled;
+   *  ReplaySource is a no-op today (historical import doesn't carry side). */
+  onTrades(fn: (trades: Trade[]) => void): Unsub
   getQuote(symbol: string): Quote | undefined
   getAllQuotes(): Quote[]
   getCandles(symbol: string, limit?: number): Candle[]
@@ -60,7 +64,15 @@ export class MarketSimulator implements MarketDataSource {
   private quoteListeners   = new Set<(q: Quote[]) => void>()
   private candleListeners  = new Set<(s: string, c: Candle, isNew: boolean) => void>()
   private newsListeners    = new Set<(n: NewsItem) => void>()
+  private tradeListeners   = new Set<(t: Trade[]) => void>()
   private currentCandleStart = 0
+  /** Last-tick price per symbol — used to infer trade side on the next tick.
+   *  Initialized from the universe seed on construction so the very first
+   *  tick still has a comparison baseline. */
+  private lastPrice = new Map<string, number>()
+  /** Persists the last inferred side per symbol so flat ticks (price ==
+   *  previous) keep the previous direction instead of dropping to neutral. */
+  private lastSide  = new Map<string, TradeSide>()
 
   constructor(seed?: number) {
     this.rng = mulberry32(seed ?? randomSeed())
@@ -100,6 +112,7 @@ export class MarketSimulator implements MarketDataSource {
   onQuotes(fn: (q: Quote[]) => void):                         Unsub { this.quoteListeners.add(fn);  return () => this.quoteListeners.delete(fn)  }
   onCandle(fn: (s: string, c: Candle, n: boolean) => void):   Unsub { this.candleListeners.add(fn); return () => this.candleListeners.delete(fn) }
   onNews(fn: (n: NewsItem) => void):                          Unsub { this.newsListeners.add(fn);   return () => this.newsListeners.delete(fn)   }
+  onTrades(fn: (t: Trade[]) => void):                         Unsub { this.tradeListeners.add(fn);  return () => this.tradeListeners.delete(fn)  }
 
   getQuote(symbol: string): Quote | undefined {
     const s = this.states.get(symbol); return s ? this.quoteFrom(s) : undefined
@@ -129,11 +142,14 @@ export class MarketSimulator implements MarketDataSource {
 
   private tick(): void {
     const batch: Quote[] = []
+    const trades: Trade[] = []
+    const now = Date.now()
     for (const s of this.states.values()) {
       const z = this.rng.nextGaussian()
       const dt = 1 / (TICK_HZ * 60)
       const lr = s.drift * dt + s.sigma * z * Math.sqrt(dt)
       const vol = 100 + this.rng.nextInt(900)
+      const prevPrice = this.lastPrice.get(s.entry.symbol) ?? s.price
       s.price = s.price * Math.exp(lr)
       s.bid = s.price * (1 - 0.0001)
       s.ask = s.price * (1 + 0.0001)
@@ -147,8 +163,24 @@ export class MarketSimulator implements MarketDataSource {
       c.close = s.price
       c.volume += vol
       batch.push(this.quoteFrom(s))
+
+      // P0-1 Footprint — infer trade side from this-tick price vs last-tick
+      // price. Up = ask-lift (buy), down = bid-hit (sell), unchanged = carry
+      // forward last side (avoids a "neutral" classification the footprint
+      // chart can't render). Provenance flagged 'inferred' so consumers can
+      // visually distinguish from real SIP trades.
+      const inferredSide: TradeSide = s.price > prevPrice ? 'buy'
+        : s.price < prevPrice ? 'sell'
+        : this.lastSide.get(s.entry.symbol) ?? 'buy'
+      this.lastPrice.set(s.entry.symbol, s.price)
+      this.lastSide.set(s.entry.symbol, inferredSide)
+      trades.push({
+        symbol: s.entry.symbol, ts: now, price: s.price,
+        size: vol, side: inferredSide, provenance: 'inferred',
+      })
     }
     for (const l of this.quoteListeners) l(batch)
+    if (trades.length > 0) for (const l of this.tradeListeners) l(trades)
   }
 
   private rollCandle(): void {

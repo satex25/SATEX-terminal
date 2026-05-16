@@ -12,7 +12,9 @@ import { useMacroStore } from '../stores/macroStore'
 import { useLogsStore } from '../stores/logsStore'
 import { useDepthStore } from '../stores/depthStore'
 import { useReplayStore } from '../stores/replayStore'
-import type { NewsItem, ReplayMode } from '@shared/types'
+import { useJournalStore } from '../stores/journalStore'
+import { useFootprintStore } from '../stores/footprintStore'
+import type { NewsItem, ReplayMode, ClosedTrade, Trade } from '@shared/types'
 
 export function useIPC(): void {
   const { updateQuotes, updateCandle, appendNews, resetCandles } = useMarketStore()
@@ -41,11 +43,15 @@ export function useIPC(): void {
 
     // Replay status — clear cached candles when entering/leaving replay so the
     // chart reflects the new source's historical bars, not a hybrid timeline.
+    // P0-1: also reset the footprint aggregator on the same boundary — the
+    // replay tape has no trade-side info so retaining live deltas across a
+    // replay swap would mix live and historical contexts.
+    const resetFootprint = useFootprintStore.getState().reset
     const unsubReplay = window.satex.replay?.onStatus((s) => {
       const prev = prevReplayMode.current
       const enteringReplay = prev !== 'playing' && prev !== 'paused' && (s.mode === 'playing' || s.mode === 'paused')
       const leavingReplay  = (prev === 'playing' || prev === 'paused') && s.mode !== 'playing' && s.mode !== 'paused'
-      if (enteringReplay || leavingReplay) resetCandles()
+      if (enteringReplay || leavingReplay) { resetCandles(); resetFootprint() }
       prevReplayMode.current = s.mode
       setReplay(s)
     }) ?? (() => {})
@@ -56,6 +62,15 @@ export function useIPC(): void {
     const unsubMacro     = window.satex.onMacroUpdate?.(setMacro)          ?? (() => {})
     const unsubLogs      = window.satex.onLogsTail?.(setLogsTail)          ?? (() => {})
     const unsubDepth     = window.satex.onDepthUpdate?.(setDepth)          ?? (() => {})
+
+    // ── P0-2: closed-trade stream feeds the JournalPanel ───────────────────
+    const upsertTrade = useJournalStore.getState().upsertTrade
+    const unsubJournal = window.satex.journal?.onTradeClosed?.((t: ClosedTrade) => upsertTrade(t)) ?? (() => {})
+    void useJournalStore.getState().hydrate()
+
+    // ── P0-1: trade stream feeds the FootprintAggregator for DeltaStrip ────
+    const ingestTrades = useFootprintStore.getState().ingest
+    const unsubTrades  = window.satex.onTradesTick?.((batch: Trade[]) => ingestTrades(batch)) ?? (() => {})
 
     // ── Initial seed fetches (post-subscribe so we don't miss a push) ──────
     void window.satex.subscribe([])
@@ -81,6 +96,8 @@ export function useIPC(): void {
       unsubMacro()
       unsubLogs()
       unsubDepth()
+      unsubJournal()
+      unsubTrades()
     }
   }, [])
 }

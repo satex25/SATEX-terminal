@@ -6,6 +6,66 @@
 
 export type AssetClass = 'equity' | 'index' | 'future' | 'crypto'
 
+/** ── Per-trade event (P0-1 Footprint · 2026-05-15) ───────────────────────────
+ *  Single executed trade as classified for footprint aggregation. Sources:
+ *
+ *   - **MarketSimulator** emits 'inferred' trades by classifying each tick
+ *     against the prior tick: price ↑ = ask-lift (buy), price ↓ = bid-hit
+ *     (sell), unchanged = the previous side. Size = the simulator's per-tick
+ *     volume increment for that symbol.
+ *
+ *   - **AlpacaClient** (when SIP+L2 entitlement is detected) maps the `t.*`
+ *     stream's executed-trade events 1:1 with `provenance: 'real'`.
+ *
+ *   - **ReplaySource** does not currently emit trades — the historical-import
+ *     path doesn't carry trade-side info. Downstream consumers must tolerate
+ *     an empty trade stream during replay.
+ *
+ *  Both renderer (footprint store) and engine (fan-out) consume this type;
+ *  the IPC payload for TRADES_TICK is `Trade[]`. */
+export type TradeSide = 'buy' | 'sell'
+export interface Trade {
+  symbol: string
+  /** Epoch milliseconds. */
+  ts: number
+  price: number
+  /** Aggressor-side size (share count, contract count, etc.). */
+  size: number
+  side: TradeSide
+  /** 'real' = from Alpaca SIP trades stream. 'inferred' = reconstructed from
+   *  quote tick direction (used in simulator and on free IEX feed). Consumers
+   *  shading by provenance can dim inferred bars to signal lower confidence. */
+  provenance: 'real' | 'inferred'
+}
+
+/** ── Workspace state (Phase 12 · 2026-05-15) ─────────────────────────────────
+ *  Persisted to <project-root>/Vault/Settings/workspace-state.md so the app
+ *  boots into the user's most-recent layout instead of always-Trade. Lives in
+ *  shared/types so both main (sanitizer) and renderer (store/UI) can import
+ *  without a cross-process module boundary. */
+export const WORKSPACE_TABS = ['Trade', 'Focus', 'Markets', 'Replay', 'Quad'] as const
+export type Workspace = (typeof WORKSPACE_TABS)[number]
+
+export interface WorkspaceState {
+  version: 1
+  /** Last selected workspace. Restored on app mount. */
+  workspace: Workspace
+  /** Exactly 4 symbols shown in the Quad workspace, oldest-to-newest pane
+   *  order matching `QuadChartPanel`. Validated against UNIVERSE on hydrate. */
+  quadSymbols: string[]
+  /** Last symbol the user focused on in Trade/Focus single-chart workspaces. */
+  chartSymbol: string
+}
+
+/** Defaults — user explicit preference is Quad on boot per Phase 12 ask;
+ *  the four pane symbols mirror the Phase 10.1 hardcoded set. */
+export const DEFAULT_WORKSPACE_STATE: WorkspaceState = {
+  version: 1,
+  workspace: 'Quad',
+  quadSymbols: ['NVDA', 'SPY', 'ES', 'BTC'],
+  chartSymbol: 'NVDA',
+}
+
 export interface Quote {
   symbol: string
   name: string
@@ -84,6 +144,47 @@ export const JOURNAL_TAGS = [
   'FOMO',
 ] as const
 export type JournalTag = (typeof JOURNAL_TAGS)[number]
+
+/** ── Closed-trade record (Phase 12 / P0-2 complete · 2026-05-15) ─────────────
+ *  Emitted from TradingEngine.recordTradeClose() and pushed to the renderer
+ *  via TRADE_CLOSED for the JournalPanel. Mirrors the trade-close markdown
+ *  the vault writer produces but as a typed in-memory record so the panel
+ *  doesn't need to read files. Capped at 500 entries (most-recent kept). */
+export interface ClosedTrade {
+  id: string
+  symbol: string
+  /** Direction of the ORIGINAL entry (long if the entry was a buy, short
+   *  if the entry was a sell). Useful for PnL sign reasoning in the UI. */
+  side: 'long' | 'short'
+  quantity: number
+  entryPrice: number
+  exitPrice: number
+  /** Realized PnL in dollars. Positive = win, negative = loss. */
+  pnl: number
+  /** PnL as a fraction of entry notional, signed. e.g. 0.012 = +1.2%. */
+  pnlPct: number
+  /** Position hold duration in milliseconds. */
+  holdMs: number
+  /** Wall-clock epoch-ms when the close fill landed. */
+  closedAt: number
+  /** Which auto-exit rail closed the trade (stop-loss / take-profit), or
+   *  null for manual / autonomous-flat closes. */
+  triggeredBy: TriggeredBy | null
+  /** Free-form source string from the entry order — 'ticket', 'autonomous',
+   *  'alpaca-bracket', etc. */
+  source: string
+  /** Journal tags carried from the entry order. */
+  tags: string[]
+  /** Self-rated entry conviction (1-10), or null if unset. */
+  conviction: number | null
+  /** Regime state at entry — useful for per-regime aggregation in the panel. */
+  regimeAtEntry: string | null
+  /** Lesson captured via the exit-reflection prompt — set asynchronously
+   *  after the trade closes if the user fills the prompt. May remain null. */
+  lesson?: string
+  /** Emotion tag captured via the exit-reflection prompt. */
+  emotionTag?: JournalTag
+}
 
 export interface Order {
   id: string

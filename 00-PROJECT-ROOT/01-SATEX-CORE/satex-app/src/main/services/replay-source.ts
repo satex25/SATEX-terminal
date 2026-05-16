@@ -33,11 +33,11 @@
  * mutates the in-flight candle just like MarketSimulator.tick().
  */
 import {
-  SPARKLINE_LENGTH, SIMULATOR_CANDLE_INTERVAL_SEC, TICK_HZ, UNIVERSE,
-  REPLAY_DEFAULT_SPEED, REPLAY_MIN_SPEED, REPLAY_MAX_SPEED,
+  SPARKLINE_LENGTH, SIMULATOR_CANDLE_INTERVAL_SEC, UNIVERSE,
+  REPLAY_DEFAULT_SPEED, REPLAY_MIN_SPEED, REPLAY_MAX_SPEED, REPLAY_TICK_HZ,
   type UniverseEntry,
 } from '@shared/constants'
-import type { Candle, NewsItem, Quote, TickTapeRow } from '@shared/types'
+import type { Candle, NewsItem, Quote, TickTapeRow, Trade } from '@shared/types'
 import * as db from './persistence'
 import type { MarketDataSource, Unsub } from './market-data'
 import { createLogger } from './logger'
@@ -156,6 +156,10 @@ export class ReplaySource implements MarketDataSource {
   onQuotes(fn: (q: Quote[]) => void):                       Unsub { this.quoteListeners.add(fn);  return () => this.quoteListeners.delete(fn) }
   onCandle(fn: (s: string, c: Candle, n: boolean) => void): Unsub { this.candleListeners.add(fn); return () => this.candleListeners.delete(fn) }
   onNews(fn: (n: NewsItem) => void):                        Unsub { this.newsListeners.add(fn);   return () => this.newsListeners.delete(fn) }
+  /** P0-1 footprint — replay tape lacks per-trade side info, so this source
+   *  emits nothing. Renderer treats an empty trade stream as "no delta data
+   *  available for this segment" and the DeltaStrip/Footprint dim gracefully. */
+  onTrades(_fn: (t: Trade[]) => void): Unsub { return () => {} }
 
   getQuote(symbol: string): Quote | undefined {
     const s = this.states.get(symbol); return s ? this.quoteFrom(s) : undefined
@@ -183,9 +187,13 @@ export class ReplaySource implements MarketDataSource {
     if (!this.paused) return
     this.autoPausedReason = null
     this.anchor(this.cursorTs)
-    const tickMs = Math.floor(1000 / TICK_HZ)
+    const tickMs = Math.max(1, Math.floor(1000 / REPLAY_TICK_HZ))
     this.tickTimer = setInterval(() => this.tick(), tickMs)
     this.paused = false
+    // Fire one tick immediately so Resume has no `tickMs` dead zone before
+    // the first quote/candle batch lands in the renderer. setInterval would
+    // otherwise wait the full interval before firing its first tick.
+    try { this.tick() } catch (e) { log.warn('immediate tick after unpause failed', { err: String(e) }) }
     log.info('replay resumed', { cursor: this.cursorTs, speed: this.speed })
   }
 
@@ -194,8 +202,10 @@ export class ReplaySource implements MarketDataSource {
   setSpeed(speed: number): number {
     const next = clampSpeed(speed)
     if (next === this.speed) return next
-    // Re-anchor so the cursor doesn't jump.
-    this.anchor(this.cursorTs)
+    // Re-anchor so the cursor doesn't jump. Skip the anchor when paused —
+    // the next resume will set the anchor itself and an interim anchor here
+    // would just be overwritten.
+    if (!this.paused) this.anchor(this.cursorTs)
     this.speed = next
     log.info('replay speed changed', { speed: next })
     return next
@@ -384,24 +394,52 @@ export class ReplaySource implements MarketDataSource {
     c.close = row.last
   }
 
+  /**
+   * Roll candles up to the cursor's current bucket. Loops because a single
+   * tick at high speed can advance the cursor across multiple 1-second
+   * buckets — pre-fix this method rolled at most ONE bucket per call, so
+   * at 30× / 100× speed ~80–95 % of historical candles were silently
+   * dropped and the chart looked sparse. The catch-up loop emits each
+   * skipped bucket synchronously so listeners see every candle that the
+   * tape produced.
+   *
+   * Guard against runaway loops (huge cursor jumps from seek) by capping
+   * the catch-up at MAX_ROLLS_PER_CALL. Beyond that, the warmup() path
+   * handles bulk reconstruction.
+   */
   private maybeRollCandle(): void {
+    const MAX_ROLLS_PER_CALL = 600
     const cursorSec = Math.floor(this.cursorTs / 1000)
-    const bucket = Math.floor(cursorSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
-    if (bucket === this.currentCandleStart) return
-    for (const [sym, s] of this.states) {
-      // Skip symbols with no tape data yet — emitting their seed-price
-      // flatlines would broadcast 18 × N events on every warmup, half of
-      // them just repeating the UNIVERSE seed forever.
-      if (s.lastEmittedTs === 0) continue
-      const closed = { ...s.currentCandle }
-      s.candles.push(closed)
-      if (s.candles.length > 2000) s.candles.shift()
-      for (const l of this.candleListeners) l(sym, closed, false)
-      const next: Candle = { time: bucket, open: closed.close, high: closed.close, low: closed.close, close: closed.close, volume: 0 }
-      s.currentCandle = next
-      for (const l of this.candleListeners) l(sym, next, true)
+    const targetBucket = Math.floor(cursorSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
+    if (targetBucket === this.currentCandleStart) return
+    let safety = 0
+    while (this.currentCandleStart < targetBucket && safety < MAX_ROLLS_PER_CALL) {
+      const nextBucket = this.currentCandleStart + SIMULATOR_CANDLE_INTERVAL_SEC
+      for (const [sym, s] of this.states) {
+        // Skip symbols with no tape data yet — emitting their seed-price
+        // flatlines would broadcast 18 × N events on every warmup, half of
+        // them just repeating the UNIVERSE seed forever.
+        if (s.lastEmittedTs === 0) continue
+        const closed = { ...s.currentCandle }
+        s.candles.push(closed)
+        if (s.candles.length > 2000) s.candles.shift()
+        for (const l of this.candleListeners) l(sym, closed, false)
+        const next: Candle = { time: nextBucket, open: closed.close, high: closed.close, low: closed.close, close: closed.close, volume: 0 }
+        s.currentCandle = next
+        for (const l of this.candleListeners) l(sym, next, true)
+      }
+      this.currentCandleStart = nextBucket
+      safety++
     }
-    this.currentCandleStart = bucket
+    if (safety >= MAX_ROLLS_PER_CALL) {
+      // Hit the cap — snap currentCandleStart forward without emitting the
+      // remaining buckets. Should only happen on pathological seeks; the
+      // warmup path is the right place for bulk reconstruction.
+      log.warn('maybeRollCandle hit safety cap — snapping forward', {
+        from: this.currentCandleStart, to: targetBucket, capped: safety,
+      })
+      this.currentCandleStart = targetBucket
+    }
   }
 
   private quoteFrom(s: SymbolState): Quote {

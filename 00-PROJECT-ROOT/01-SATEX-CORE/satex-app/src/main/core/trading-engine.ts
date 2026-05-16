@@ -35,6 +35,7 @@ import type {
   VaultCheckpointRequest,
   ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
   HistoricalImportRequest, HistoricalImportResult,
+  ClosedTrade, JournalTag, Trade,
 } from '@shared/types'
 import { shortId } from '../services/id-generator'
 import { createLogger, configureLogger } from '../services/logger'
@@ -82,6 +83,8 @@ export type RiskGatesListener  = (s: RiskGatesSnapshot) => void
 export type MacroListener      = (s: MacroSnapshot) => void
 export type LogsTailListener   = (s: SystemLogsTail) => void
 export type DepthListener      = (s: DepthSnapshot) => void
+export type TradeClosedListener = (t: ClosedTrade) => void
+export type TradesListener = (trades: Trade[]) => void
 
 /** Captured at order entry; drives Brain.learn and vault narrative on close.
  *  The `symbol` field is load-bearing — it lets us pair server-side bracket
@@ -96,6 +99,10 @@ interface EntryFeaturesValue {
   aiDecision: AiDecision | null
   avgPrice: number
   openedAt: number
+  /** Phase 12 / P0-2 — journal metadata carried from the entry OrderRequest
+   *  so the close-side ClosedTrade event can include tags + conviction. */
+  tags?: string[]
+  conviction?: number
 }
 
 export class TradingEngine {
@@ -169,6 +176,13 @@ export class TradingEngine {
   private macroListeners:      Set<MacroListener>     = new Set()
   private logsListeners:       Set<LogsTailListener>  = new Set()
   private depthListeners:      Set<DepthListener>     = new Set()
+  private tradeClosedListeners: Set<TradeClosedListener> = new Set()
+  private tradesListeners:      Set<TradesListener>      = new Set()
+  /** Most-recent closed-trade history kept in memory for the JournalPanel.
+   *  Pushed to renderer on each close; capped so a long session doesn't
+   *  grow unbounded. Persists across replay swap (it's session-scoped). */
+  private closedTrades: ClosedTrade[] = []
+  private static CLOSED_TRADES_CAP = 500
 
   async initialize(): Promise<void> {
     const env = getEnv()
@@ -455,6 +469,31 @@ export class TradingEngine {
   onLearnerStats(fn: LearnerStatsListener):   () => void { this.learnerStatsListeners.add(fn);  return () => this.learnerStatsListeners.delete(fn) }
   onVaultStats(fn: VaultStatsListener):       () => void { this.vaultStatsListeners.add(fn);    return () => this.vaultStatsListeners.delete(fn) }
   onReplayStatus(fn: ReplayStatusListener):   () => void { this.replayStatusListeners.add(fn);  return () => this.replayStatusListeners.delete(fn) }
+  onTradeClosed(fn: TradeClosedListener):     () => void { this.tradeClosedListeners.add(fn);   return () => this.tradeClosedListeners.delete(fn) }
+  onTrades(fn: TradesListener):               () => void { this.tradesListeners.add(fn);        return () => this.tradesListeners.delete(fn) }
+  /** Snapshot of recent closed-trades. Used by IPC initial-fetch so the
+   *  renderer can hydrate the JournalPanel without waiting for new closes. */
+  getClosedTrades(limit = 500): ClosedTrade[] { return this.closedTrades.slice(-limit) }
+  /** Attach an exit-reflection (lesson + emotion tag) to a closed trade.
+   *  Idempotent — calling twice with the same id just overwrites. The vault
+   *  writer is told to append a reflection block to the trade-close markdown
+   *  if it exists. Used by JOURNAL_REFLECT IPC. */
+  applyTradeReflection(id: string, lesson: string, emotionTag?: JournalTag): ClosedTrade | null {
+    const idx = this.closedTrades.findIndex(t => t.id === id)
+    if (idx < 0) return null
+    const updated: ClosedTrade = {
+      ...this.closedTrades[idx]!,
+      lesson: lesson || undefined,
+      emotionTag,
+    }
+    this.closedTrades[idx] = updated
+    for (const l of this.tradeClosedListeners) l(updated)
+    if (this.vault) {
+      void this.vault.appendTradeReflection?.(updated).catch(e =>
+        log.warn('vault appendTradeReflection failed', { id, err: String(e) }))
+    }
+    return updated
+  }
   onAutonomousStatus(fn: AutonomousStatusListener):     () => void { this.autonomousStatusListeners.add(fn);   return () => this.autonomousStatusListeners.delete(fn) }
   onAutonomousDecision(fn: AutonomousDecisionListener): () => void { this.autonomousDecisionListeners.add(fn); return () => this.autonomousDecisionListeners.delete(fn) }
   // Phase 10: Black Box service push hookups
@@ -539,6 +578,8 @@ export class TradingEngine {
           aiDecision: null,  // set lazily on close if needed
           avgPrice: refPrice,
           openedAt: Date.now(),
+          ...(req.tags && req.tags.length > 0 ? { tags: req.tags } : {}),
+          ...(req.conviction !== undefined ? { conviction: req.conviction } : {}),
         })
       } catch (e) { log.debug('feature capture failed', { err: String(e) }) }
     }
@@ -865,8 +906,14 @@ export class TradingEngine {
       this.recorder?.resume()
     }
     this.regime?.resume()
+    // Phase 12 fix — the renderer's marketStore wipes candles on the
+    // replay→live mode transition (useIPC.ts), so without a re-broadcast the
+    // quad/main charts go flat until the next bar rolls over. Reseed here
+    // pushes 200×1min historical bars back to candleListeners.
+    this.seedBroadcastDone = false
+    this.broadcastInitialSeed()
     this.broadcastReplayStatus()
-    log.info('replay stopped — live source restored')
+    log.info('replay stopped — live source restored + history reseeded')
     return { ok: true }
   }
 
@@ -978,6 +1025,11 @@ export class TradingEngine {
     }))
     this.marketSubs.push(source.onNews((item) => {
       for (const l of this.newsListeners) l(item)
+    }))
+    // P0-1 Footprint — fan trade events from whichever source is active.
+    // ReplaySource's onTrades is a no-op so this is safe across hot-swaps.
+    this.marketSubs.push(source.onTrades((trades) => {
+      for (const l of this.tradesListeners) l(trades)
     }))
   }
 
@@ -1147,6 +1199,36 @@ export class TradingEngine {
         tacticsAtEntry: entry.tactics,
         regimeAtEntry: entry.regime,
       })
+    }
+
+    // P0-2 — emit a typed ClosedTrade record so the JournalPanel can render
+    // PnL-per-trade aggregates live. Always fires (independent of vault), so
+    // even when the vault is disabled the panel still has data to show.
+    if (entry) {
+      const exitOrderId = order?.id ?? `bracket-${symbol}-${Date.now()}`
+      const notional = entry.notional || (entry.avgPrice * quantity)
+      const ct: ClosedTrade = {
+        id: exitOrderId,
+        symbol,
+        side: 'long', // entries are always longs in this codebase (no shorts yet)
+        quantity,
+        entryPrice: entry.avgPrice,
+        exitPrice:  fillPrice,
+        pnl: realizedPnl,
+        pnlPct: notional > 0 ? realizedPnl / notional : 0,
+        holdMs: Date.now() - entry.openedAt,
+        closedAt: Date.now(),
+        triggeredBy: order?.request.triggeredBy ?? null,
+        source: order?.request.source ?? source,
+        tags: entry.tags ?? [],
+        conviction: entry.conviction ?? null,
+        regimeAtEntry: entry.regime,
+      }
+      this.closedTrades.push(ct)
+      if (this.closedTrades.length > TradingEngine.CLOSED_TRADES_CAP) {
+        this.closedTrades.splice(0, this.closedTrades.length - TradingEngine.CLOSED_TRADES_CAP)
+      }
+      for (const l of this.tradeClosedListeners) l(ct)
     }
 
     if (this.vault && this.lastTacticsState !== tacticsAfter.state) {

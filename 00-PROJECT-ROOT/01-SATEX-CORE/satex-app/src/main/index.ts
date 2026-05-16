@@ -13,6 +13,7 @@ import { IPC } from '@shared/ipc-channels'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
 import { IndicatorSettingsService } from './services/indicator-settings'
+import { WorkspaceStateService } from './services/workspace-state'
 
 // Load .env.local early — before any service reads process.env
 import { config as dotenvConfig } from 'dotenv'
@@ -21,6 +22,23 @@ dotenvConfig({ path: join(process.cwd(), '.env.local'), override: false })
 dotenvConfig({ path: join(process.cwd(), '.env'), override: false })
 
 const log = createLogger('main')
+
+// ── Chromium stability shims ────────────────────────────────────────────────
+// Windows Electron repeatedly hits "Network service crashed, restarting
+// service" during the renderer's initial load, which leaves the BrowserWindow
+// stuck on a blank page and the `ready-to-show` event never fires. The
+// canonical workaround is to disable hardware-accelerated compositing in the
+// main process — kills the GPU process, which is the upstream cause of the
+// network-service crash on flaky Win11 GPU drivers. Trade-off is a small
+// rendering perf hit, but the SATEX terminal is text-heavy and runs fine
+// without GPU compositing.
+//
+// MUST run before app.whenReady() — switches set after `ready` are ignored.
+app.disableHardwareAcceleration()
+// Force-disable the GPU sandbox for the same reason — some Win11 builds need
+// both switches to stop the network service from cycling.
+app.commandLine.appendSwitch('disable-gpu')
+app.commandLine.appendSwitch('disable-gpu-compositing')
 
 // ── Single-instance lock ────────────────────────────────────────────────────
 // Alpaca's IEX feed allows exactly 1 concurrent WS connection per account.
@@ -41,6 +59,7 @@ const engine = new TradingEngine()
 // indicator-toggles.md. projectRoot is the user's mc4 root (same logic the
 // vault writer uses); we resolve from app.getAppPath() upward to find it.
 const indicatorSettings = new IndicatorSettingsService(resolveVaultProjectRoot())
+const workspaceState    = new WorkspaceStateService(resolveVaultProjectRoot())
 let mainWindow: BrowserWindow | null = null
 
 function resolveVaultProjectRoot(): string {
@@ -84,12 +103,53 @@ function createWindow(): void {
     },
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow!.show()
-    mainWindow!.focus()
-    if (is.dev) mainWindow!.webContents.openDevTools({ mode: 'detach' })
-    log.info('window ready-to-show')
+  let shown = false
+  let domReady = false
+  const showOnce = (reason: string): void => {
+    if (shown || !mainWindow || mainWindow.isDestroyed()) return
+    shown = true
+    mainWindow.show()
+    mainWindow.focus()
+    if (is.dev) mainWindow.webContents.openDevTools({ mode: 'detach' })
+    log.info('window shown', { reason })
+  }
+
+  mainWindow.on('ready-to-show', () => showOnce('ready-to-show'))
+  mainWindow.webContents.on('dom-ready', () => {
+    domReady = true
+    log.info('renderer dom-ready')
   })
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    log.warn('renderer did-fail-load', { code, desc, url })
+    // Retry once after a short delay — typical cause is the dev server
+    // not yet ready in dev mode, or the network service crash described
+    // in the shim block above.
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        log.info('retrying renderer load after did-fail-load')
+        mainWindow.webContents.reload()
+      }
+    }, 1500)
+  })
+
+  // Watchdog 1 — on flaky Win11 GPU drivers the Chromium network service
+  // crashes during initial dev-server load and `ready-to-show` never fires,
+  // leaving the user staring at an empty desktop. After 5 s, show the
+  // window anyway so they at least see the loading state (or the actual
+  // page if the renderer recovered by then). Idempotent via `shown` guard.
+  setTimeout(() => showOnce('watchdog-5s'), 5000)
+
+  // Watchdog 2 — if `dom-ready` never fires within 8 s of window creation,
+  // the renderer is wedged (network service crashed mid-load, dev server
+  // race, etc.). Force a reload. The renderer is idempotent so the engine
+  // doesn't care, and IPC stays alive across reload.
+  setTimeout(() => {
+    if (domReady || !mainWindow || mainWindow.isDestroyed()) return
+    log.warn('renderer never reached dom-ready in 8s — forcing reload')
+    try { mainWindow.webContents.reload() } catch (e) {
+      log.error('forced reload failed', { err: String(e) })
+    }
+  }, 8000)
 
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     log.error('renderer crashed', { reason: details.reason, exitCode: details.exitCode })
@@ -238,6 +298,8 @@ function wireEngineEvents(): void {
   engine.onLearnerStats((s)           => push(IPC.LEARNER_STATS,  s))
   engine.onVaultStats((s)             => push(IPC.VAULT_STATS,    s))
   engine.onReplayStatus((s)           => push(IPC.REPLAY_STATUS,  s))
+  engine.onTradeClosed((t)            => push(IPC.TRADE_CLOSED,   t))
+  engine.onTrades((trades)            => push(IPC.TRADES_TICK,    trades))
 }
 
 /** Wire Phase 10 Black Box pushes — called after engine.initialize() because
@@ -370,6 +432,15 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.INDICATOR_SETTINGS_GET, () => indicatorSettings.get())
   ipcMain.handle(IPC.INDICATOR_SETTINGS_SET, (_e, next) => indicatorSettings.set(next))
   ipcMain.handle(IPC.INDICATOR_PRIOR_DAY_HLC, (_e, symbol: string) => engine.getPriorDayHlc(symbol))
+
+  // ── Workspace state persistence (Phase 12) ───────────────────────────────────
+  ipcMain.handle(IPC.WORKSPACE_STATE_GET, () => workspaceState.get())
+  ipcMain.handle(IPC.WORKSPACE_STATE_SET, (_e, next) => workspaceState.set(next))
+
+  // ── Trading journal (P0-2) ───────────────────────────────────────────────────
+  ipcMain.handle(IPC.CLOSED_TRADES_GET, () => engine.getClosedTrades(500))
+  ipcMain.handle(IPC.JOURNAL_REFLECT, (_e, req: { id: string; lesson: string; emotionTag?: import('@shared/types').JournalTag }) =>
+    engine.applyTradeReflection(req.id, req.lesson, req.emotionTag))
 
   // ── Layout + CSV export ──────────────────────────────────────────────────────
   ipcMain.handle(IPC.LAYOUT_SAVE,       (_e, payload: unknown) => {

@@ -148,6 +148,28 @@ export const IPC = {
    *  Null when the symbol is non-equity, Alpaca is offline, or no eligible
    *  bar is available yet. */
   INDICATOR_PRIOR_DAY_HLC: 'satex:indicators:priorDayHlc',
+
+  // ── Phase 12: Workspace state persistence ────────────────────────────────
+  /** Returns persisted WorkspaceState — last workspace, Quad symbols,
+   *  last chart symbol. App hydrates these once on mount. */
+  WORKSPACE_STATE_GET: 'satex:workspace:stateGet',
+  WORKSPACE_STATE_SET: 'satex:workspace:stateSet',
+
+  // ── P0-2: Trading journal — closed-trade stream + reflection persistence ─
+  /** Push: emitted whenever a position closes (entry+exit pair completes). */
+  TRADE_CLOSED:       'satex:journal:tradeClosed',
+  /** Invoke: hydrate the JournalPanel with recent closed trades on mount. */
+  CLOSED_TRADES_GET:  'satex:journal:closedTradesGet',
+  /** Invoke: attach a lesson + optional emotion tag to a closed trade. The
+   *  vault writer appends a reflection block to the trade-close markdown
+   *  if the vault is enabled. */
+  JOURNAL_REFLECT:    'satex:journal:reflect',
+
+  // ── P0-1: Footprint chart — per-trade tick stream ────────────────────────
+  /** Push: raw Trade[] batches from the active MarketDataSource. The renderer
+   *  feeds these into a per-symbol FootprintAggregator for the DeltaStrip /
+   *  FootprintOverlay components. */
+  TRADES_TICK:        'satex:footprint:tradesTick',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -173,6 +195,8 @@ export const PUSH_CHANNELS = [
   IPC.MACRO_UPDATE,
   IPC.LOGS_TAIL,
   IPC.DEPTH_UPDATE,
+  IPC.TRADE_CLOSED,
+  IPC.TRADES_TICK,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

@@ -5,7 +5,7 @@
  */
 import type { AlpacaClient, AlpacaTick } from './alpaca'
 import { LiveCandleBuffer } from './live-candle-buffer'
-import type { Candle, NewsItem, Quote } from '@shared/types'
+import type { Candle, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
 import { SIMULATOR_CANDLE_INTERVAL_SEC, SPARKLINE_LENGTH, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type { MarketDataSource, Unsub } from './market-data'
 import { createLogger } from './logger'
@@ -22,7 +22,9 @@ export class LiveMarket implements MarketDataSource {
   private quoteListeners  = new Set<(q: Quote[]) => void>()
   private candleListeners = new Set<(s: string, c: Candle, isNew: boolean) => void>()
   private newsListeners   = new Set<(n: NewsItem) => void>()
+  private tradeListeners  = new Set<(t: Trade[]) => void>()
   private quotes          = new Map<string, QuoteState>()
+  private lastTradeSide   = new Map<string, TradeSide>()
   private buffer: LiveCandleBuffer
   private unsubTick:   (() => void) | null = null
   private unsubCandle: (() => void) | null = null
@@ -76,6 +78,11 @@ export class LiveMarket implements MarketDataSource {
   onQuotes(fn: (q: Quote[]) => void):              Unsub { this.quoteListeners.add(fn);  return () => this.quoteListeners.delete(fn) }
   onCandle(fn: (s: string, c: Candle, n: boolean) => void): Unsub { this.candleListeners.add(fn); return () => this.candleListeners.delete(fn) }
   onNews(fn: (n: NewsItem) => void):               Unsub { this.newsListeners.add(fn);   return () => this.newsListeners.delete(fn) }
+  /** P0-1 footprint — IEX feed doesn't surface aggressor-side. We classify
+   *  every tick as inferred from the price delta vs the symbol's previous
+   *  last. When the SIP entitlement lands the alpaca client will emit real
+   *  side data and we'll forward that with provenance: 'real'. */
+  onTrades(fn: (t: Trade[]) => void):              Unsub { this.tradeListeners.add(fn);  return () => this.tradeListeners.delete(fn) }
 
   pushNews(item: NewsItem): void { for (const l of this.newsListeners) l(item) }
 
@@ -99,6 +106,7 @@ export class LiveMarket implements MarketDataSource {
   private onTick(tick: AlpacaTick): void {
     const q = this.quotes.get(tick.symbol)
     if (!q) return
+    const prevLast = q.last
     q.last = tick.price || q.last
     q.bid  = tick.bid   || q.bid   || q.last * 0.9999
     q.ask  = tick.ask   || q.ask   || q.last * 1.0001
@@ -109,5 +117,22 @@ export class LiveMarket implements MarketDataSource {
     q.sparkline.shift(); q.sparkline.push(q.last)
     this.buffer.ingestTick(tick.symbol, q.last, tick.size, tick.timestamp)
     for (const l of this.quoteListeners) l([this.toPublic(q)])
+
+    // P0-1 footprint — infer per-tick aggressor side and emit a Trade.
+    // Skip zero-size ticks (Alpaca emits a synthetic 0-size quote on
+    // bid/ask updates that aren't actual trades). Only emit on positive
+    // size so the footprint reflects real prints, not just quote shifts.
+    const tradeSize = Math.max(0, tick.size)
+    if (tradeSize > 0) {
+      const inferredSide: TradeSide = q.last > prevLast ? 'buy'
+        : q.last < prevLast ? 'sell'
+        : this.lastTradeSide.get(tick.symbol) ?? 'buy'
+      this.lastTradeSide.set(tick.symbol, inferredSide)
+      const trade: Trade = {
+        symbol: tick.symbol, ts: tick.timestamp, price: q.last,
+        size: tradeSize, side: inferredSide, provenance: 'inferred',
+      }
+      for (const l of this.tradeListeners) l([trade])
+    }
   }
 }

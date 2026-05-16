@@ -16,15 +16,14 @@
  *   - Click a pane's header → setExpandedIdx; renders only that pane filling
  *     the parent. "RESTORE QUAD" returns.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMarketStore, selectCandles } from '../stores/marketStore'
 import { useChartOpts } from '../hooks/useChartOpts'
 import { useIndicatorStore } from '../stores/indicatorStore'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 import { ema, vwap as vwapFn, rsi } from '@shared/indicators'
-import { findUniverseEntry } from '@shared/constants'
+import { findUniverseEntry, UNIVERSE } from '@shared/constants'
 import type { Candle } from '@shared/types'
-
-const QUAD_SYMBOLS = ['NVDA', 'SPY', 'ES', 'BTC'] as const
 
 const THEMES = {
   classic: { up: '#21c97a', down: '#ff4655', ema9: '#f5c46a', ema21: '#b48cff' },
@@ -301,6 +300,8 @@ function ChartCanvas({ data, hover, onHover, onClickHeader, expanded, accent }: 
 export function QuadChartPanel() {
   const [hover, setHover] = useState<number | null>(null)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  /** Which pane's swap-picker is currently open. null = no picker. */
+  const [pickerIdx, setPickerIdx] = useState<number | null>(null)
   const accent = '#00c8ff'
 
   // EMA periods come from the indicator store. When the indicator is off we
@@ -313,11 +314,22 @@ export function QuadChartPanel() {
     [emaEnabled, emaPeriodsSetting],
   )
 
-  const symbols = QUAD_SYMBOLS
-  const data0 = usePaneData(symbols[0], 140, emaPeriods)
-  const data1 = usePaneData(symbols[1], 140, emaPeriods)
-  const data2 = usePaneData(symbols[2], 140, emaPeriods)
-  const data3 = usePaneData(symbols[3], 140, emaPeriods)
+  // Quad pane symbols come from the workspace store — persisted across
+  // sessions to Vault/Settings/workspace-state.md. setQuadSymbolAt also
+  // enforces uniqueness so a user can't put NVDA in two panes.
+  const quadSymbols    = useWorkspaceStore(s => s.state.quadSymbols)
+  const setQuadSymbolAt = useWorkspaceStore(s => s.setQuadSymbolAt)
+  // Safe-access — falls back to defaults if the store hydration hasn't
+  // finished yet (the bare empty-defense in usePaneData handles it anyway).
+  const sym0 = quadSymbols[0] ?? 'NVDA'
+  const sym1 = quadSymbols[1] ?? 'SPY'
+  const sym2 = quadSymbols[2] ?? 'ES'
+  const sym3 = quadSymbols[3] ?? 'BTC'
+
+  const data0 = usePaneData(sym0, 140, emaPeriods)
+  const data1 = usePaneData(sym1, 140, emaPeriods)
+  const data2 = usePaneData(sym2, 140, emaPeriods)
+  const data3 = usePaneData(sym3, 140, emaPeriods)
   const panes = [data0, data1, data2, data3]
 
   // Use the synthetic-data references so TypeScript doesn't complain about
@@ -344,7 +356,7 @@ export function QuadChartPanel() {
   return (
     <div className="bb-quad-grid">
       {panes.map((p, i) => (
-        <div key={p.sym} className={`bb-quad-cell bb-quad-cell-${i}`}>
+        <div key={`pane-${i}`} className={`bb-quad-cell bb-quad-cell-${i}`}>
           <ChartCanvas
             data={p}
             hover={hover}
@@ -352,8 +364,109 @@ export function QuadChartPanel() {
             onClickHeader={() => setExpandedIdx(i)}
             accent={accent}
           />
+          {/* Phase 12: swap-symbol affordance — HTML overlay on the SVG
+              header. Sits above the SVG so it doesn't compete with the
+              expand-on-header click. Clicking opens a small inline picker. */}
+          <button
+            type="button"
+            className="bb-quad-swap"
+            title={`Change symbol (currently ${p.sym})`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setPickerIdx(pickerIdx === i ? null : i)
+            }}
+          >⇄</button>
+          {pickerIdx === i && (
+            <QuadSymbolPicker
+              current={p.sym}
+              taken={quadSymbols}
+              onPick={(next) => {
+                setQuadSymbolAt(i as 0 | 1 | 2 | 3, next)
+                setPickerIdx(null)
+              }}
+              onClose={() => setPickerIdx(null)}
+            />
+          )}
         </div>
       ))}
+    </div>
+  )
+}
+
+// ── Symbol picker dropdown (Phase 12) ────────────────────────────────────────
+
+interface PickerProps {
+  current: string
+  /** All 4 currently-shown symbols — these are excluded from the picker
+   *  list (except the one matching `current`, which is highlighted). */
+  taken: readonly string[]
+  onPick: (sym: string) => void
+  onClose: () => void
+}
+
+function QuadSymbolPicker({ current, taken, onPick, onClose }: PickerProps) {
+  const [filter, setFilter] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const rootRef  = useRef<HTMLDivElement>(null)
+
+  // Autofocus the filter on open so the user can type immediately.
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  // Click-outside + Escape to close. Keeps the picker lightweight without
+  // a full modal-backdrop layer.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current) return
+      if (!rootRef.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose() }
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  const takenSet = useMemo(() => new Set<string>(taken), [taken])
+  const filtered = useMemo(() => {
+    const q = filter.trim().toUpperCase()
+    return UNIVERSE.filter(u => {
+      if (takenSet.has(u.symbol) && u.symbol !== current) return false
+      if (!q) return true
+      return u.symbol.includes(q) || u.name.toUpperCase().includes(q)
+    }).slice(0, 60)
+  }, [filter, current, takenSet])
+
+  return (
+    <div ref={rootRef} className="bb-quad-picker" role="listbox">
+      <input
+        ref={inputRef}
+        type="text"
+        className="bb-quad-picker-filter"
+        placeholder="filter…"
+        value={filter}
+        onChange={e => setFilter(e.currentTarget.value)}
+      />
+      <div className="bb-quad-picker-list">
+        {filtered.map(u => (
+          <button
+            key={u.symbol}
+            type="button"
+            className={`bb-quad-picker-row${u.symbol === current ? ' on' : ''}`}
+            onClick={() => onPick(u.symbol)}
+          >
+            <span className="sym">{u.symbol}</span>
+            <span className="name">{u.name}</span>
+            <span className="cls">{u.assetClass}</span>
+          </button>
+        ))}
+        {filtered.length === 0 && (
+          <div className="bb-quad-picker-empty">no matches</div>
+        )}
+      </div>
     </div>
   )
 }

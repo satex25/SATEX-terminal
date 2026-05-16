@@ -31,7 +31,9 @@ import { SettingsModal } from './components/modals/SettingsModal'
 import { LiveModeModal } from './components/modals/LiveModeModal'
 import { TacticsModal } from './components/modals/TacticsModal'
 import { IndicatorsModal } from './components/modals/IndicatorsModal'
+import { ExitReflectionModal } from './components/modals/ExitReflectionModal'
 import { useIndicatorStore } from './stores/indicatorStore'
+import { useWorkspaceStore } from './stores/workspaceStore'
 import { WatchlistPanel } from './panels/WatchlistPanel'
 import { QuadChartPanel } from './panels/QuadChartPanel'
 import { MacroStripPanel } from './panels/MacroStripPanel'
@@ -60,7 +62,12 @@ export default function App() {
   const [tweaksOpen, setTweaksOpen] = useState(false)
   const [modal,      setModal]      = useState<ModalKind | null>(null)
   const [liveMode,   setLiveMode]   = useState(false)
-  const [workspace,  setWorkspace]  = useState<Workspace>('Trade')
+
+  // Workspace state is sourced from the workspace store so the user's last
+  // selection (and Quad symbol set) restore on app boot. The store hydrates
+  // from Vault/Settings/workspace-state.md in the effect below.
+  const workspace    = useWorkspaceStore(s => s.state.workspace)
+  const setWorkspace = useWorkspaceStore(s => s.setWorkspace)
 
   // Active replay sessions force the Replay workspace so the user can't
   // accidentally hide the scrubber while a historical tape is playing.
@@ -88,9 +95,13 @@ export default function App() {
   useEffect(() => perf.frameWatch(), [])
 
   // Hydrate chart-indicator toggles from Vault/Settings/indicator-toggles.md
-  // once at mount. The store falls back to defaults if the file is missing
-  // or the IPC handler isn't installed — never blocks chart rendering.
-  useEffect(() => { void useIndicatorStore.getState().hydrate() }, [])
+  // and workspace state from Vault/Settings/workspace-state.md once at mount.
+  // Both stores fall back to defaults if the file is missing — never blocks
+  // chart rendering.
+  useEffect(() => {
+    void useIndicatorStore.getState().hydrate()
+    void useWorkspaceStore.getState().hydrate()
+  }, [])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -229,6 +240,7 @@ export default function App() {
       <LiveModeModal   open={modal === 'live'}       onClose={() => setModal(null)} />
       <TacticsModal    open={modal === 'tactics'}    onClose={() => setModal(null)} />
       <IndicatorsModal open={modal === 'indicators'} onClose={() => setModal(null)} />
+      <ExitReflectionModal />
     </div>
   )
 }
