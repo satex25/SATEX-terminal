@@ -108,6 +108,22 @@ export function JournalPanel() {
         </div>
       </div>
 
+      {/* C16 / F4 — per-regime P&L breakdown. Hidden when the trade ring has
+          no captured regime data yet (UNKNOWN-only) so the panel doesn't show
+          a stale-looking row at first boot. */}
+      {agg.byRegime.length > 0 && agg.byRegime.some(r => r.regime !== 'UNKNOWN') && (
+        <div className="jp-regime-row">
+          {agg.byRegime.slice(0, 5).map(r => (
+            <div key={r.regime} className={`jp-regime-tile ${r.totalPnl > 0 ? 'bull' : r.totalPnl < 0 ? 'bear' : ''}`}
+                 title={`${r.regime}: ${r.count} trades, ${(r.winRate * 100).toFixed(0)}% win`}>
+              <span className="reg">{r.regime.slice(0, 4)}</span>
+              <span className="cnt">{r.count}</span>
+              <span className="pnl">{fmt.signed(r.totalPnl, 0)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <div className="jp-empty">No closed trades yet. Open + flatten a position to populate.</div>
       ) : (

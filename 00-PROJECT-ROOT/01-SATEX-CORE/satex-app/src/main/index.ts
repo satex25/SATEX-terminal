@@ -389,17 +389,41 @@ function wireAutonomousEvents(): void {
   engine.onAutonomousDecision((d)     => push(IPC.AUTONOMOUS_DECISION, d))
 }
 
-// ── IPC payload validation wrapper (S0-8) ────────────────────────────────────
+// ── IPC payload validation wrapper (S0-8 + C3) ───────────────────────────────
 // Every handler that takes a payload runs raw input through a Zod schema BEFORE
 // the engine sees it. A bad shape throws here, which surfaces as a rejected
 // ipcRenderer.invoke() on the renderer side — same error contract callers
 // already handle. Without this wrapper, TypeScript's compile-time types are
 // erased and the engine trusts whatever the renderer sends.
+//
+// C3 byte-size cap: Zod validates shape but not raw byte size. A compromised
+// renderer could send a 100MB payload that parses successfully (e.g. a huge
+// `lesson` string in JournalReflect) and pin the main process on
+// JSON.parse → Zod traversal → engine work. The cap fails fast before any of
+// that runs. 1MB is generous for SATEX (largest legit payload is the
+// IndicatorSettings + WorkspaceState, both well under 1KB).
+const MAX_IPC_PAYLOAD_BYTES = 1_000_000
+
 function validated<S extends ZodTypeAny, R>(
   schema: S,
   handler: (req: z.infer<S>) => R | Promise<R>,
 ): (event: Electron.IpcMainInvokeEvent, raw: unknown) => Promise<R> {
   return async (_event, raw) => {
+    // Byte-size guard runs BEFORE Zod so a hostile payload can't waste cycles
+    // on schema traversal. JSON.stringify is the closest cheap proxy for the
+    // structured-clone size that ipcRenderer.invoke actually transferred.
+    try {
+      const approxBytes = raw === undefined ? 0 : JSON.stringify(raw).length
+      if (approxBytes > MAX_IPC_PAYLOAD_BYTES) {
+        log.warn('ipc payload too large', { approxBytes, cap: MAX_IPC_PAYLOAD_BYTES })
+        throw new Error(`Invalid IPC payload — exceeds ${MAX_IPC_PAYLOAD_BYTES} byte cap (got ${approxBytes})`)
+      }
+    } catch (e) {
+      // JSON.stringify can throw on circular refs / BigInt. Reject those too.
+      if (e instanceof Error && e.message.startsWith('Invalid IPC payload')) throw e
+      log.warn('ipc payload non-serializable', { err: String(e) })
+      throw new Error('Invalid IPC payload — not JSON-serializable')
+    }
     const parsed = schema.safeParse(raw)
     if (!parsed.success) {
       const first = parsed.error.issues[0]

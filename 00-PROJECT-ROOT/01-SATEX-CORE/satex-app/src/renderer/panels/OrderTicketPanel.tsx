@@ -3,9 +3,10 @@
  * Full order form (BUY/SELL · MKT/LMT/STP · qty · SL/TP) with risk-gate feedback.
  * Submits via window.satex.submitOrder.
  */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMarketStore } from '../stores/marketStore'
 import { useAccountStore } from '../stores/accountStore'
+import { useRegimeStore } from '../stores/regimeStore'
 import {
   findUniverseEntry,
   DAILY_LOSS_LIMIT_PCT,
@@ -66,6 +67,32 @@ export function OrderTicketPanel() {
   })()
   const estFillMs = 150 // paper-roundtrip + 50ms engine timeout, rounded
 
+  // C15 — regime-aware position sizing suggestion. Maps the dominant HMM
+  // regime to a notional cap as a fraction of buying power. COMPRESSION + MEAN-
+  // REVERT shrink size (tighter ranges, mean-reversion edge cases). EXPANSION
+  // is the only "lean in" state. CAPITULATION caps hard — high realized vol
+  // means stops get blown through. Output is a suggested SHARES count for the
+  // current symbol's last price; user can ignore or apply via one click.
+  const regimeSnap = useRegimeStore(s => s.snapshot)
+  const dominantRegime = useMemo(() => {
+    if (!regimeSnap || regimeSnap.hmm.length === 0) return null
+    return regimeSnap.hmm.reduce((a, b) => (a.p >= b.p ? a : b)).name
+  }, [regimeSnap])
+  const REGIME_RISK_MULT: Record<string, number> = {
+    'COMPRESSION':  0.50,  // tight range; play small until breakout
+    'EXPANSION':    1.00,  // trending; full size
+    'MEAN-REVERT':  0.65,  // chop; smaller commit per setup
+    'CAPITULATION': 0.30,  // realized vol blows stops; minimum size
+  }
+  const suggestedShares: number | null = (() => {
+    if (!dominantRegime || last <= 0 || account.buyingPower <= 0) return null
+    const mult = REGIME_RISK_MULT[dominantRegime] ?? 0.5
+    // Cap notional at 10% of buying power × regime multiplier.
+    const notionalCap = account.buyingPower * 0.10 * mult
+    const shares = Math.max(1, Math.floor(notionalCap / last))
+    return shares
+  })()
+
   async function submit() {
     if (!window.satex) return
     setBusy(true); setMsg(null)
@@ -115,6 +142,18 @@ export function OrderTicketPanel() {
           {[1, 5, 10, 25, 100].map(n => (
             <button key={n} type="button" onClick={() => setQty(String(n))}>{n}</button>
           ))}
+          {/* C15: regime-aware suggestion. One-click apply. Hidden until the
+              regime snapshot lands so the row doesn't flicker on boot. */}
+          {suggestedShares !== null && dominantRegime && (
+            <button
+              type="button"
+              className="ot-regime-suggest"
+              onClick={() => setQty(String(suggestedShares))}
+              title={`Regime: ${dominantRegime} · suggested ${suggestedShares} shares (${(REGIME_RISK_MULT[dominantRegime] ?? 0.5) * 100}% × 10% BP)`}
+            >
+              ◊{dominantRegime.slice(0, 3)} {suggestedShares}
+            </button>
+          )}
         </div>
       </div>
 

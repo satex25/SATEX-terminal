@@ -159,6 +159,16 @@ export default function App() {
         return
       }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); setModal(m => m === 'indicators' ? null : 'indicators'); return }
+      // C9: bare `?` opens the shortcuts cheat sheet. Skip when focus is in
+      // an input/textarea so the user can type `?` into the order form / journal.
+      if (!mod && e.key === '?') {
+        const tag = (e.target as HTMLElement | null)?.tagName
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+          e.preventDefault()
+          setModal(m => m === 'shortcuts' ? null : 'shortcuts')
+          return
+        }
+      }
       if (mod && e.key === 'Enter')           { e.preventDefault(); window.satex?.toggleFullscreen(); return }
       // Workspace digits ⌘1..⌘5 — won't fire if focus is in an input, since
       // typing a number into the qty field shouldn't switch workspaces.

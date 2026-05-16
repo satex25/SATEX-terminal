@@ -25,6 +25,7 @@ const SECTIONS: Array<{ title: string; note?: string; rows: Array<[string, strin
     rows: [
       ['Toggle fullscreen', '⌘↵'],
       ['Toggle DevTools',   '⌘⇧D'],
+      ['This cheat sheet',  '?'],
     ],
   },
   {

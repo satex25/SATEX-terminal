@@ -3142,3 +3142,81 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 }
 .jp-slip.bear { background: rgba(239, 68, 68, 0.16); color: var(--bear-glow, #ff4655); }
 .jp-slip.bull { background: rgba(34, 197, 94, 0.16);  color: var(--bull-glow, #21c97a); }
+
+/* ── VPIN flow-toxicity overlay (C13 / F2 · 2026-05-16) ──────────────────── */
+.chart-vpin-wash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at top, rgba(239, 68, 68, 0.10) 0%, rgba(239, 68, 68, 0.04) 60%, transparent 100%);
+  pointer-events: none;
+  animation: vpin-pulse 2s ease-in-out infinite;
+  z-index: 4;
+}
+.chart-vpin-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: rgba(20, 6, 8, 0.88);
+  color: var(--bear-glow, #ff4655);
+  border: 1px solid var(--bear-glow, #ff4655);
+  pointer-events: none;
+  z-index: 5;
+}
+@keyframes vpin-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1.00; }
+}
+
+/* ── Regime-aware sizing suggestion button (C15 · 2026-05-16) ────────────── */
+.ot-regime-suggest {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 7px;
+  border-radius: 3px;
+  background: rgba(0, 200, 255, 0.10);
+  color: var(--bb-cyan, #00c8ff);
+  border: 1px solid rgba(0, 200, 255, 0.35);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.ot-regime-suggest:hover {
+  background: rgba(0, 200, 255, 0.22);
+  color: #fff;
+}
+
+/* ── Per-regime P&L breakdown row (C16 / F4 · 2026-05-16) ────────────────── */
+.jp-regime-row {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.jp-regime-tile {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: 5px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  white-space: nowrap;
+}
+.jp-regime-tile.bull { background: rgba(34, 197, 94, 0.14); }
+.jp-regime-tile.bear { background: rgba(239, 68, 68, 0.14); }
+.jp-regime-tile .reg { font-weight: 700; color: var(--ink-1); letter-spacing: 0.06em; }
+.jp-regime-tile .cnt { color: var(--ink-3); font-size: 8.5px; }
+.jp-regime-tile .pnl { font-weight: 600; }
+.jp-regime-tile.bull .pnl { color: var(--bull-glow, #21c97a); }
+.jp-regime-tile.bear .pnl { color: var(--bear-glow, #ff4655); }

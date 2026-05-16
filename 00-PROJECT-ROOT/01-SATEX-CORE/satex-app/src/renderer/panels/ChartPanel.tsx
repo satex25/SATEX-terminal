@@ -15,6 +15,7 @@ import { useMarketStore, selectCandles } from '../stores/marketStore'
 import { useAccountStore } from '../stores/accountStore'
 import { useIndicatorStore } from '../stores/indicatorStore'
 import { useRegimeStore } from '../stores/regimeStore'
+import { useDepthStore } from '../stores/depthStore'
 import { DeltaStrip } from '../components/DeltaStrip'
 import {
   emaSeries as computeEmaSeries,
@@ -136,6 +137,14 @@ export function ChartPanel() {
   const indicators = useAccountStore(s => s.indicators.get(symbol))
   const indSettings = useIndicatorStore(s => s.settings)
   const regimeSnap  = useRegimeStore(s => s.snapshot)
+  // C13 / F2 — VPIN-driven flow-toxicity overlay. Subscribe to the depth
+  // snapshot for the focused symbol (depth-feed.ts publishes one snapshot at
+  // a time tied to subscribeDepth(symbol)). The overlay only renders when
+  // vpin crosses the threshold so the chart isn't constantly tinted.
+  const depthSnap   = useDepthStore(s => s.snapshot)
+  const vpinValue   = depthSnap && depthSnap.symbol === symbol ? depthSnap.vpin : null
+  const VPIN_THRESHOLD = 0.8
+  const vpinHot     = vpinValue !== null && vpinValue >= VPIN_THRESHOLD
   const entry    = findUniverseEntry(symbol)
   const dp       = entry?.dp ?? 2
 
@@ -804,6 +813,19 @@ export function ChartPanel() {
           </div>
         )}
         <div className="chart-watermark">SATEX</div>
+
+        {/* C13 / F2 — VPIN flow-toxicity overlay. Rendered only when the
+            depth-feed's VPIN proxy crosses the threshold (default 0.8) so the
+            chart stays clean during normal liquidity. Pointer-events:none so
+            the overlay never intercepts crosshair / drag actions. */}
+        {vpinHot && (
+          <>
+            <div className="chart-vpin-wash" aria-hidden />
+            <div className="chart-vpin-badge" title="Volume-Synchronized Probability of Informed Trading — high values indicate toxic flow">
+              ⚠ VPIN {vpinValue!.toFixed(2)} · TOXIC FLOW
+            </div>
+          </>
+        )}
 
         {/* Indicator legend (Phase 11) — driven by useIndicatorStore. Hidden
             when no overlay is enabled so the chart canvas isn't cluttered. */}

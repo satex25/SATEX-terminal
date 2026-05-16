@@ -104,6 +104,10 @@ export function computeJournalAggregates(trades: ClosedTrade[]): {
    *  Null when no trade in the ring has a slippage value (e.g., session is
    *  pure-simulator and we haven't logged any non-zero figures). */
   avgEntrySlipBps: number | null
+  /** C16 / F4 — per-regime P&L breakdown. Trades without `regimeAtEntry`
+   *  are bucketed under 'UNKNOWN' rather than dropped so the user can see
+   *  if regime capture is missing. Order is insertion-deterministic. */
+  byRegime: Array<{ regime: string; count: number; totalPnl: number; winRate: number }>
 } {
   const out = {
     count: trades.length,
@@ -116,8 +120,10 @@ export function computeJournalAggregates(trades: ClosedTrade[]): {
     bestTag:  null as { tag: string; pnl: number } | null,
     worstTag: null as { tag: string; pnl: number } | null,
     avgEntrySlipBps: null as number | null,
+    byRegime: [] as Array<{ regime: string; count: number; totalPnl: number; winRate: number }>,
   }
   const tagPnl = new Map<string, number>()
+  const regimeAgg = new Map<string, { count: number; totalPnl: number; wins: number; losses: number }>()
   let slipSum = 0
   let slipCount = 0
   for (const t of trades) {
@@ -133,9 +139,27 @@ export function computeJournalAggregates(trades: ClosedTrade[]): {
       slipSum += t.entrySlippageBps
       slipCount++
     }
+    // C16: bucket by regime; null/missing values land in 'UNKNOWN'.
+    const reg = t.regimeAtEntry ?? 'UNKNOWN'
+    const cur = regimeAgg.get(reg) ?? { count: 0, totalPnl: 0, wins: 0, losses: 0 }
+    cur.count++
+    cur.totalPnl += t.pnl
+    if (t.pnl > 0) cur.wins++
+    else if (t.pnl < 0) cur.losses++
+    regimeAgg.set(reg, cur)
   }
   out.winRate = out.count > 0 ? out.wins / (out.wins + out.losses || 1) : 0
   out.avgEntrySlipBps = slipCount > 0 ? slipSum / slipCount : null
+  // C16: flatten regime aggregate into a sorted array (best P&L first) so the
+  // panel can render deterministically without re-sorting on every render.
+  out.byRegime = Array.from(regimeAgg.entries())
+    .map(([regime, v]) => ({
+      regime,
+      count: v.count,
+      totalPnl: v.totalPnl,
+      winRate: (v.wins + v.losses) > 0 ? v.wins / (v.wins + v.losses) : 0,
+    }))
+    .sort((a, b) => b.totalPnl - a.totalPnl)
   for (const [tag, pnl] of tagPnl) {
     if (!out.bestTag  || pnl > out.bestTag.pnl)  out.bestTag  = { tag, pnl }
     if (!out.worstTag || pnl < out.worstTag.pnl) out.worstTag = { tag, pnl }
