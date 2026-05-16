@@ -23,6 +23,15 @@ export class LiveCandleBuffer {
   private currentBucket = 0
   readonly intervalSec: number
 
+  /** S1-1 — intra-bar update coalescing. Without this, ingestTick fires the
+   *  candle update on EVERY quote tick: 20Hz × 18 symbols ≈ 360 ev/s, which
+   *  drives the renderer's ChartPanel reconciliation 360 times per second
+   *  and was the root cause of the 100-125ms boot frame stalls. Most-recent-
+   *  wins per symbol, flushed once per UPDATE_FLUSH_MS window. */
+  private pendingUpdates = new Map<string, Candle>()
+  private updateFlushTimer: NodeJS.Timeout | null = null
+  private static UPDATE_FLUSH_MS = 50
+
   constructor(intervalSec = SIMULATOR_CANDLE_INTERVAL_SEC) {
     this.intervalSec = intervalSec
   }
@@ -36,6 +45,8 @@ export class LiveCandleBuffer {
 
   stop(): void {
     if (this.rollTimer) { clearInterval(this.rollTimer); this.rollTimer = null }
+    if (this.updateFlushTimer) { clearTimeout(this.updateFlushTimer); this.updateFlushTimer = null }
+    this.pendingUpdates.clear()
   }
 
   /** Seed historical bars into the buffer before starting the live stream. */
@@ -55,8 +66,30 @@ export class LiveCandleBuffer {
     c.low    = Math.min(c.low,  price)
     c.close  = price
     c.volume += Math.max(0, volume)
-    // Emit the updated live candle (isNew=false = update to existing candle)
-    for (const l of this.listeners) l(symbol, { ...c }, false)
+    // S1-1: coalesce the per-tick update — store most-recent candle snapshot
+    // and flush every UPDATE_FLUSH_MS ms. Drops ~17× of intra-bar events
+    // on a 20Hz feed without losing data (most-recent-wins, candle close is
+    // emitted separately by maybeRoll with isNew=true).
+    this.pendingUpdates.set(symbol, { ...c })
+    this.scheduleFlush()
+  }
+
+  /** Schedule a coalesced flush of all pending intra-bar updates. Idempotent —
+   *  one timer per window, regardless of how many ticks accumulate. */
+  private scheduleFlush(): void {
+    if (this.updateFlushTimer) return
+    this.updateFlushTimer = setTimeout(() => this.flushPendingUpdates(), LiveCandleBuffer.UPDATE_FLUSH_MS)
+  }
+
+  private flushPendingUpdates(): void {
+    if (this.updateFlushTimer) {
+      clearTimeout(this.updateFlushTimer)
+      this.updateFlushTimer = null
+    }
+    for (const [sym, candle] of this.pendingUpdates) {
+      for (const l of this.listeners) l(sym, candle, false)
+    }
+    this.pendingUpdates.clear()
   }
 
   onCandle(fn: CandleListener): () => void {
@@ -77,6 +110,14 @@ export class LiveCandleBuffer {
   private maybeRoll(): void {
     const bucket = this.bucketFor(Date.now())
     if (bucket === this.currentBucket) return
+    // S1-1: drop any pending intra-bar updates before rolling — the close
+    // emit below covers the same data, and a stale isNew=false arriving
+    // AFTER isNew=true would confuse the renderer's candle ordering.
+    this.pendingUpdates.clear()
+    if (this.updateFlushTimer) {
+      clearTimeout(this.updateFlushTimer)
+      this.updateFlushTimer = null
+    }
     // Roll all symbols
     for (const [symbol, state] of this.states) {
       const closed = { ...state.current }

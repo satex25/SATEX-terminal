@@ -392,8 +392,12 @@ export function ChartPanel() {
     } catch { /* stale ref */ }
   }, [symbol, tf, view.length])
 
-  // Live update — in-flight candle. Updates on every tick (quote.last) and
-  // also on view.length transitions so the bar mutation stays smooth.
+  // Live update — in-flight candle. S1-1: dep is `quote?.last` + `view` only.
+  // Previously included `quote?.timestamp`, which ticks 20Hz even when the
+  // price is flat — that caused this effect to re-fire on every quote regardless
+  // of whether the chart needed to repaint, driving boot-time frame stalls
+  // up to 125ms. With timestamp dropped, the effect fires only on actual
+  // price change or when the candle view rotates.
   useEffect(() => {
     if (!seriesRef.current || view.length === 0) return
     try {
@@ -401,7 +405,7 @@ export function ChartPanel() {
       const s = seriesRef.current as { update: (d: unknown) => void }
       s.update({ time: last.time as unknown, open: last.open, high: last.high, low: last.low, close: last.close })
     } catch { /* ignore */ }
-  }, [quote?.last, quote?.timestamp, view])
+  }, [quote?.last, view])
 
   // ── Prior-day H/L/C fetch for Pivot Points ──────────────────────────────────
   // Refetches whenever the symbol changes or the user toggles pivots on, since
