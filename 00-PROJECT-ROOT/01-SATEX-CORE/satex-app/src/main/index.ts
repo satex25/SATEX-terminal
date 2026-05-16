@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { z, type ZodTypeAny } from 'zod'
 import { TradingEngine } from './core/trading-engine'
+import { enableFileSink } from './services/logger'
 import { IPC } from '@shared/ipc-channels'
 import {
   OrderSubmitReq, OrderCancelReq, KillSwitchReq, CandlesGetReq, SymbolOnlyReq,
@@ -30,6 +31,10 @@ import { config as dotenvConfig } from 'dotenv'
 dotenvConfig({ path: join(app.getPath('userData'), '.env.local'), override: false })
 dotenvConfig({ path: join(process.cwd(), '.env.local'), override: false })
 dotenvConfig({ path: join(process.cwd(), '.env'), override: false })
+
+// C17 / S1-7 — turn on the rotating file sink as soon as userData is
+// available, BEFORE the trading engine boots so engine init lines persist.
+enableFileSink(app.getPath('userData'))
 
 const log = createLogger('main')
 
@@ -548,6 +553,41 @@ function registerIpcHandlers(): void {
     log.debug('layout save requested', { hasPayload: !!payload })
     return { ok: true }
   }))
+
+  // ── C8 — Snapshot export ─────────────────────────────────────────────────
+  // Collects every "user-visible state" surface into one JSON blob: indicator
+  // toggles, workspace layout, watchlist, autonomous config, recent closed
+  // trades, account snapshot. Account secrets (credentials, baidu key) are
+  // EXCLUDED — they live in safeStorage and exporting them would defeat the
+  // encryption. The blob is written to <userData>/snapshots/ with the wall-
+  // clock timestamp so the user can find it in their file manager.
+  ipcMain.handle(IPC.SNAPSHOT_EXPORT, async () => {
+    try {
+      const snapshot = {
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        app: { name: 'satex', version: '0.3.0' },
+        indicatorSettings: indicatorSettings.get(),
+        workspaceState: workspaceState.get(),
+        watchlist: engine.getWatchlist(),
+        autonomousConfig: engine.getAutonomousConfig(),
+        closedTrades: engine.getClosedTrades(500),
+        account: engine.om?.getAccount() ?? null,
+      }
+      const fs = await import('node:fs')
+      const path = await import('node:path')
+      const dir = path.join(app.getPath('userData'), 'snapshots')
+      fs.mkdirSync(dir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const file = path.join(dir, `satex-snapshot-${stamp}.json`)
+      fs.writeFileSync(file, JSON.stringify(snapshot, null, 2), 'utf8')
+      log.info('snapshot exported', { path: file, bytes: fs.statSync(file).size })
+      return { ok: true, path: file, bytes: fs.statSync(file).size }
+    } catch (e) {
+      log.error('snapshot export failed', { err: String(e) })
+      return { ok: false, reason: String(e) }
+    }
+  })
   ipcMain.handle(IPC.ORDERS_EXPORT_CSV, async () => {
     try {
       const orders = engine.getOrdersHistory()

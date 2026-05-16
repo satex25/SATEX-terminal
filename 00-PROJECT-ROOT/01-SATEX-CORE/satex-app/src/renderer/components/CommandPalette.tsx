@@ -53,6 +53,16 @@ export function CommandPalette({ open, onClose, onSetWorkspace }: Props) {
         run: () => { window.satex?.toggleDevTools(); onClose() } },
       { icon: '⤢', label: 'Toggle fullscreen', kbd: '⌘↵',
         run: () => { window.satex?.toggleFullscreen(); onClose() } },
+      // C8: snapshot export. Surfaces a console hint with the file path on
+      // success — the user can grab the file from userData/snapshots/.
+      { icon: '⤓', label: 'Export snapshot (indicators + workspace + journal)',
+        run: () => {
+          void window.satex?.exportSnapshot().then((res) => {
+            if (res?.ok) console.info(`[satex] snapshot written: ${res.path} (${res.bytes} bytes)`)
+            else        console.warn(`[satex] snapshot export failed: ${res?.reason ?? 'unknown'}`)
+          })
+          onClose()
+        } },
     ]
     return [...workspaceItems, ...systemItems, ...symItems]
   }, [quotes, setSymbol, onClose, onSetWorkspace])

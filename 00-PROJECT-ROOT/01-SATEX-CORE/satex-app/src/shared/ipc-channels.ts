@@ -166,6 +166,14 @@ export const IPC = {
    *  feeds these into a per-symbol FootprintAggregator for the DeltaStrip /
    *  FootprintOverlay components. */
   TRADES_TICK:        'satex:footprint:tradesTick',
+
+  // ── C8 — Snapshot export ─────────────────────────────────────────────────
+  /** Invoke: collects indicator settings, workspace state, watchlist, recent
+   *  closed trades + account snapshot into one JSON blob, writes it to
+   *  `<userData>/snapshots/satex-snapshot-<ISO>.json`, returns the absolute
+   *  path. Import path intentionally NOT exposed in this rev — restoring
+   *  partial state safely requires a separate confirmation UX. */
+  SNAPSHOT_EXPORT:    'satex:snapshot:export',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

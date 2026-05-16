@@ -107,6 +107,10 @@ const satexApi = {
   // ── Layout + CSV export ─────────────────────────────────────────────────────
   saveLayout: (payload?: unknown)                  => ipcRenderer.invoke(IPC.LAYOUT_SAVE, payload) as Promise<{ ok: boolean }>,
   exportOrdersCsv: ()                              => ipcRenderer.invoke(IPC.ORDERS_EXPORT_CSV) as Promise<{ ok: boolean; path?: string }>,
+  /** C8: dump indicator settings + workspace + watchlist + journal + account
+   *  to a JSON file under userData/snapshots. Returns the file path on
+   *  success so the renderer can show it in a toast. Credentials excluded. */
+  exportSnapshot:  ()                              => ipcRenderer.invoke(IPC.SNAPSHOT_EXPORT) as Promise<{ ok: boolean; path?: string; bytes?: number; reason?: string }>,
 
   // ── Window controls ────────────────────────────────────────────────────────
   toggleFullscreen: () => ipcRenderer.invoke(IPC.WINDOW_TOGGLE_FULLSCREEN),
