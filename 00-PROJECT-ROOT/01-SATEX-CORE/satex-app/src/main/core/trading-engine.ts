@@ -184,6 +184,16 @@ export class TradingEngine {
   private closedTrades: ClosedTrade[] = []
   private static CLOSED_TRADES_CAP = 500
 
+  /** Run an async op fire-and-forget WITHOUT losing failures to the void.
+   *  Replaces ad-hoc `void this.X()` patterns. Failures inside `op` (vault
+   *  writes, Alpaca syncs, etc.) become log.error entries instead of silent
+   *  unhandled rejections that vanish after S0-1's gracefulShutdown handler
+   *  catches them. Use when the caller genuinely doesn't need the result
+   *  but does need to know if the op exploded. */
+  private fireAndForget(label: string, op: () => Promise<unknown>): void {
+    op().catch((e) => log.error(`${label} failed`, { err: String(e), stack: (e as Error)?.stack }))
+  }
+
   async initialize(): Promise<void> {
     const env = getEnv()
     // System logs service must exist before configureLogger so the ingest hook
@@ -277,10 +287,10 @@ export class TradingEngine {
 
     // Periodic account sync from Alpaca
     if (this.alpaca) {
-      this.accountSyncTimer = setInterval(() => void this.syncAlpacaAccount(), 15_000)
-      void this.syncAlpacaAccount()
-      this.clockSyncTimer = setInterval(() => void this.syncMarketClock(), 30_000)
-      void this.syncMarketClock()
+      this.accountSyncTimer = setInterval(() => this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount()), 15_000)
+      this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+      this.clockSyncTimer = setInterval(() => this.fireAndForget('syncMarketClock', () => this.syncMarketClock()), 30_000)
+      this.fireAndForget('syncMarketClock', () => this.syncMarketClock())
     } else {
       // Simulator → market is always "open" for paper testing
       this.om.setMarketOpen(true)
@@ -307,7 +317,7 @@ export class TradingEngine {
     this.vault.initialize()
 
     // Session-start vault note
-    void this.vault.writeSessionStart(
+    this.fireAndForget('vault.writeSessionStart', () => this.vault.writeSessionStart(
       {
         id: this.currentSessionId, startedAt: this.startedAt, endedAt: null,
         startingEquity: STARTING_EQUITY, endingEquity: null,
@@ -316,7 +326,7 @@ export class TradingEngine {
       },
       this.alpaca ? 'paper' : 'simulator',
       db.getWatchlist(),
-    )
+    ))
 
     // Capture initial tactics state for transition detection
     this.lastTacticsState = this.tactics.status().state
@@ -385,7 +395,7 @@ export class TradingEngine {
     this.logs.onTail((s) => { for (const fn of this.logsListeners) fn(s) })
 
     // Periodic observer/brain checkpoint to vault every 10 minutes
-    this.vaultCheckpointTimer = setInterval(() => void this.writePeriodicCheckpoints(), 10 * 60_000)
+    this.vaultCheckpointTimer = setInterval(() => this.fireAndForget('writePeriodicCheckpoints', () => this.writePeriodicCheckpoints()), 10 * 60_000)
 
     // ── Overnight robustness (Phase D, 2026-05-13) ─────────────────────────────
     // Health heartbeat every 5 minutes so logs show heartbeat during long
@@ -417,9 +427,7 @@ export class TradingEngine {
     this.seedBroadcastDone = true
     this.seedInitialNews()
     // Candle backfill is heavy (Alpaca REST per symbol) — fire and forget.
-    void this.seedHistoricalCandles().catch(e =>
-      log.warn('candle seed failed', { err: String(e) }),
-    )
+    this.fireAndForget('seedHistoricalCandles', () => this.seedHistoricalCandles())
   }
 
   shutdown(): void {
@@ -452,7 +460,7 @@ export class TradingEngine {
     // Final vault checkpoint
     try {
       const finalSession = db.listSessions(1)[0]
-      if (finalSession && this.vault) void this.vault.writeSessionEnd({ ...finalSession, endedAt: Date.now(), endingEquity })
+      if (finalSession && this.vault) this.fireAndForget('vault.writeSessionEnd', () => this.vault.writeSessionEnd({ ...finalSession, endedAt: Date.now(), endingEquity }))
     } catch (e) { log.warn('final vault session-end write failed', { err: String(e) }) }
     db.closeDB()
     log.info('engine shutdown complete')
@@ -489,8 +497,8 @@ export class TradingEngine {
     this.closedTrades[idx] = updated
     for (const l of this.tradeClosedListeners) l(updated)
     if (this.vault) {
-      void this.vault.appendTradeReflection?.(updated).catch(e =>
-        log.warn('vault appendTradeReflection failed', { id, err: String(e) }))
+      const append = this.vault.appendTradeReflection
+      if (append) this.fireAndForget('vault.appendTradeReflection', () => append.call(this.vault, updated))
     }
     return updated
   }
@@ -684,8 +692,8 @@ export class TradingEngine {
       await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
       // Re-attach recorder ingest.
       this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
-      void this.syncAlpacaAccount()
-      void this.syncMarketClock()
+      this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+      this.fireAndForget('syncMarketClock', () => this.syncMarketClock())
       log.info('alpaca reconnected', { mode, feed: stored.feed, baseUrl })
       return { ok: true }
     } catch (err) {
@@ -773,7 +781,7 @@ export class TradingEngine {
     const result = this.tactics.graduate()
     const after = this.tactics.status()
     if (result.ok && this.vault) {
-      void this.vault.writeTacticsTransition(before, after, 'Manual graduation by user')
+      this.fireAndForget('vault.writeTacticsTransition', () => this.vault.writeTacticsTransition(before, after, 'Manual graduation by user'))
       this.lastTacticsState = after.state
     }
     return result
@@ -1190,7 +1198,7 @@ export class TradingEngine {
           quantity, source: 'alpaca-bracket',
         },
       }
-      void this.vault.writeTradeClose({
+      this.fireAndForget('vault.writeTradeClose', () => this.vault.writeTradeClose({
         order: orderForVault,
         position: syntheticPosition,
         pnl: realizedPnl,
@@ -1198,7 +1206,7 @@ export class TradingEngine {
         aiDecision: entry.aiDecision,
         tacticsAtEntry: entry.tactics,
         regimeAtEntry: entry.regime,
-      })
+      }))
     }
 
     // P0-2 — emit a typed ClosedTrade record so the JournalPanel can render
@@ -1237,7 +1245,7 @@ export class TradingEngine {
         : tacticsAfter.state === 'armed'
           ? `Graduated to armed after ${tacticsAfter.tradesObserved} trades`
           : `Recalibrating — metrics below floor`
-      void this.vault.writeTacticsTransition(tacticsBefore, tacticsAfter, reason)
+      this.fireAndForget('vault.writeTacticsTransition', () => this.vault.writeTacticsTransition(tacticsBefore, tacticsAfter, reason))
       this.lastTacticsState = tacticsAfter.state
     }
   }
@@ -1277,7 +1285,7 @@ export class TradingEngine {
     })
     // Refresh account snapshot so equity reflects the fill immediately
     // rather than waiting on the next 15s sync.
-    void this.syncAlpacaAccount()
+    this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
   }
 
   /** Walk entryFeatures looking for the oldest open entry on this symbol.
