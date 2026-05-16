@@ -184,6 +184,12 @@ export interface ClosedTrade {
   lesson?: string
   /** Emotion tag captured via the exit-reflection prompt. */
   emotionTag?: JournalTag
+  /** S1-6 — entry slippage in basis points: `(fillPriceAtEntry − quoteAtSubmit) /
+   *  quoteAtSubmit × 10000`. POSITIVE means the user paid MORE than quoted at
+   *  submit time (worse than expected). Null when the entry quote wasn't
+   *  captured (e.g., simulator fills where fill==quote by construction, or
+   *  Alpaca didn't return a filledAvgPrice). */
+  entrySlippageBps?: number | null
 }
 
 export interface Order {

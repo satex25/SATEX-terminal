@@ -41,6 +41,31 @@ export function OrderTicketPanel() {
   const last = quote?.last ?? 0
   const notional = (parseFloat(qty) || 0) * last
 
+  // S1-6 — pre-trade analytics row.
+  //
+  // Est. slippage (bps): market orders cross half the spread on average; limit
+  // orders book at the user's price with zero crossing cost. Spread sourced
+  // from the active quote's bid/ask. Returns null when the spread or midpoint
+  // is missing/zero (live feed not yet warmed up) so the row degrades to "—"
+  // rather than rendering nonsense.
+  //
+  // Est. fill: paper trading fills in a single Alpaca-roundtrip plus the
+  // engine's 50ms setTimeout — empirically ~120-200ms end-to-end. Until we
+  // track a rolling p95 per symbol we use that range as a constant hint.
+  //
+  // Fee impact: Alpaca commission is $0 on equities; the only non-zero is the
+  // microscopic Section-31 SEC fee on sells ($0.0000278 × shares × price).
+  // At retail size this rounds to $0.00 so we don't surface a row for it.
+  const estSlipBps: number | null = (() => {
+    if (!quote || quote.bid <= 0 || quote.ask <= 0) return null
+    const mid = (quote.bid + quote.ask) / 2
+    if (mid <= 0) return null
+    const spreadBps = ((quote.ask - quote.bid) / mid) * 10_000
+    if (type === 'limit') return 0
+    return spreadBps / 2
+  })()
+  const estFillMs = 150 // paper-roundtrip + 50ms engine timeout, rounded
+
   async function submit() {
     if (!window.satex) return
     setBusy(true); setMsg(null)
@@ -138,6 +163,20 @@ export function OrderTicketPanel() {
         <div className="ot-sum-row"><span className="k">NOTIONAL</span><span className="v">{fmt.usd(notional, 0)}</span></div>
         <div className="ot-sum-row"><span className="k">BP</span><span className="v">{fmt.usd(account.buyingPower, 0)}</span></div>
         <div className="ot-sum-row"><span className="k">CASH</span><span className="v">{fmt.usd(account.cash, 0)}</span></div>
+      </div>
+
+      {/* S1-6: pre-trade analytics. EST·SLIP is half the spread for market
+          orders (cross cost), 0 for limit (price-guaranteed). EST·FILL is a
+          fixed paper-roundtrip estimate until we track per-symbol p95. */}
+      <div className="ot-pretrade" title="Pre-trade estimates · half-spread for market orders; limit orders book at your price">
+        <span className="k">EST·SLIP</span>
+        <span className={`v ${estSlipBps == null ? '' : estSlipBps > 5 ? 'bear' : ''}`}>
+          {estSlipBps == null ? '—' : `${estSlipBps >= 0 ? '+' : ''}${estSlipBps.toFixed(1)} bps`}
+        </span>
+        <span className="k">EST·FILL</span>
+        <span className="v">~{estFillMs}ms</span>
+        <span className="k">FEE</span>
+        <span className="v">$0.00</span>
       </div>
 
       {account.killSwitchArmed && (

@@ -103,6 +103,13 @@ interface EntryFeaturesValue {
    *  so the close-side ClosedTrade event can include tags + conviction. */
   tags?: string[]
   conviction?: number
+  /** S1-6 — reference quote captured at submit time. Used to compute entry
+   *  slippage once the fill price comes back from Alpaca. */
+  quoteAtSubmit?: number
+  /** S1-6 — computed at entry fill, stamped here so the close-side
+   *  recordTradeClose can copy it onto the ClosedTrade event. Null when no
+   *  reference quote was available. */
+  entrySlippageBps?: number | null
 }
 
 export class TradingEngine {
@@ -588,6 +595,9 @@ export class TradingEngine {
           openedAt: Date.now(),
           ...(req.tags && req.tags.length > 0 ? { tags: req.tags } : {}),
           ...(req.conviction !== undefined ? { conviction: req.conviction } : {}),
+          // S1-6: stamp the reference quote so we can compute entry slippage
+          // once Alpaca returns the actual fill price.
+          ...(quote?.last ? { quoteAtSubmit: quote.last } : {}),
         })
       } catch (e) { log.debug('feature capture failed', { err: String(e) }) }
     }
@@ -596,6 +606,13 @@ export class TradingEngine {
       try {
         const result = await this.alpaca.submitOrder(req)
         order.fillPrice = result.filledAvgPrice ?? undefined
+        // S1-6: update entryFeatures with realized slippage now that the
+        // actual fill came back. Skipped when reference quote or fill is
+        // missing (simulator no-quote case, or Alpaca returned null fill).
+        const ef = this.entryFeatures.get(order.id)
+        if (ef && order.fillPrice != null && ef.quoteAtSubmit != null && ef.quoteAtSubmit > 0) {
+          ef.entrySlippageBps = (order.fillPrice - ef.quoteAtSubmit) / ef.quoteAtSubmit * 10_000
+        }
         this.om.fillOrder(order.id, order.fillPrice ?? req.limitPrice ?? 0)
         log.info('alpaca paper order submitted', { alpacaId: result.id, status: result.status })
       } catch (err) {
@@ -604,6 +621,11 @@ export class TradingEngine {
       }
     } else {
       const fillPrice = quote?.last ?? req.limitPrice ?? 0
+      // Simulator path: fill == reference quote by construction, so slippage
+      // is exactly 0 bps. Stamp it explicitly so the journal shows the value
+      // rather than null.
+      const ef = this.entryFeatures.get(order.id)
+      if (ef) ef.entrySlippageBps = 0
       setTimeout(() => this.om.fillOrder(order.id, fillPrice), 50)
     }
 
@@ -1244,6 +1266,8 @@ export class TradingEngine {
         tags: entry.tags ?? [],
         conviction: entry.conviction ?? null,
         regimeAtEntry: entry.regime,
+        // S1-6: propagate entry slippage captured at the buy fill.
+        entrySlippageBps: entry.entrySlippageBps ?? null,
       }
       this.closedTrades.push(ct)
       if (this.closedTrades.length > TradingEngine.CLOSED_TRADES_CAP) {

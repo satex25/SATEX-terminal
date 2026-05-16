@@ -92,6 +92,20 @@ export function JournalPanel() {
             {agg.bestTag ? `${agg.bestTag.tag} ${fmt.signed(agg.bestTag.pnl, 0)}` : '—'}
           </span>
         </div>
+        {/* S1-6 — average entry slippage across the trade ring. Positive bps
+            means the user paid more than the quoted reference (worse).
+            Threshold coloring matches PnL: red if costly, green if better
+            than quote. */}
+        <div className="jp-agg-tile">
+          <span className="lbl">AVG·SLIP</span>
+          <span className={`val ${
+            agg.avgEntrySlipBps == null ? '' :
+            agg.avgEntrySlipBps > 2 ? 'bear' :
+            agg.avgEntrySlipBps < -2 ? 'bull' : ''
+          }`}>
+            {agg.avgEntrySlipBps == null ? '—' : `${agg.avgEntrySlipBps >= 0 ? '+' : ''}${agg.avgEntrySlipBps.toFixed(1)} bps`}
+          </span>
+        </div>
       </div>
 
       {rows.length === 0 ? (
@@ -113,6 +127,14 @@ export function JournalPanel() {
                 <span className="jp-hold">{holdLabel(t.holdMs)}</span>
                 <span className={`jp-badge t-${badge.tone}`}>{badge.label}</span>
                 {t.conviction != null && <span className="jp-conv">c{t.conviction}</span>}
+                {t.entrySlippageBps != null && Number.isFinite(t.entrySlippageBps) && (
+                  <span
+                    className={`jp-slip ${t.entrySlippageBps > 2 ? 'bear' : t.entrySlippageBps < -2 ? 'bull' : ''}`}
+                    title="Entry slippage: fill price vs quote at submit time"
+                  >
+                    {t.entrySlippageBps >= 0 ? '+' : ''}{t.entrySlippageBps.toFixed(1)}bp
+                  </span>
+                )}
                 {t.regimeAtEntry && <span className="jp-regime">{t.regimeAtEntry}</span>}
                 {t.tags.length > 0 && (
                   <span className="jp-tags">

@@ -100,6 +100,10 @@ export function computeJournalAggregates(trades: ClosedTrade[]): {
   lowConvPnl: number    // conviction <= 4
   bestTag: { tag: string; pnl: number } | null
   worstTag: { tag: string; pnl: number } | null
+  /** S1-6 — mean entry slippage across trades that had a captured quote.
+   *  Null when no trade in the ring has a slippage value (e.g., session is
+   *  pure-simulator and we haven't logged any non-zero figures). */
+  avgEntrySlipBps: number | null
 } {
   const out = {
     count: trades.length,
@@ -111,8 +115,11 @@ export function computeJournalAggregates(trades: ClosedTrade[]): {
     lowConvPnl: 0,
     bestTag:  null as { tag: string; pnl: number } | null,
     worstTag: null as { tag: string; pnl: number } | null,
+    avgEntrySlipBps: null as number | null,
   }
   const tagPnl = new Map<string, number>()
+  let slipSum = 0
+  let slipCount = 0
   for (const t of trades) {
     out.totalPnl += t.pnl
     if (t.pnl > 0) out.wins++
@@ -122,8 +129,13 @@ export function computeJournalAggregates(trades: ClosedTrade[]): {
       if (t.conviction <= 4) out.lowConvPnl  += t.pnl
     }
     for (const tag of t.tags) tagPnl.set(tag, (tagPnl.get(tag) ?? 0) + t.pnl)
+    if (t.entrySlippageBps != null && Number.isFinite(t.entrySlippageBps)) {
+      slipSum += t.entrySlippageBps
+      slipCount++
+    }
   }
   out.winRate = out.count > 0 ? out.wins / (out.wins + out.losses || 1) : 0
+  out.avgEntrySlipBps = slipCount > 0 ? slipSum / slipCount : null
   for (const [tag, pnl] of tagPnl) {
     if (!out.bestTag  || pnl > out.bestTag.pnl)  out.bestTag  = { tag, pnl }
     if (!out.worstTag || pnl < out.worstTag.pnl) out.worstTag = { tag, pnl }
