@@ -98,6 +98,12 @@ export class AlpacaClient {
   private cfg: AlpacaConfig
   private marketWs: WS | null = null
   private accountWs: WS | null = null
+  /** Crypto data WebSocket (wss://stream.data.alpaca.markets/v1beta3/crypto/us).
+   *  Separate from the equity feed — different endpoint, different symbol
+   *  format (BTC/USD), and Alpaca counts it against a separate connection
+   *  budget so both can run simultaneously without 406. */
+  private cryptoWs: WS | null = null
+  private cryptoSubscribed = new Set<string>()
   private subscribed = new Set<string>()
   private reconnectTimer: NodeJS.Timeout | null = null
   private acctReconnectTimer: NodeJS.Timeout | null = null
@@ -374,6 +380,89 @@ export class AlpacaClient {
   }
 
   onTick(fn: TickHandler): () => void { this.tickListeners.add(fn); return () => this.tickListeners.delete(fn) }
+
+  // ── Crypto Market Data WebSocket (parallel to the equity feed) ───────────
+  /** Connect to Alpaca's crypto data feed. `symbols` may be SATEX-style
+   *  (`BTC`, `ETH`) or already-paired (`BTC/USD`); we normalize to the paired
+   *  form Alpaca expects. Quotes/trades flow through the same `tickListeners`
+   *  with the *base* symbol (so downstream code keeps using `BTC`). */
+  async connectCryptoStream(symbols: string[]): Promise<void> {
+    if (!this.isConfigured) { log.warn('skipping crypto stream — no credentials'); return }
+    if (this.cryptoWs) return
+    if (symbols.length === 0) return
+    const paired = symbols.map(s => s.includes('/') ? s : `${s}/USD`)
+    const url = 'wss://stream.data.alpaca.markets/v1beta3/crypto/us'
+    log.info('connecting crypto WS', { url, symbols: paired.length })
+    const ws = await openWS(url)
+    if (!ws) { log.error('no WS implementation — crypto stream unavailable'); return }
+    this.cryptoWs = ws
+
+    ws.onopen = () => ws.send(JSON.stringify({ action: 'auth', key: this.cfg.keyId, secret: this.cfg.secretKey }))
+    ws.onmessage = (ev) => { const f = frame(ev.data); if (f) for (const m of f) this.onCryptoDataMsg(m, paired) }
+    ws.onclose = (ev) => {
+      log.warn('crypto WS closed', { code: ev.code })
+      this.cryptoWs = null
+      // Lightweight reconnect — schedule a single retry after 5s. The engine
+      // is responsible for the higher-level retry policy. Avoids the full
+      // exponential-backoff storm that the equity feed uses.
+      setTimeout(() => { void this.connectCryptoStream(symbols) }, 5_000).unref?.()
+    }
+    ws.onerror = (e) => log.error('crypto WS error', { err: String(e) })
+  }
+
+  disconnectCryptoStream(): void {
+    try { this.cryptoWs?.close() } catch { /* ignore */ }
+    this.cryptoWs = null
+    this.cryptoSubscribed.clear()
+  }
+
+  private onCryptoDataMsg(m: Record<string, unknown>, symbols: string[]): void {
+    this.lastDataMessageAt = Date.now()
+    if (m['T'] === 'success' && m['msg'] === 'authenticated') {
+      log.info('crypto stream authenticated')
+      this.cryptoWs?.send(JSON.stringify({ action: 'subscribe', quotes: symbols, trades: symbols }))
+      this.cryptoSubscribed = new Set(symbols)
+      return
+    }
+    if (m['T'] === 'error') {
+      const code = Number(m['code'] ?? 0)
+      log.warn('crypto stream error from server', { code, msg: m['msg'] })
+      return
+    }
+    if (m['T'] === 'subscription') {
+      const q = (m['quotes'] as unknown[])?.length ?? 0
+      const t = (m['trades'] as unknown[])?.length ?? 0
+      log.info('crypto subscription confirmed', { quotes: q, trades: t })
+      return
+    }
+    if (m['T'] === 'q') {
+      const symPair = String(m['S'] ?? '')
+      const base = symPair.split('/')[0] ?? symPair
+      const bid = Number(m['bp'] ?? 0), ask = Number(m['ap'] ?? 0)
+      const tick: AlpacaTick = {
+        symbol: base,
+        price: (bid + ask) / 2,
+        size: Number(m['bs'] ?? 0) + Number(m['as'] ?? 0),
+        bid, ask,
+        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+      }
+      for (const l of this.tickListeners) l(tick)
+      return
+    }
+    if (m['T'] === 't') {
+      const symPair = String(m['S'] ?? '')
+      const base = symPair.split('/')[0] ?? symPair
+      const price = Number(m['p'] ?? 0)
+      const tick: AlpacaTick = {
+        symbol: base,
+        price, size: Number(m['s'] ?? 0),
+        bid: price, ask: price,
+        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+      }
+      for (const l of this.tickListeners) l(tick)
+      return
+    }
+  }
 
   // ── Account WebSocket ─────────────────────────────────────────────────────
   async connectAccountStream(): Promise<void> {

@@ -16,7 +16,7 @@ import { existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { getEnv } from '../services/env'
 import { AlpacaClient } from '../services/alpaca'
-import type { AlpacaConfig } from '../services/alpaca'
+import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
 import { MarketSimulator, type MarketDataSource, type Unsub } from '../services/market-data'
 import { LiveMarket } from '../services/live-market'
 import { OrderManager, type OrderValidationContext } from '../services/order-manager'
@@ -24,7 +24,7 @@ import { TickRecorder } from '../services/tick-recorder'
 import { ReplaySource } from '../services/replay-source'
 import { HistoricalImporter } from '../services/historical-importer'
 import { computeSnapshot } from '@shared/indicators'
-import { STARTING_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, findUniverseEntry } from '@shared/constants'
+import { STARTING_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
   Account, AiDecision, AlpacaModeSetRequest, AlpacaModeStatus,
   AlpacaTradeUpdate, Candle,
@@ -115,6 +115,12 @@ interface EntryFeaturesValue {
 export class TradingEngine {
   private market!: MarketDataSource
   private alpaca:  AlpacaClient | null = null
+  /** Dedicated AlpacaClient that ONLY handles the crypto WebSocket
+   *  (wss://stream.data.alpaca.markets/v1beta3/crypto/us). Runs in parallel
+   *  with the equity market source (simulator OR live IEX), so BTC/ETH stream
+   *  24/7 regardless of US-market hours. Null when no Alpaca credentials
+   *  are saved or when the crypto stream couldn't authenticate. */
+  private cryptoAlpaca: AlpacaClient | null = null
   public  om!:     OrderManager
   private brain:   Brain = new Brain()
   private tactics: TacticsEngine = new TacticsEngine()
@@ -366,6 +372,14 @@ export class TradingEngine {
     // Capture initial tactics state for transition detection
     this.lastTacticsState = this.tactics.status().state
 
+    // ── Live crypto feed (BTC/ETH via Alpaca v1beta3 WebSocket) ──────────
+    // Runs in parallel with whatever equity source is active. Alpaca's
+    // crypto data is included with paper accounts and counts against a
+    // separate connection budget from equities, so this never collides with
+    // the IEX feed. fireAndForget so a crypto auth failure doesn't block
+    // engine init.
+    this.fireAndForget('startCryptoFeed', () => this.startCryptoFeed())
+
     // Broadcast Observer/Learner/Vault stats every 5s
     this.continuousStatsTimer = setInterval(() => this.broadcastContinuousStats(), 5_000)
 
@@ -490,6 +504,8 @@ export class TradingEngine {
     this.market?.stop?.()
     this.alpaca?.disconnectMarketStream()
     this.alpaca?.disconnectAccountStream()
+    this.alpaca?.disconnectCryptoStream()
+    this.cryptoAlpaca?.disconnectCryptoStream()
     const endingEquity = this.om?.getAccount().equity ?? STARTING_EQUITY
     db.updateSession(this.currentSessionId, { endedAt: Date.now(), endingEquity })
     // Final vault checkpoint
@@ -1057,6 +1073,62 @@ export class TradingEngine {
     // deleteSession is local-DB-only — no Alpaca call. Passing null is fine.
     const importer = new HistoricalImporter(this.alpaca)
     return importer.deleteSession(sessionId)
+  }
+
+  /** Connect Alpaca's crypto WebSocket for BTC/ETH live ticks. Runs
+   *  alongside the equity market source (simulator OR live IEX) so crypto
+   *  streams 24/7 regardless of US-equity market hours. No-op when no
+   *  Alpaca credentials are saved or when no crypto symbols are in UNIVERSE.
+   *  Reuses the existing buildRestOnlyAlpacaClient for the simulator-mode
+   *  case so we don't tie crypto to the equity-feed lifecycle. */
+  private async startCryptoFeed(): Promise<void> {
+    const cryptoSymbols = UNIVERSE
+      .filter(u => u.assetClass === 'crypto')
+      .map(u => u.symbol)
+    if (cryptoSymbols.length === 0) return
+    const client = this.alpaca ?? this.buildRestOnlyAlpacaClient()
+    if (!client) {
+      log.info('crypto feed skipped — no Alpaca credentials')
+      return
+    }
+    // Keep our own reference if we built a fresh client so we can disconnect
+    // on shutdown. When reusing this.alpaca, the equity-side shutdown path
+    // already handles disconnect.
+    if (client !== this.alpaca) this.cryptoAlpaca = client
+    client.onTick((tick) => this.onCryptoTick(tick))
+    try {
+      await client.connectCryptoStream(cryptoSymbols)
+      log.info('crypto stream started', { symbols: cryptoSymbols })
+    } catch (err) {
+      log.warn('crypto stream failed to start', { err: String(err) })
+    }
+  }
+
+  /** Convert a crypto AlpacaTick into a SATEX Quote and feed it through the
+   *  engine's normal quote pipeline. The UNIVERSE seed is used as a baseline
+   *  for prevClose — Alpaca's crypto endpoint doesn't ship a session-open
+   *  reference and overnight crypto ticks have no analog to "prev close"
+   *  anyway. The first real tick replaces the seed in marketStore.quotes
+   *  so the chart, watchlist, and PnL all see live BTC/ETH. */
+  private onCryptoTick(tick: AlpacaTick): void {
+    const entry = findUniverseEntry(tick.symbol)
+    if (!entry || entry.assetClass !== 'crypto') return
+    const quote: Quote = {
+      symbol:     tick.symbol,
+      name:       entry.name,
+      assetClass: entry.assetClass,
+      last:       tick.price,
+      bid:        tick.bid,
+      ask:        tick.ask,
+      prevClose:  entry.seed,
+      change:     tick.price - entry.seed,
+      changePct:  entry.seed === 0 ? 0 : ((tick.price - entry.seed) / entry.seed) * 100,
+      volume:     tick.size,
+      vwap:       tick.price,
+      sparkline:  new Array(30).fill(tick.price),
+      timestamp:  tick.timestamp,
+    }
+    this.onQuotesBatch([quote])
   }
 
   /** Construct a REST-only AlpacaClient from currently-stored credentials,
