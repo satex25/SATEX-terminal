@@ -223,6 +223,36 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // ── Visibility-aware push gating (2026-05-17) ──────────────────────────────
+  // When the user minimizes / hides the window, freeze the data push pipeline
+  // so the renderer doesn't accumulate a backlog of 20Hz quote ticks it can't
+  // process while hidden. On restore, re-broadcast a complete snapshot in
+  // one shot so the renderer repaints with current state immediately instead
+  // of waiting for the next live tick of each channel.
+  //
+  // Triggers handled:
+  //   'minimize' / 'restore'  — taskbar minimize on Windows + restore via click
+  //   'hide'     / 'show'     — programmatic hide / Cmd-H on macOS
+  //   'blur'     / 'focus'    — NOT used (would pause when devtools takes focus)
+  mainWindow.on('minimize', () => {
+    pushPaused = true
+    log.info('window minimized — renderer pushes paused')
+  })
+  mainWindow.on('hide', () => {
+    pushPaused = true
+    log.info('window hidden — renderer pushes paused')
+  })
+  const resumePushes = (reason: string): void => {
+    if (!pushPaused) return
+    pushPaused = false
+    log.info('window restored — renderer pushes resumed', { reason })
+    // The renderer's React tree is still mounted; selectors will pick up
+    // store updates from this snapshot. No reload required.
+    rebroadcastSnapshot()
+  }
+  mainWindow.on('restore', () => resumePushes('restore'))
+  mainWindow.on('show',    () => resumePushes('show'))
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -231,9 +261,49 @@ function createWindow(): void {
 }
 
 // ── Push helpers (main → renderer) ───────────────────────────────────────────
+//
+// Pause-on-hide (2026-05-17) — when the user minimizes / hides the SATEX
+// window we stop forwarding the high-frequency data feeds (quotes, candles,
+// trades, risk gates, etc.) to the renderer. The trading engine keeps running
+// in main; only the renderer push is gated. Without this, the renderer's
+// event loop accumulated a backlog of 20Hz quote ticks while the page was
+// hidden (Chromium throttles rAF but not microtasks); on restore the renderer
+// had to process minutes of queued updates in one shot and the JS thread
+// wedged — observed as a 10.7s frame stall in the 2026-05-17 02:52 session,
+// after which the renderer never recovered. With pushes paused, the renderer
+// stays idle while hidden and re-syncs cleanly via `rebroadcastSnapshot()`
+// on the next 'restore'/'show' event.
+let pushPaused = false
 function push(channel: string, payload: unknown): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, payload)
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (pushPaused) return
+  mainWindow.webContents.send(channel, payload)
+}
+
+/** Re-push the most recent snapshot of every channel a freshly-restored
+ *  renderer needs to repaint without waiting for the next live tick. Mirrors
+ *  the post-init snapshot block in `app.whenReady` so we have a single
+ *  source of truth for "what does the renderer need on resume?". Safe to
+ *  call at any time — every getter early-returns sensible defaults when the
+ *  engine hasn't initialized yet. */
+function rebroadcastSnapshot(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    push(IPC.QUOTES_TICK,       engine.getAllQuotes())
+    if (engine.om) {
+      push(IPC.ACCOUNT_UPDATE,  engine.om.getAccount())
+      push(IPC.ORDERS_UPDATE,   engine.om.getOrders())
+    }
+    push(IPC.OBSERVER_STATS,    engine.getObserverStats())
+    push(IPC.LEARNER_STATS,     engine.getLearnerStats())
+    push(IPC.VAULT_STATS,       engine.getVaultStats())
+    push(IPC.REGIME_UPDATE,     engine.getRegime())
+    push(IPC.RISK_GATES_UPDATE, engine.getRiskGates())
+    push(IPC.MACRO_UPDATE,      engine.getMacro())
+    push(IPC.LOGS_TAIL,         engine.getLogsTail())
+    push(IPC.DEPTH_UPDATE,      engine.getDepth())
+  } catch (e) {
+    log.warn('rebroadcastSnapshot failed', { err: String(e) })
   }
 }
 
