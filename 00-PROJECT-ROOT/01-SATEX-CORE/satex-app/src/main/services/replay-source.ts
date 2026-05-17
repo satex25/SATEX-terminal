@@ -341,6 +341,24 @@ export class ReplaySource implements MarketDataSource {
       this.suppressCandleEmits = false
     }
 
+    // 2026-05-17 — emit quotes BEFORE the bulk candle snapshot. The chart's
+    // live-mix effect (ChartPanel "Live update — in-flight candle") combines
+    // quote.last into the chart series's last bar. If we ship the new candles
+    // first, that effect would fire with the OLD live quote (e.g., the
+    // simulator's frozen $965) and poison the in-flight bar high/close,
+    // stretching the chart's auto-scale far above the actual price range
+    // (observed: Y-axis 200-1000 for a $225 NVDA day). Emitting quotes
+    // first means renderer's marketStore.quotes has the replay's last
+    // price by the time view recomputes from the new candles.
+    const quotesBatch: Quote[] = []
+    for (const [, s] of this.states) {
+      if (s.lastEmittedTs === 0) continue
+      quotesBatch.push(this.quoteFrom(s))
+    }
+    if (quotesBatch.length > 0) {
+      for (const l of this.quoteListeners) l(quotesBatch)
+    }
+
     // Bulk emit — one snapshot per symbol with the full warmed-up history.
     // Subscribers that need per-bucket updates (none in current codebase)
     // are explicitly NOT served during warmup; this trades per-event fidelity
