@@ -37,6 +37,23 @@ export function SettingsModal({ open, onClose }: Props) {
 
   const [zoom, setZoom] = useState(1.0)
 
+  // Data-source state (simulator vs Alpaca live) — surfaced so the user has
+  // a single in-app place to swap from the env-forced simulator over to
+  // Alpaca live without editing .env.local.
+  const [alpacaConnected, setAlpacaConnected] = useState<boolean>(false)
+  const [alpacaModeLabel, setAlpacaModeLabel] = useState<'paper' | 'live'>('paper')
+  const [reconnectBusy,   setReconnectBusy]   = useState(false)
+  const [reconnectMsg,    setReconnectMsg]    = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function refreshAlpacaModeStatus() {
+    try {
+      const status = await window.satex?.getAlpacaMode()
+      if (!status) return
+      setAlpacaConnected(!!status.connected)
+      setAlpacaModeLabel(status.mode)
+    } catch { /* ignore */ }
+  }
+
   async function refreshMaskedStatus() {
     try {
       const status = await window.satex?.getCredentialsMasked()
@@ -50,9 +67,10 @@ export function SettingsModal({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return
-    setPaperMsg(null); setLiveMsg(null); setBaiduMsg(null)
+    setPaperMsg(null); setLiveMsg(null); setBaiduMsg(null); setReconnectMsg(null)
     void (async () => {
       await refreshMaskedStatus()
+      await refreshAlpacaModeStatus()
       try {
         const baidu = await window.satex?.getBaiduMasked()
         if (baidu) setBaiduHas(baidu.configured)
@@ -61,6 +79,23 @@ export function SettingsModal({ open, onClose }: Props) {
       } catch { /* ignore */ }
     })()
   }, [open])
+
+  async function connectAlpacaLive() {
+    if (!window.satex) return
+    setReconnectBusy(true); setReconnectMsg(null)
+    try {
+      const res = await window.satex.reconnectAlpaca?.()
+      if (res?.ok) {
+        setReconnectMsg({ ok: true, text: `Connected to Alpaca ${alpacaModeLabel} feed.` })
+      } else {
+        setReconnectMsg({ ok: false, text: res?.reason ?? 'Reconnect failed' })
+      }
+      await refreshAlpacaModeStatus()
+    } catch (e) {
+      setReconnectMsg({ ok: false, text: String(e) })
+    }
+    setReconnectBusy(false)
+  }
 
   async function savePaper() {
     if (!window.satex) return
@@ -155,6 +190,42 @@ export function SettingsModal({ open, onClose }: Props) {
       size="wide"
       footer={<button type="button" className="dialog-btn" onClick={onClose}>Done</button>}
     >
+      <div className="dialog-section">
+        <div className="dialog-section-title">
+          Data Source
+          <span style={{
+            marginLeft: 10, fontFamily: 'var(--font-mono)', fontSize: 10,
+            padding: '2px 6px', borderRadius: 3,
+            background: alpacaConnected ? 'rgba(34, 197, 94, 0.15)' : 'rgba(245, 166, 35, 0.15)',
+            color:      alpacaConnected ? '#22c55e'                : '#f5a623',
+            border:     `1px solid ${alpacaConnected ? '#22c55e' : '#f5a623'}`,
+          }}>
+            {alpacaConnected ? `LIVE · Alpaca ${alpacaModeLabel}` : 'SIMULATOR'}
+          </span>
+        </div>
+        <div className="form-hint">
+          {alpacaConnected
+            ? `Quotes are streaming from Alpaca's ${alpacaModeLabel} endpoint. Re-clicking Connect will tear down the WebSocket and rebuild it (useful after a network hiccup).`
+            : `The engine is running the offline simulator. Click Connect to swap to Alpaca's ${alpacaModeLabel} feed for real market data. Requires stored ${alpacaModeLabel} credentials below.`}
+        </div>
+        {reconnectMsg && (
+          <div className={`form-hint ${reconnectMsg.ok ? 'ok' : 'err'}`} style={{ marginTop: 8 }}>{reconnectMsg.text}</div>
+        )}
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button
+            type="button"
+            className="dialog-btn primary"
+            disabled={reconnectBusy || (alpacaModeLabel === 'paper' ? !paperCreds.hasExisting : !liveCreds.hasExisting)}
+            onClick={connectAlpacaLive}
+            title={alpacaConnected ? 'Rebuild the WebSocket' : `Swap data source to Alpaca ${alpacaModeLabel}`}
+          >
+            {reconnectBusy
+              ? 'Connecting…'
+              : alpacaConnected ? 'Reconnect WebSocket' : `Connect to Alpaca ${alpacaModeLabel}`}
+          </button>
+        </div>
+      </div>
+
       <div className="dialog-section">
         <div className="dialog-section-title">
           Alpaca · Paper Trading {paperCreds.hasExisting && <span style={{ marginLeft: 8, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>{paperMasked}</span>}
