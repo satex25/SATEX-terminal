@@ -281,22 +281,38 @@ export class ReplaySource implements MarketDataSource {
    *  `maybeRollCandle` path already skips symbols without tape data
    *  (lastEmittedTs===0), so seed-only flatlines aren't broadcast. */
   private warmup(targetTs: number): void {
-    let cursor = this.tapeStartTs
     // Seed currentCandleStart so the first row's bucket-cross fires a roll
     // rather than mutating a stale seed-time candle indefinitely.
     this.currentCandleStart = Math.floor(this.tapeStartTs / 1000 / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
-    while (cursor <= targetTs) {
-      const next = Math.min(targetTs, cursor + 30_000) // 30s pages
-      const rows = db.readTapeRange(this.sessionId, cursor, next, 8000)
-      if (rows.length === 0) break
-      for (const r of rows) {
-        this.applyTape(r, /*emitCandleListener=*/ false)
-        this.cursorTs = r.ts
-        this.maybeRollCandle()
+    // 2026-05-17 — page through the FULL tape range, not just until the first
+    // sparse page. The previous `if (rows.length < 8000) break` was meant to
+    // detect tape exhaustion, but for historical-import tape (1-min bars × 4
+    // OHLC subticks × 12 symbols = ~24 rows per 30s window — nowhere near
+    // 8000) it fired after the first page, so only ~30 seconds of an 8h day
+    // was warmed up. Now we iterate by fixed 30s pages until cursor > target,
+    // and only paginate INSIDE a window when we actually hit the 8000 cap.
+    const PAGE_MS = 30_000
+    const PAGE_ROW_LIMIT = 8000
+    let pageStart = this.tapeStartTs
+    while (pageStart <= targetTs) {
+      const pageEnd = Math.min(targetTs, pageStart + PAGE_MS)
+      let innerCursor = pageStart
+      // Drain this window. Loops only when we hit the row cap (extremely
+      // unlikely in practice — live tape is ~48 rows/sec at 12 symbols, 30s
+      // = 1440 rows; synthetic historical tape is ~24 rows). Safety bound
+      // prevents pathological lock-up on a future schema change.
+      for (let safety = 0; safety < 50; safety++) {
+        const rows = db.readTapeRange(this.sessionId, innerCursor, pageEnd, PAGE_ROW_LIMIT)
+        if (rows.length === 0) break
+        for (const r of rows) {
+          this.applyTape(r, /*emitCandleListener=*/ false)
+          this.cursorTs = r.ts
+          this.maybeRollCandle()
+        }
+        if (rows.length < PAGE_ROW_LIMIT) break
+        innerCursor = rows[rows.length - 1]!.ts + 1
       }
-      const lastTs = rows[rows.length - 1]!.ts
-      cursor = lastTs + 1
-      if (rows.length < 8000) break
+      pageStart = pageEnd + 1
     }
     // Final emit: each symbol's in-flight candle (mid-bucket close) so the
     // chart shows the latest bar without waiting for the next bucket roll.
