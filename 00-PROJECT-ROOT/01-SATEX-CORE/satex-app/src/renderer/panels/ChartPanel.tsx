@@ -464,10 +464,28 @@ export function ChartPanel() {
   // ── Indicator reconciliation ────────────────────────────────────────────────
   // Single source of truth: read indicatorStore + regime + candles, sync the
   // chart to match. Add missing series, remove unwanted, refresh data, update
-  // colors. Runs whenever indSettings, view (bar count), regime, or prior-day
-  // HLC changes — debouncing isn't needed because indSettings/regime updates
-  // are coarse, and view.length changes happen at most once per bucket.
+  // colors.
+  //
+  // 2026-05-16 perf fix — two changes addressing 100 ms+ frame stalls
+  // observed every ~1 s in the dev session (3 700+ `[perf] frame:long`
+  // samples accumulated over a long-running window):
+  //
+  //   1. Heavy work (EMA × 4 periods + RSI + Fibonacci + Pivot Points +
+  //      double-top/bottom detection) runs at O(N²) for pattern detection,
+  //      which dominates at >300-bar views. We defer execution to
+  //      `requestIdleCallback` with a 500 ms timeout backstop so it can't
+  //      be starved indefinitely. Indicator math now waits for browser
+  //      idle and the next frame paints cleanly.
+  //   2. The dep array uses `view.length` (not `view`). Intra-bar
+  //      mutations from CANDLES_UPDATE isNew=false (in-place close
+  //      replacement) bump the view memo's ref but not its length —
+  //      indicators only care about closed-candle boundaries, so we skip
+  //      those re-runs. New-candle isNew=true events still bump length
+  //      and trigger reconciliation as expected.
   useEffect(() => {
+    let cancelled = false
+    const reconcile = (): void => {
+      if (cancelled) return
     const chart  = chartRef.current as {
       addSeries: (typ: unknown, opts: unknown, paneIndex?: number) => unknown
       removeSeries: (s: unknown) => void
@@ -710,7 +728,17 @@ export function ChartPanel() {
     }
 
     setWarnings(notes)
-  }, [view, indSettings, dominantRegime, emaColor, priorHlc])
+    }
+    // Schedule reconcile during browser idle time. Electron's Chromium
+    // runtime (32+) ships requestIdleCallback natively, so no fallback
+    // probe is needed. The 500 ms timeout backstop guarantees the work
+    // can't be starved indefinitely if the main thread stays busy.
+    const handle = window.requestIdleCallback(reconcile, { timeout: 500 })
+    return () => {
+      cancelled = true
+      window.cancelIdleCallback(handle)
+    }
+  }, [view.length, indSettings, dominantRegime, emaColor, priorHlc])
 
   const up = (quote?.changePct ?? 0) >= 0
 
