@@ -4,11 +4,11 @@
  * Locks down the adversarial-review fixes from 2026-05-16:
  *   • C1 — `triggeredBy` no longer exists on OrderRequest; Gate 1 (kill
  *          switch) fires unconditionally; Gate 0 (stale quote) too.
+ *   • C2 — `setSessionStartEquity` rebases daily-loss math and refuses
+ *          non-positive equity.
  *   • C3 — `signalToRequest` sizes by refPrice instead of collapsing to qty=1.
- *
- * The C2 (sessionStartEquity) section is added by a subsequent commit.
  */
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { OrderManager, type OrderValidationContext } from './order-manager'
 import type { OrderRequest, StrategySignal } from '../../shared/types'
 
@@ -81,6 +81,46 @@ describe('OrderManager — C1: triggeredBy bypass closed', () => {
       refPrice: 100, refPriceAge: 10_000, liveMode: false, notionalCap: 0,
     }
     expect(om.validate(baseBuy({ quantity: 1 }), ctx).ok).toBe(true)
+  })
+})
+
+describe('OrderManager — C2: session equity baseline rebase', () => {
+  let om: OrderManager
+  beforeEach(() => { om = new OrderManager(10_000) })
+
+  it('setSessionStartEquity updates the baseline and rebuilds dailyPnl', () => {
+    expect(om.getSessionStartEquity()).toBe(10_000)
+    om.setSessionStartEquity(100_000)
+    expect(om.getSessionStartEquity()).toBe(100_000)
+    const acct = om.getAccount()
+    // account.equity is still the constructor's 10_000 because we haven't
+    // syncFromAlpaca'd; dailyPnl now reflects equity - new baseline.
+    expect(acct.dailyPnl).toBeCloseTo(10_000 - 100_000)
+  })
+
+  it('refuses non-positive equity (broker outage, brand-new account)', () => {
+    om.setSessionStartEquity(0)
+    expect(om.getSessionStartEquity()).toBe(10_000) // unchanged
+    om.setSessionStartEquity(-500)
+    expect(om.getSessionStartEquity()).toBe(10_000)
+    om.setSessionStartEquity(Number.NaN)
+    expect(om.getSessionStartEquity()).toBe(10_000)
+    om.setSessionStartEquity(Number.POSITIVE_INFINITY)
+    expect(om.getSessionStartEquity()).toBe(10_000)
+  })
+
+  it('Gate 3 (daily loss) measures against the rebased baseline, not the constant', () => {
+    om.setMarketOpen(true)
+    om.syncFromAlpaca({ equity: 100_000, cash: 100_000, buyingPower: 100_000 }, [])
+    om.setSessionStartEquity(100_000)
+    // Simulate equity drop within the daily-loss cap (default 2%): -1_500 of 100k = 1.5%
+    om.syncFromAlpaca({ equity: 98_500, cash: 98_500, buyingPower: 98_500 }, [])
+    expect(om.validate(baseBuy({ quantity: 1 }), liveCtx({ refPrice: 100 })).ok).toBe(true)
+    // Now breach: drop to -2.5%
+    om.syncFromAlpaca({ equity: 97_500, cash: 97_500, buyingPower: 97_500 }, [])
+    const res = om.validate(baseBuy({ quantity: 1 }), liveCtx({ refPrice: 100 }))
+    expect(res.ok).toBe(false)
+    expect(res.gate).toBe('daily-loss')
   })
 })
 

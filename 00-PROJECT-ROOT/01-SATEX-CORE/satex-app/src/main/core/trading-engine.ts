@@ -143,6 +143,10 @@ export class TradingEngine {
   private startedAt        = Date.now()
   private tickCount        = 0
   private lastTickAt       = 0
+  /** Adversarial finding C2 (2026-05-16) — gates the one-shot
+   *  sessionStartEquity sync that runs on the first successful Alpaca
+   *  account sync of the session. See `syncAlpacaAccount`. */
+  private alpacaFirstSyncDone = false
   private statusTimer:     NodeJS.Timeout | null = null
   private accountSyncTimer:NodeJS.Timeout | null = null
   private clockSyncTimer:  NodeJS.Timeout | null = null
@@ -1382,6 +1386,36 @@ export class TradingEngine {
         AlpacaClient.toSatexPosition(p, Date.now())
       )
       this.om.syncFromAlpaca(snap, satexPositions)
+
+      // Adversarial finding C2 (2026-05-16) — on the first sync of the session,
+      // realign `sessionStartEquity` to the broker-reported equity AND persist
+      // it to the session row. Before this fix, `sessionStartEquity` stayed at
+      // the STARTING_EQUITY constant for the entire session, so Gate 3
+      // (daily-loss limit) and the auto-arm kill switch worked off a baseline
+      // that had no relationship to the user's real Alpaca equity.
+      //
+      // Only fires once per engine instance: subsequent syncs leave the
+      // baseline intact (otherwise daily-loss tracking would never accumulate).
+      // Guarded on snap.equity > 0 so a transient broker outage / new-account
+      // response can't poison the baseline.
+      if (!this.alpacaFirstSyncDone && snap.equity > 0) {
+        this.alpacaFirstSyncDone = true
+        this.om.setSessionStartEquity(snap.equity)
+        try {
+          db.updateSession(this.currentSessionId, {
+            startingEquity: snap.equity,
+            peakEquity:     snap.equity,
+            troughEquity:   snap.equity,
+          })
+          log.info('session baseline aligned to alpaca equity', {
+            sessionId: this.currentSessionId,
+            startingEquity: snap.equity,
+          })
+        } catch (e) {
+          log.warn('session baseline persist failed (in-memory still updated)', { err: String(e) })
+        }
+      }
+
       this.broadcastAccount()
     } catch (err) {
       log.warn('alpaca account sync failed', { err: String(err) })

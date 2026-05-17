@@ -82,6 +82,35 @@ export class OrderManager {
   getOrders():  Order[]    { return Array.from(this.orders.values()) }
   getPosition(sym: string): Position | undefined { return this.positions.get(sym) }
   setMarketOpen(open: boolean): void { this.isMarketOpen = open }
+  /** Inspection helper used by the trading-engine sync path. */
+  getSessionStartEquity(): number { return this.sessionStartEquity }
+
+  /** Reset the session's starting equity to the broker-reported value.
+   *
+   *  Called by the trading-engine on the FIRST Alpaca account sync of the
+   *  session. Before this exists the OM is constructed with the local
+   *  STARTING_EQUITY constant, which has no relationship to the user's
+   *  actual Alpaca equity. The daily-loss gate (`Gate 3`), the auto-arm
+   *  kill switch in applyFill, and the dailyPnl rebuild all use
+   *  `sessionStartEquity` as the baseline — leaving it as a stale constant
+   *  silently breaks every one of them when actual equity diverges.
+   *
+   *  Adversarial finding C2 (2026-05-16). Refuses non-positive equity so
+   *  a transient Alpaca response of `{"equity":"0"}` (account in
+   *  liquidation, brand-new account) can't poison the baseline. */
+  setSessionStartEquity(equity: number): void {
+    if (!(equity > 0) || !Number.isFinite(equity)) {
+      log.warn('refusing to set sessionStartEquity to non-positive value', { equity })
+      return
+    }
+    const prior = this.sessionStartEquity
+    this.sessionStartEquity = equity
+    // Reset dailyPnl so it's measured against the new baseline immediately;
+    // otherwise the next push would show a phantom PnL equal to the equity
+    // delta between prior baseline and new baseline.
+    this.account.dailyPnl = this.account.equity - equity
+    log.info('session start equity reset', { prior, next: equity, dailyPnl: this.account.dailyPnl })
+  }
 
   // ── Kill Switch ─────────────────────────────────────────────────────────────
   armKillSwitch(reason = 'manual'): void {

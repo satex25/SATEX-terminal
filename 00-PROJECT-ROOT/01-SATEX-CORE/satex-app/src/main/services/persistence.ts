@@ -215,6 +215,7 @@ export function insertSession(s: SessionRecord): void {
 
 export function updateSession(id: string, patch: Partial<SessionRecord>): void {
   const db = openDB()
+  if (patch.startingEquity !== undefined) db.prepare('UPDATE sessions SET starting_equity=? WHERE id=?').run(patch.startingEquity, id)
   if (patch.endedAt !== undefined)      db.prepare('UPDATE sessions SET ended_at=?      WHERE id=?').run(patch.endedAt, id)
   if (patch.endingEquity !== undefined) db.prepare('UPDATE sessions SET ending_equity=? WHERE id=?').run(patch.endingEquity, id)
   if (patch.peakEquity !== undefined)   db.prepare('UPDATE sessions SET peak_equity=?   WHERE id=?').run(patch.peakEquity, id)
