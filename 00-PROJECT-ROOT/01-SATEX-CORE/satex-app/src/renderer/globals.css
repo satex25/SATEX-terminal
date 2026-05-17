@@ -617,6 +617,24 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 }
 .chart-histday-err button:hover { color: var(--ink-0); }
 
+/* Informational band — softer than the error variant. Used for the cold-start
+ * "no Alpaca credentials saved" nudge so the user understands why the chart
+ * is sitting on simulated data. */
+.chart-histday-info {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 4px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--ink-2, #b8bdc7);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.chart-histday-info button {
+  background: none; border: none; color: var(--ink-2, #b8bdc7);
+  font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 6px;
+}
+.chart-histday-info button:hover { color: var(--ink-0); }
+
 /* Canvas overlay — confirms historical mode at a glance. */
 .chart-replay-badge {
   position: absolute; top: 10px; left: 50%;

@@ -186,6 +186,9 @@ export function ChartPanel() {
   const [histDate,  setHistDate]  = useState<string>(defaultHistoricalDate())
   const [histBusy,  setHistBusy]  = useState(false)
   const [histErr,   setHistErr]   = useState<string | null>(null)
+  /** Soft informational banner. Separate from histErr so the no-creds nudge
+   *  isn't styled as a red error and doesn't auto-dismiss after 6s. */
+  const [histInfo,  setHistInfo]  = useState<string | null>(null)
   const [replayStatus, setReplayStatus] = useState<ReplayStatus | null>(null)
 
   // Subscribe to replay status — drives "in replay?" UI branching.
@@ -239,6 +242,17 @@ export function ChartPanel() {
         if (!hasCreds) {
           console.info('[chart] auto-load skipped — no Alpaca credentials')
           autoLoadedRef.current = true
+          // Soft, dismissable nudge so the user understands why the chart is
+          // sitting on simulator data instead of a real session. We only show
+          // this once per session — a dismiss latches in sessionStorage so the
+          // banner doesn't follow the user around between workspace tabs.
+          try {
+            if (!sessionStorage.getItem('satex.chart.no-creds-dismissed')) {
+              setHistInfo('Outside US market hours · simulated data only. Add Alpaca keys in Settings → Data Source to auto-load the last NY session.')
+            }
+          } catch { /* sessionStorage unavailable — show anyway */
+            setHistInfo('Outside US market hours · simulated data only. Add Alpaca keys in Settings → Data Source to auto-load the last NY session.')
+          }
           return
         }
         // Latch BEFORE the await so a re-render during loadHistoricalDayForDate
@@ -1059,6 +1073,20 @@ export function ChartPanel() {
         <div className="chart-histday-err" role="alert">
           <span>{histErr}</span>
           <button type="button" onClick={() => setHistErr(null)} aria-label="Dismiss error">×</button>
+        </div>
+      )}
+
+      {histInfo && !histErr && (
+        <div className="chart-histday-info" role="status">
+          <span>{histInfo}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setHistInfo(null)
+              try { sessionStorage.setItem('satex.chart.no-creds-dismissed', '1') } catch { /* ignore */ }
+            }}
+            aria-label="Dismiss notice"
+          >×</button>
         </div>
       )}
 
