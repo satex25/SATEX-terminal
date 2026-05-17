@@ -1,12 +1,25 @@
 /**
  * SATEX — Live-mode interlock dialog.
+ *
  * Crossing into LIVE requires:
  *   1. Paper credentials configured AND endpoint confirmed (read-only check)
  *   2. Kill switch disarmed
  *   3. Daily-loss limit not breached
  *   4. Notional cap entered (max $/order)
- *   5. Typed-confirm phrase exactly: I ACCEPT REAL CAPITAL
- * Crossing back to paper is one-click.
+ *   5. User confirms via the NATIVE Electron dialog the main process raises
+ *      when this modal calls window.satex.setLiveMode({enabled:true, ...}).
+ *
+ * The typed-phrase confirmation (formerly required here) was removed
+ * 2026-05-16 (adversarial finding C6). The renderer string check was
+ * bypassable by any in-process code — XSS via news/AI content could just
+ * call setLiveMode with the literal phrase. The native modal raised from
+ * the main process is rendered by the OS and is unreachable from renderer
+ * code. Clicking "Enable Live Mode" here triggers the IPC; the native
+ * dialog appears on top of everything; only a click on its "I accept real
+ * capital" button flips the wall.
+ *
+ * Crossing back to paper is one-click — no extra dialog (we want
+ * disabling to be friction-free).
  */
 import { useEffect, useState } from 'react'
 import { Modal } from '../Modal'
@@ -14,8 +27,6 @@ import { useAccountStore } from '../../stores/accountStore'
 import { fmt } from '../../lib/format'
 
 interface Props { open: boolean; onClose: () => void }
-
-const CONFIRM_PHRASE = 'I ACCEPT REAL CAPITAL'
 
 interface LiveStatus {
   enabled: boolean
@@ -27,14 +38,13 @@ interface LiveStatus {
 export function LiveModeModal({ open, onClose }: Props) {
   const account = useAccountStore(s => s.account)
   const [status, setStatus] = useState<LiveStatus | null>(null)
-  const [phrase, setPhrase] = useState('')
   const [cap, setCap]       = useState('500')
   const [busy, setBusy]     = useState(false)
   const [msg, setMsg]       = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => {
     if (!open) return
-    setPhrase(''); setMsg(null)
+    setMsg(null)
     void (async () => {
       try {
         const s = await window.satex?.getLiveMode()
@@ -45,18 +55,22 @@ export function LiveModeModal({ open, onClose }: Props) {
 
   const dailyLossOk = account.dailyPnl >= -(account.equity * account.dailyLossLimitPct)
   const killOk      = !account.killSwitchArmed
-  const phraseOk    = phrase.trim() === CONFIRM_PHRASE
   const capNum      = parseFloat(cap) || 0
   const capOk       = capNum > 0 && capNum <= 50_000
-  const endpointOk  = status?.paperOnly === false ? false : true  // when LIVE, must not be paper; flipping ON from paper is the friction point we acknowledge
+  const endpointOk  = status?.paperOnly === false ? false : true  // when LIVE, must not be paper
 
-  const allOk = killOk && dailyLossOk && phraseOk && capOk
+  const allOk = killOk && dailyLossOk && capOk
 
   async function enable() {
     if (!window.satex || busy) return
     setBusy(true); setMsg(null)
     try {
-      const res = await window.satex.setLiveMode({ enabled: true, notionalCap: capNum, confirmPhrase: phrase })
+      // The main process intercepts this call and pops a native Electron
+      // dialog. The Promise here only resolves after the user clicks the
+      // native button (or cancels). Don't try to optimistically update
+      // status before the call completes — the cancellation path leaves
+      // live mode unchanged.
+      const res = await window.satex.setLiveMode({ enabled: true, notionalCap: capNum })
       if (res.ok) { setMsg({ ok: true, text: 'LIVE MODE ENABLED — orders now route to real capital.' }); setStatus(s => s ? { ...s, enabled: true } : s) }
       else        setMsg({ ok: false, text: res.reason ?? 'Failed to enable live mode' })
     } catch (e) { setMsg({ ok: false, text: String(e) }) }
@@ -67,7 +81,7 @@ export function LiveModeModal({ open, onClose }: Props) {
     if (!window.satex || busy) return
     setBusy(true); setMsg(null)
     try {
-      const res = await window.satex.setLiveMode({ enabled: false, notionalCap: capNum, confirmPhrase: '' })
+      const res = await window.satex.setLiveMode({ enabled: false, notionalCap: capNum })
       if (res.ok) { setMsg({ ok: true, text: 'Reverted to paper mode.' }); setStatus(s => s ? { ...s, enabled: false } : s) }
       else        setMsg({ ok: false, text: res.reason ?? 'Failed' })
     } catch (e) { setMsg({ ok: false, text: String(e) }) }
@@ -86,7 +100,7 @@ export function LiveModeModal({ open, onClose }: Props) {
       footer={isLive
         ? <button type="button" className="dialog-btn danger" onClick={disable} disabled={busy}>Disable Live Mode</button>
         : <button type="button" className="dialog-btn primary" onClick={enable} disabled={!allOk || busy}>
-            {busy ? 'Enabling…' : 'Enable Live Mode'}
+            {busy ? 'Awaiting native confirmation…' : 'Enable Live Mode'}
           </button>}
     >
       {isLive ? (
@@ -128,20 +142,12 @@ export function LiveModeModal({ open, onClose }: Props) {
           </div>
 
           <div className="dialog-section">
-            <div className="dialog-section-title">Typed confirmation</div>
-            <div className="form-row">
-              <label>Type exactly</label>
-              <input
-                type="text"
-                className="form-input"
-                value={phrase}
-                onChange={e => setPhrase(e.target.value)}
-                placeholder={CONFIRM_PHRASE}
-                autoComplete="off"
-              />
-            </div>
-            <div className={`form-hint ${phraseOk ? 'ok' : ''}`}>
-              Required phrase: <code style={{ color: 'var(--accent-glow)' }}>{CONFIRM_PHRASE}</code>
+            <div className="dialog-section-title">Final confirmation</div>
+            <div className="form-hint">
+              Clicking <strong>Enable Live Mode</strong> opens a native operating-system
+              dialog. Only your click on that dialog's <code>I accept real capital</code>
+              button authorizes the flip. The renderer (this UI) cannot complete the
+              enable on its own — this is the C6 hardening from the 2026-05-16 review.
             </div>
           </div>
         </>

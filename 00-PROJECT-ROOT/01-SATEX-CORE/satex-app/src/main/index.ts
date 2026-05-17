@@ -4,7 +4,7 @@
  * contextIsolation: true, nodeIntegration: false — renderer is sandboxed.
  * All renderer↔main communication flows through the typed IPC registry.
  */
-import { app, BrowserWindow, ipcMain, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -65,7 +65,6 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   log.warn('another SATEX instance is running — exiting')
   app.quit()
-  // eslint-disable-next-line no-process-exit
   process.exit(0)
 }
 
@@ -421,7 +420,7 @@ function validated<S extends ZodTypeAny, R>(
       // JSON.stringify can throw on circular refs / BigInt. Reject those too.
       if (e instanceof Error && e.message.startsWith('Invalid IPC payload')) throw e
       log.warn('ipc payload non-serializable', { err: String(e) })
-      throw new Error('Invalid IPC payload — not JSON-serializable')
+      throw new Error('Invalid IPC payload — not JSON-serializable', { cause: e })
     }
     const parsed = schema.safeParse(raw)
     if (!parsed.success) {
@@ -486,7 +485,44 @@ function registerIpcHandlers(): void {
 
   // ── Live mode (Phase 5) ──────────────────────────────────────────────────────
   ipcMain.handle(IPC.LIVE_MODE_GET, ()                              => engine.getLiveMode())
-  ipcMain.handle(IPC.LIVE_MODE_SET, validated(LiveModeSetReq, (req) => engine.setLiveMode(req)))
+  ipcMain.handle(IPC.LIVE_MODE_SET, validated(LiveModeSetReq, async (req) => {
+    // Adversarial finding C6 (2026-05-16) — XSS-resistant live-mode interlock.
+    // The renderer can REQUEST live-mode enable but only a click in this
+    // native Electron dialog can AUTHORIZE it. The dialog is rendered by the
+    // main process at OS level; renderer code (including XSS-injected news
+    // content, AI brain output, devtools-pasted scripts) cannot interact with
+    // it. This replaces the prior `confirmPhrase` string-equality check,
+    // which any in-process code could satisfy by hardcoding the known string.
+    if (req.enabled) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        log.warn('live mode enable refused — no main window for native dialog')
+        return { ok: false, reason: 'No window available to confirm live-mode enable' }
+      }
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['Cancel', 'I accept real capital'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'SATEX — Enable LIVE trading',
+        message: 'Route orders to real-capital broker?',
+        detail: [
+          `Endpoint:      https://api.alpaca.markets`,
+          `Per-order cap: $${req.notionalCap.toLocaleString()}`,
+          '',
+          'Every subsequent order will move real money.',
+          'Only your click on the button below can authorize this.',
+          'No renderer process, AI output, or injected script can bypass this dialog.',
+        ].join('\n'),
+        noLink: true,
+      })
+      if (response !== 1) {
+        log.warn('live mode enable cancelled at native dialog')
+        return { ok: false, reason: 'Cancelled at confirmation dialog — live mode unchanged' }
+      }
+      log.warn('live mode enable authorized via native dialog', { cap: req.notionalCap })
+    }
+    return engine.setLiveMode(req)
+  }))
 
   // ── Alpaca endpoint mode (paper vs live URL) ────────────────────────────────
   ipcMain.handle(IPC.ALPACA_MODE_GET, ()                                => engine.getAlpacaModeStatus())

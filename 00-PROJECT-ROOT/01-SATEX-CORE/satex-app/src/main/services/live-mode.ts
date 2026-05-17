@@ -1,8 +1,10 @@
 /**
  * SATEX — Live-mode interlock state machine.
  * Persists to userData/live-mode.json. Paper is the default; flipping to live
- * requires typed phrase + notional cap. Order manager enforces the cap when
- * isLive() is true.
+ * is gated by a native Electron dialog (see main/index.ts LIVE_MODE_SET
+ * handler — adversarial finding C6, 2026-05-16) plus the kill-switch and
+ * daily-loss checks below. Order manager enforces the per-order notional cap
+ * when isLive() is true.
  */
 import { app } from 'electron'
 import fs from 'fs'
@@ -12,7 +14,6 @@ import { ALPACA_PAPER_HOST } from '@shared/constants'
 import { createLogger } from './logger'
 
 const log = createLogger('live-mode')
-const CONFIRM_PHRASE = 'I ACCEPT REAL CAPITAL'
 const FILE = () => path.join(app.getPath('userData'), 'live-mode.json')
 const NOTIONAL_HARD_CAP = 50_000
 
@@ -47,8 +48,12 @@ export function setLiveMode(req: LiveModeSetRequest, ctx: { killArmed: boolean; 
     return { ok: true }
   }
 
-  // Enabling live mode requires every interlock
-  if (req.confirmPhrase.trim() !== CONFIRM_PHRASE) return { ok: false, reason: 'Confirmation phrase mismatch' }
+  // Enabling live mode requires every interlock. The user-presence check
+  // (formerly `confirmPhrase`) is now enforced upstream in main/index.ts via a
+  // native Electron dialog — adversarial finding C6 (2026-05-16). This
+  // function still validates the structural interlocks (kill switch, daily
+  // loss, cap range) so that direct callers in tests or future code paths
+  // can't sidestep them.
   if (ctx.killArmed) return { ok: false, reason: 'Kill switch is armed — disarm before enabling live mode' }
   const lossThreshold = -(ctx.equity * ctx.dailyLossLimitPct)
   if (ctx.dailyPnl < lossThreshold) return { ok: false, reason: `Daily loss limit reached (${ctx.dailyPnl.toFixed(2)} < ${lossThreshold.toFixed(2)})` }

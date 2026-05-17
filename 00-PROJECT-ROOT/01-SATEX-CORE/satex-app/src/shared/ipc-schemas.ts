@@ -104,11 +104,17 @@ export const BaiduSetReq = z.string().min(1).max(512)
 export type BaiduSetReq = z.infer<typeof BaiduSetReq>
 
 // ── Live mode ───────────────────────────────────────────────────────────────
+// `confirmPhrase` removed 2026-05-16 (adversarial finding C6). The renderer-
+// supplied string was bypassable by any code running in-process (XSS via
+// news content, AI brain output, devtools console). Live-mode enable now
+// requires a click in a native Electron modal that the renderer cannot
+// reach — see main/index.ts handler. `.strict()` rejects unknown fields
+// for defense-in-depth so a stale renderer trying to send `confirmPhrase`
+// gets an explicit error rather than a silent strip.
 export const LiveModeSetReq = z.object({
   enabled: z.boolean(),
   notionalCap: NonNegativeFiniteS.max(1_000_000),
-  confirmPhrase: z.string().max(128),
-})
+}).strict()
 export type LiveModeSetReq = z.infer<typeof LiveModeSetReq>
 
 // ── Alpaca endpoint mode ────────────────────────────────────────────────────

@@ -384,7 +384,9 @@ export interface LiveModeStatus {
 export interface LiveModeSetRequest {
   enabled: boolean
   notionalCap: number
-  confirmPhrase: string
+  // confirmPhrase removed 2026-05-16 (adversarial finding C6). Live-mode
+  // enable is now gated by a native Electron modal triggered from the main
+  // process — see main/index.ts IPC.LIVE_MODE_SET handler.
 }
 
 export interface CredentialsMaskedStatus {
