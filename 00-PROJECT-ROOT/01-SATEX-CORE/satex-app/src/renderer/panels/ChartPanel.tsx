@@ -311,6 +311,28 @@ export function ChartPanel() {
   /** Pattern-marker handle (lightweight-charts v5 createSeriesMarkers). */
   const markersHandleRef   = useRef<unknown>(null)
 
+  /** Per-indicator memoization. Each chunk in the reconciliation effect
+   *  stores its last-applied signature (view.length + relevant settings)
+   *  plus the notes/markers it produced. On the next reconciliation cycle,
+   *  if a chunk's signature matches its cached entry, the expensive
+   *  computation AND the chart-series update are skipped — only the cached
+   *  notes/markers are replayed into the shared outputs.
+   *
+   *  Drops the steady-state cost of "user toggled one indicator" from
+   *  recomputing all six down to recomputing only the one that changed.
+   *  Cleared automatically on chart re-init (the cleanup in the init
+   *  effect drops every ref → no stale series handles to chase). */
+  type IndicatorCache = { sig: string; notes: readonly string[] }
+  type PatternMarker = { time: unknown; position: string; color: string; shape: string; text: string }
+  type PatternCache  = IndicatorCache & { markers: readonly PatternMarker[] }
+  const indicatorCacheRef = useRef<{
+    ema?:      IndicatorCache
+    rsi?:      IndicatorCache
+    fib?:      IndicatorCache
+    pivots?:   IndicatorCache
+    patterns?: PatternCache
+  }>({})
+
   // Init chart once per mount. Indicator series are added by the
   // reconciliation effect below — this effect only creates the chart and
   // the main candlestick series.
@@ -466,33 +488,45 @@ export function ChartPanel() {
   // chart to match. Add missing series, remove unwanted, refresh data, update
   // colors.
   //
-  // 2026-05-16 perf fix — two changes addressing 100 ms+ frame stalls
-  // observed every ~1 s in the dev session (3 700+ `[perf] frame:long`
-  // samples accumulated over a long-running window):
+  // 2026-05-16 perf — five layered optimizations addressing the 100 ms+
+  // frame stalls this work caused every ~1 s in extended sessions:
   //
-  //   1. Heavy work (EMA × 4 periods + RSI + Fibonacci + Pivot Points +
-  //      double-top/bottom detection) runs at O(N²) for pattern detection,
-  //      which dominates at >300-bar views. We defer execution to
-  //      `requestIdleCallback` with a 500 ms timeout backstop so it can't
-  //      be starved indefinitely. Indicator math now waits for browser
-  //      idle and the next frame paints cleanly.
-  //   2. The dep array uses `view.length` (not `view`). Intra-bar
-  //      mutations from CANDLES_UPDATE isNew=false (in-place close
-  //      replacement) bump the view memo's ref but not its length —
-  //      indicators only care about closed-candle boundaries, so we skip
-  //      those re-runs. New-candle isNew=true events still bump length
-  //      and trigger reconciliation as expected.
+  //   1. Idle-callback scheduling — `window.requestIdleCallback` defers heavy
+  //      math past the current frame commit so the next paint isn't blocked.
+  //      500 ms timeout backstop prevents indefinite starvation.
+  //   2. Chunked execution — each indicator (EMA, RSI, Fibonacci, Pivot
+  //      Points, patterns, finalize) runs as its OWN idle callback. The
+  //      browser gets input/paint/IPC turns between chunks; no single
+  //      chunk monopolizes the main thread. Cascading scheduler in
+  //      `runNext` advances one step per callback.
+  //   3. Per-indicator memoization — each chunk has a signature key
+  //      (view.length + relevant settings + regime/HLC where applicable).
+  //      On sig hit, the chunk replays cached notes/markers without
+  //      recomputing or re-touching chart series. Toggling RSI no longer
+  //      recomputes EMA or rescans patterns; only the chunk whose inputs
+  //      changed pays compute cost.
+  //   4. Pattern detection capped to last PATTERN_WINDOW (200) bars — the
+  //      O(K × (K+N)) double-top/bottom scan would otherwise grow
+  //      unboundedly with view length. Sliding window keeps worst-case
+  //      stable. Indices remap (+ sliceStart) back to view-space so older
+  //      candles still receive their annotation positions.
+  //   5. Dep array on `view.length` (not `view`) — intra-bar mutations from
+  //      CANDLES_UPDATE isNew=false bump the view memo's ref but not its
+  //      length; indicators only care about closed-candle boundaries.
   useEffect(() => {
     let cancelled = false
-    const reconcile = (): void => {
-      if (cancelled) return
-    const chart  = chartRef.current as {
+    let pendingHandle: number | null = null
+
+    const chart = chartRef.current as {
       addSeries: (typ: unknown, opts: unknown, paneIndex?: number) => unknown
       removeSeries: (s: unknown) => void
       panes: () => Array<{ setHeight: (h: number) => void }>
     } | null
-    const lwc    = lwcModRef.current as { LineSeries: unknown; createSeriesMarkers?: (s: unknown, m: unknown[]) => unknown } | null
-    const main   = seriesRef.current as {
+    const lwc = lwcModRef.current as {
+      LineSeries: unknown
+      createSeriesMarkers?: (s: unknown, m: unknown[]) => unknown
+    } | null
+    const main = seriesRef.current as {
       createPriceLine: (opts: unknown) => unknown
       removePriceLine: (l: unknown) => void
       setMarkers?: (m: unknown[]) => void
@@ -500,68 +534,97 @@ export function ChartPanel() {
     if (!chart || !lwc || !main) return
     if (view.length === 0) return
 
-    const notes: string[] = []
     const indCandles = view as unknown as IndCandle[]
+    const PATTERN_WINDOW = 200
 
-    // ── 1. EMA series ─────────────────────────────────────────────────────────
-    const wantPeriods: number[] = indSettings.enabled.ema ? [...indSettings.emaPeriods] : []
-    const currentPeriods = Array.from(emaSeriesMap.current.keys())
-    // Remove EMAs we no longer want
-    for (const p of currentPeriods) {
-      if (!wantPeriods.includes(p)) {
-        try { chart.removeSeries(emaSeriesMap.current.get(p)) } catch { /* ignore */ }
-        emaSeriesMap.current.delete(p)
+    // Shared mutable outputs aggregated across chunks. Each chunk appends
+    // its notes; chunkPatterns also appends marker objects. chunkFinalize
+    // reads both at the end and applies them to the chart + warning UI.
+    const notes: string[] = []
+    const patternMarkers: PatternMarker[] = []
+    const cache = indicatorCacheRef.current
+
+    // ── Chunk 1: EMA series ────────────────────────────────────────────────
+    // Series add/remove (cheap) always runs so toggle response is instant.
+    // Only the per-period setData (expensive) is gated by signature.
+    const chunkEma = (): void => {
+      const wantPeriods: number[] = indSettings.enabled.ema ? [...indSettings.emaPeriods] : []
+      const currentPeriods = Array.from(emaSeriesMap.current.keys())
+      for (const p of currentPeriods) {
+        if (!wantPeriods.includes(p)) {
+          try { chart.removeSeries(emaSeriesMap.current.get(p)) } catch { /* ignore */ }
+          emaSeriesMap.current.delete(p)
+        }
       }
-    }
-    // Add/update enabled EMAs
-    for (const period of wantPeriods) {
-      const color = applyOpacity(emaColor, EMA_PERIOD_OPACITY[period] ?? 0.5)
-      let s = emaSeriesMap.current.get(period) as {
-        applyOptions: (o: unknown) => void
-        setData: (d: unknown) => void
-      } | undefined
-      if (!s) {
-        s = chart.addSeries(lwc.LineSeries, {
-          color,
-          lineWidth: 1.4,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          title: `EMA${period}`,
-        }) as typeof s
-        emaSeriesMap.current.set(period, s!)
+      const sig = `${view.length}|${[...wantPeriods].sort((a, b) => a - b).join(',')}|${emaColor}`
+      if (cache.ema?.sig === sig) {
+        notes.push(...cache.ema.notes)
+        return
       }
-      if (view.length < period) {
-        notes.push(`EMA${period} needs ${period} bars (have ${view.length})`)
-        try { s!.setData([]) } catch { /* ignore */ }
-        continue
+      const localNotes: string[] = []
+      for (const period of wantPeriods) {
+        const color = applyOpacity(emaColor, EMA_PERIOD_OPACITY[period] ?? 0.5)
+        let s = emaSeriesMap.current.get(period) as {
+          applyOptions: (o: unknown) => void
+          setData: (d: unknown) => void
+        } | undefined
+        if (!s) {
+          s = chart.addSeries(lwc.LineSeries, {
+            color, lineWidth: 1.4,
+            priceLineVisible: false, lastValueVisible: false,
+            title: `EMA${period}`,
+          }) as typeof s
+          emaSeriesMap.current.set(period, s!)
+        }
+        if (view.length < period) {
+          localNotes.push(`EMA${period} needs ${period} bars (have ${view.length})`)
+          try { s!.setData([]) } catch { /* ignore */ }
+          continue
+        }
+        const series = computeEmaSeries(indCandles, period)
+        const data: Array<{ time: unknown; value: number }> = []
+        for (let i = 0; i < series.values.length; i++) {
+          const v = series.values[i]!
+          if (Number.isFinite(v)) data.push({ time: view[i]!.time as unknown, value: v })
+        }
+        try {
+          s!.applyOptions({ color, title: `EMA${period}` })
+          s!.setData(data)
+        } catch { /* ignore */ }
       }
-      const series = computeEmaSeries(indCandles, period)
-      const data: Array<{ time: unknown; value: number }> = []
-      for (let i = 0; i < series.values.length; i++) {
-        const v = series.values[i]!
-        if (Number.isFinite(v)) data.push({ time: view[i]!.time as unknown, value: v })
-      }
-      try {
-        s!.applyOptions({ color, title: `EMA${period}` })
-        s!.setData(data)
-      } catch { /* ignore */ }
+      cache.ema = { sig, notes: localNotes }
+      notes.push(...localNotes)
     }
 
-    // ── 2. RSI sub-pane ───────────────────────────────────────────────────────
-    if (indSettings.enabled.rsi) {
+    // ── Chunk 2: RSI sub-pane ──────────────────────────────────────────────
+    const chunkRsi = (): void => {
+      if (!indSettings.enabled.rsi) {
+        if (rsiSeriesRef.current) {
+          try { chart.removeSeries(rsiSeriesRef.current) } catch { /* ignore */ }
+          rsiSeriesRef.current     = null
+          rsiOverboughtRef.current = null
+          rsiOversoldRef.current   = null
+        }
+        cache.rsi = { sig: 'off', notes: [] }
+        return
+      }
       const period = indSettings.rsiPeriod
+      const sig = `${view.length}|${period}`
+      if (cache.rsi?.sig === sig) {
+        notes.push(...cache.rsi.notes)
+        return
+      }
+      const localNotes: string[] = []
       if (view.length < period + 1) {
-        notes.push(`RSI${period} needs ${period + 1} bars (have ${view.length})`)
+        localNotes.push(`RSI${period} needs ${period + 1} bars (have ${view.length})`)
         if (rsiSeriesRef.current) {
           try { (rsiSeriesRef.current as { setData: (d: unknown) => void }).setData([]) } catch { /* ignore */ }
         }
       } else {
         if (!rsiSeriesRef.current) {
           const rsi = chart.addSeries(lwc.LineSeries, {
-            color: 'rgba(0,200,255,0.88)',
-            lineWidth: 1.2,
-            priceLineVisible: false,
-            lastValueVisible: true,
+            color: 'rgba(0,200,255,0.88)', lineWidth: 1.2,
+            priceLineVisible: false, lastValueVisible: true,
             title: `RSI${period}`,
           }, 1) as {
             createPriceLine: (o: unknown) => unknown
@@ -577,7 +640,6 @@ export function ChartPanel() {
             price: 30, color: 'rgba(33,201,122,0.55)', lineWidth: 1,
             lineStyle: 2, axisLabelVisible: true, title: '30',
           })
-          // Pane height — RSI gets a fixed slice so the main chart stays usable.
           try {
             const panes = chart.panes()
             if (panes[1]) panes[1].setHeight(110)
@@ -598,59 +660,86 @@ export function ChartPanel() {
           rsi.setData(data)
         } catch { /* ignore */ }
       }
-    } else if (rsiSeriesRef.current) {
-      // Disabled — tear down the sub-pane series.
-      try { chart.removeSeries(rsiSeriesRef.current) } catch { /* ignore */ }
-      rsiSeriesRef.current     = null
-      rsiOverboughtRef.current = null
-      rsiOversoldRef.current   = null
+      cache.rsi = { sig, notes: localNotes }
+      notes.push(...localNotes)
     }
 
-    // ── 3. Fibonacci retracement (horizontal price lines) ────────────────────
-    for (const l of fibLineRefs.current) {
-      try { main.removePriceLine(l) } catch { /* ignore */ }
-    }
-    fibLineRefs.current = []
-    if (indSettings.enabled.fibonacci) {
+    // ── Chunk 3: Fibonacci horizontal lines ────────────────────────────────
+    // Tear down + redraw ONLY on cache miss. On hit, the existing price
+    // lines stay on the chart and we just replay cached notes.
+    const chunkFib = (): void => {
+      if (!indSettings.enabled.fibonacci) {
+        for (const l of fibLineRefs.current) {
+          try { main.removePriceLine(l) } catch { /* ignore */ }
+        }
+        fibLineRefs.current = []
+        cache.fib = { sig: 'off', notes: [] }
+        return
+      }
       const lookback = indSettings.fibLookback
+      const sig = `${view.length}|${lookback}`
+      if (cache.fib?.sig === sig) {
+        notes.push(...cache.fib.notes)
+        return
+      }
+      for (const l of fibLineRefs.current) {
+        try { main.removePriceLine(l) } catch { /* ignore */ }
+      }
+      fibLineRefs.current = []
+      const localNotes: string[] = []
       if (view.length < lookback) {
-        notes.push(`Fibonacci needs ${lookback} bars (have ${view.length})`)
+        localNotes.push(`Fibonacci needs ${lookback} bars (have ${view.length})`)
       } else {
         const fib = computeFibonacci(indCandles, { lookback })
-        // computeFibonacci emits one level per FIB_RATIOS entry in order, so
-        // we can map index→ratio without parsing the label string.
         for (let i = 0; i < fib.levels.length; i++) {
           const lvl = fib.levels[i]!
           const ratio = FIB_RATIOS[i] ?? 0
           const color = FIB_COLORS[ratio] ?? 'rgba(160,160,168,0.55)'
           const line = main.createPriceLine({
-            price: lvl.price,
-            color,
+            price: lvl.price, color,
             lineWidth: ratio === 0.618 ? 2 : 1,
-            lineStyle: 0, // solid
+            lineStyle: 0,
             axisLabelVisible: true,
             title: `FIB ${(ratio * 100).toFixed(1)}`,
           })
           fibLineRefs.current.push(line)
         }
       }
+      cache.fib = { sig, notes: localNotes }
+      notes.push(...localNotes)
     }
 
-    // ── 4. Pivot Points (standard floor) ─────────────────────────────────────
-    for (const l of pivotLineRefs.current) {
-      try { main.removePriceLine(l) } catch { /* ignore */ }
-    }
-    pivotLineRefs.current = []
-    if (indSettings.enabled['pivot-points']) {
+    // ── Chunk 4: Pivot Points (PP + R1-R3 + S1-S3) ─────────────────────────
+    const chunkPivots = (): void => {
+      if (!indSettings.enabled['pivot-points']) {
+        for (const l of pivotLineRefs.current) {
+          try { main.removePriceLine(l) } catch { /* ignore */ }
+        }
+        pivotLineRefs.current = []
+        cache.pivots = { sig: 'off', notes: [] }
+        return
+      }
+      // Pivots derive purely from priorHlc + (chart-has-data) — view.length
+      // doesn't materially change the lines, but we encode "has data" so a
+      // brand-new chart redraws on first arrival.
+      const sig = `${priorHlc?.date ?? 'awaiting'}|${view.length > 0 ? 'ready' : 'empty'}`
+      if (cache.pivots?.sig === sig) {
+        notes.push(...cache.pivots.notes)
+        return
+      }
+      for (const l of pivotLineRefs.current) {
+        try { main.removePriceLine(l) } catch { /* ignore */ }
+      }
+      pivotLineRefs.current = []
+      const localNotes: string[] = []
       if (!priorHlc) {
-        notes.push('Pivot Points awaiting prior-day H/L/C')
+        localNotes.push('Pivot Points awaiting prior-day H/L/C')
       } else {
         const H = priorHlc.high, L = priorHlc.low, C = priorHlc.close
         const pp = (H + L + C) / 3
         const R1 = 2 * pp - L, S1 = 2 * pp - H
         const R2 = pp + (H - L), S2 = pp - (H - L)
         const R3 = H + 2 * (pp - L), S3 = L - 2 * (H - pp)
-        // Resistance stack (red gradient), pivot in cyan, support stack (green gradient).
         const levels: Array<{ price: number; title: string; color: string; width: number }> = [
           { price: R3, title: 'R3', color: 'rgba(255,70,85,0.42)', width: 1 },
           { price: R2, title: 'R2', color: 'rgba(255,70,85,0.62)', width: 1 },
@@ -662,81 +751,120 @@ export function ChartPanel() {
         ]
         for (const lvl of levels) {
           const line = main.createPriceLine({
-            price: lvl.price,
-            color: lvl.color,
-            lineWidth: lvl.width,
-            lineStyle: 2, // dashed
-            axisLabelVisible: true,
-            title: lvl.title,
+            price: lvl.price, color: lvl.color,
+            lineWidth: lvl.width, lineStyle: 2,
+            axisLabelVisible: true, title: lvl.title,
           })
           pivotLineRefs.current.push(line)
         }
       }
+      cache.pivots = { sig, notes: localNotes }
+      notes.push(...localNotes)
     }
 
-    // ── 5. Double Top / Double Bottom markers ────────────────────────────────
-    const markers: Array<{ time: unknown; position: string; color: string; shape: string; text: string }> = []
-    if (indSettings.enabled['double-top']) {
-      if (view.length < 20) {
-        notes.push('Double Top needs ≥20 bars')
-      } else {
-        const tops = detectDoubleTops(indCandles)
-        for (const t of tops) {
-          const confirmed = t.breakIndex != null
-          markers.push({
-            time: view[t.pointB.index]!.time as unknown,
-            position: 'aboveBar',
-            color: confirmed ? '#ff4655' : 'rgba(255,70,85,0.55)',
-            shape: confirmed ? 'arrowDown' : 'circle',
-            text:  confirmed ? `2T ${t.pointB.price.toFixed(2)} ✓` : `2T ${t.pointB.price.toFixed(2)}`,
-          })
+    // ── Chunk 5: Double Top / Double Bottom markers ────────────────────────
+    // Pattern detection runs on a sliding window of the last PATTERN_WINDOW
+    // bars (was: full view, which scaled unboundedly with session length).
+    // Indices returned by the detector are window-relative; we add
+    // sliceStart to map them back into view-space before marker placement.
+    const chunkPatterns = (): void => {
+      const dtEnabled = indSettings.enabled['double-top']
+      const dbEnabled = indSettings.enabled['double-bottom']
+      const sig = `${view.length}|${dtEnabled ? 'dt' : ''}|${dbEnabled ? 'db' : ''}`
+      if (cache.patterns?.sig === sig) {
+        notes.push(...cache.patterns.notes)
+        patternMarkers.push(...cache.patterns.markers)
+        return
+      }
+      const localNotes: string[] = []
+      const localMarkers: PatternMarker[] = []
+      if (dtEnabled || dbEnabled) {
+        if (view.length < 20) {
+          if (dtEnabled) localNotes.push('Double Top needs ≥20 bars')
+          if (dbEnabled) localNotes.push('Double Bottom needs ≥20 bars')
+        } else {
+          const sliceStart = Math.max(0, indCandles.length - PATTERN_WINDOW)
+          const patternView = sliceStart === 0 ? indCandles : indCandles.slice(sliceStart)
+          if (dtEnabled) {
+            const tops = detectDoubleTops(patternView)
+            for (const t of tops) {
+              const confirmed = t.breakIndex != null
+              const viewIdx = t.pointB.index + sliceStart
+              if (viewIdx >= view.length) continue
+              localMarkers.push({
+                time: view[viewIdx]!.time as unknown,
+                position: 'aboveBar',
+                color: confirmed ? '#ff4655' : 'rgba(255,70,85,0.55)',
+                shape: confirmed ? 'arrowDown' : 'circle',
+                text:  confirmed ? `2T ${t.pointB.price.toFixed(2)} ✓` : `2T ${t.pointB.price.toFixed(2)}`,
+              })
+            }
+          }
+          if (dbEnabled) {
+            const bots = detectDoubleBottoms(patternView)
+            for (const b of bots) {
+              const confirmed = b.breakIndex != null
+              const viewIdx = b.pointB.index + sliceStart
+              if (viewIdx >= view.length) continue
+              localMarkers.push({
+                time: view[viewIdx]!.time as unknown,
+                position: 'belowBar',
+                color: confirmed ? '#21c97a' : 'rgba(33,201,122,0.55)',
+                shape: confirmed ? 'arrowUp' : 'circle',
+                text:  confirmed ? `2B ${b.pointB.price.toFixed(2)} ✓` : `2B ${b.pointB.price.toFixed(2)}`,
+              })
+            }
+          }
         }
       }
-    }
-    if (indSettings.enabled['double-bottom']) {
-      if (view.length < 20) {
-        notes.push('Double Bottom needs ≥20 bars')
-      } else {
-        const bots = detectDoubleBottoms(indCandles)
-        for (const b of bots) {
-          const confirmed = b.breakIndex != null
-          markers.push({
-            time: view[b.pointB.index]!.time as unknown,
-            position: 'belowBar',
-            color: confirmed ? '#21c97a' : 'rgba(33,201,122,0.55)',
-            shape: confirmed ? 'arrowUp' : 'circle',
-            text:  confirmed ? `2B ${b.pointB.price.toFixed(2)} ✓` : `2B ${b.pointB.price.toFixed(2)}`,
-          })
-        }
-      }
-    }
-    // Lightweight-charts v5 moved markers to a separate helper —
-    // `createSeriesMarkers(series, markers)` returns a handle whose
-    // `.setMarkers(next)` updates in place. The v4 path is `series.setMarkers`.
-    try {
-      if (lwc.createSeriesMarkers) {
-        if (markersHandleRef.current) {
-          (markersHandleRef.current as { setMarkers: (m: unknown[]) => void }).setMarkers(markers)
-        } else if (markers.length > 0) {
-          markersHandleRef.current = lwc.createSeriesMarkers(main, markers)
-        }
-      } else if (typeof main.setMarkers === 'function') {
-        main.setMarkers(markers)
-      }
-    } catch (e) {
-      console.warn('[chart] pattern marker render failed:', e)
+      cache.patterns = { sig, notes: localNotes, markers: localMarkers }
+      notes.push(...localNotes)
+      patternMarkers.push(...localMarkers)
     }
 
-    setWarnings(notes)
+    // ── Chunk 6: finalize — apply markers + publish warnings ───────────────
+    const chunkFinalize = (): void => {
+      // Lightweight-charts v5 moved markers to a separate helper;
+      // createSeriesMarkers(series, markers) returns a handle whose
+      // .setMarkers(next) updates in place. The v4 path is series.setMarkers.
+      try {
+        if (lwc.createSeriesMarkers) {
+          if (markersHandleRef.current) {
+            (markersHandleRef.current as { setMarkers: (m: unknown[]) => void }).setMarkers(patternMarkers)
+          } else if (patternMarkers.length > 0) {
+            markersHandleRef.current = lwc.createSeriesMarkers(main, patternMarkers)
+          }
+        } else if (typeof main.setMarkers === 'function') {
+          main.setMarkers(patternMarkers)
+        }
+      } catch (e) {
+        console.warn('[chart] pattern marker render failed:', e)
+      }
+      setWarnings(notes)
     }
-    // Schedule reconcile during browser idle time. Electron's Chromium
-    // runtime (32+) ships requestIdleCallback natively, so no fallback
-    // probe is needed. The 500 ms timeout backstop guarantees the work
-    // can't be starved indefinitely if the main thread stays busy.
-    const handle = window.requestIdleCallback(reconcile, { timeout: 500 })
+
+    // ── Cascading idle-callback scheduler ──────────────────────────────────
+    const chunks: ReadonlyArray<() => void> = [
+      chunkEma, chunkRsi, chunkFib, chunkPivots, chunkPatterns, chunkFinalize,
+    ]
+    let idx = 0
+    const runNext = (): void => {
+      if (cancelled) return
+      if (idx >= chunks.length) { pendingHandle = null; return }
+      try { chunks[idx]!() }
+      catch (e) { console.error('[chart] reconcile chunk crashed:', e) }
+      idx++
+      if (idx < chunks.length) {
+        pendingHandle = window.requestIdleCallback(runNext, { timeout: 500 })
+      } else {
+        pendingHandle = null
+      }
+    }
+    pendingHandle = window.requestIdleCallback(runNext, { timeout: 500 })
+
     return () => {
       cancelled = true
-      window.cancelIdleCallback(handle)
+      if (pendingHandle != null) window.cancelIdleCallback(pendingHandle)
     }
   }, [view.length, indSettings, dominantRegime, emaColor, priorHlc])
 
