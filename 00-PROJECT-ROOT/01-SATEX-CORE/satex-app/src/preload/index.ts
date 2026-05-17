@@ -39,6 +39,7 @@ const satexApi = {
   // ── Push listeners (main → renderer) ──────────────────────────────────────
   onQuotesTick:         (cb: (quotes: Quote[]) => void)                               => on(IPC.QUOTES_TICK,        cb),
   onCandlesUpdate:      (cb: (data: { symbol: string; candle: Candle; isNew: boolean }) => void) => on(IPC.CANDLES_UPDATE, cb),
+  onCandlesBulkReplace: (cb: (data: { symbol: string; candles: Candle[] }) => void)               => on(IPC.CANDLES_BULK_REPLACE, cb),
   onNewsAppend:         (cb: (item: unknown) => void)                                 => on(IPC.NEWS_APPEND,        cb),
   onSystemStatus:       (cb: (status: SystemStatus) => void)                          => on(IPC.SYSTEM_STATUS,      cb),
   onAccountUpdate:      (cb: (account: Account) => void)                              => on(IPC.ACCOUNT_UPDATE,     cb),

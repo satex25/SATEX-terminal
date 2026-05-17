@@ -15,6 +15,11 @@ interface MarketState {
   setSymbol: (s: string) => void
   updateQuotes:  (quotes: Quote[]) => void
   updateCandle:  (symbol: string, candle: Candle, isNew: boolean) => void
+  /** Bulk-replace the candle history for a symbol in ONE update. Used by
+   *  the ReplaySource warmup path so a full day's worth of historical bars
+   *  swaps in via a single React update instead of ~hundreds of thousands
+   *  of per-candle calls (which wedged the renderer at 1012ms/frame). */
+  bulkReplaceCandles: (symbol: string, candles: Candle[]) => void
   appendNews:    (item: NewsItem) => void
   seedQuotes:    (quotes: Quote[]) => void
   /** Wipe candle history. Called when the data source swaps (live ↔ replay)
@@ -70,6 +75,18 @@ export const useMarketStore = create<MarketState>((set) => ({
     }
     const m = new Map(state.candles)
     m.set(symbol, next)
+    return { candles: m }
+  }),
+
+  bulkReplaceCandles: (symbol, candles) => set(state => {
+    // One assignment per symbol, one Map clone, one React update —
+    // replaces the previous per-candle updateCandle flood that copied
+    // a 30K-entry array on every event during warmup.
+    const trimmed = candles.length > MAX_CANDLES
+      ? candles.slice(-MAX_CANDLES)
+      : candles
+    const m = new Map(state.candles)
+    m.set(symbol, trimmed)
     return { candles: m }
   }),
 

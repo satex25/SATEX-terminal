@@ -59,24 +59,27 @@ describe('ReplaySource.warmup — sparse-tape regression', () => {
     )
 
     const replay = new ReplaySource('test')
-    const closedTimes: number[] = []
-    replay.onCandle((sym, c, isNew) => {
-      if (sym === SYM && !isNew) closedTimes.push(c.time)
+    // Warmup now emits via the BULK channel (per-bucket candleListener
+    // emits are suppressed to spare the IPC pipeline). Assert the full
+    // snapshot arrives in one call.
+    const bulkSnapshots: Array<{ sym: string; candles: number }> = []
+    let bulkCandles: number[] = []
+    replay.onBulkCandlesReplace((sym, candles) => {
+      bulkSnapshots.push({ sym, candles: candles.length })
+      if (sym === SYM) bulkCandles = candles.map(c => c.time)
     })
 
     // Seek to (near) the end of tape — triggers warmup over the whole range.
     replay.seek(T0 + TAPE_LEN_MS - 1)
 
-    // Pre-fix: warmup exited after first 30s → ~30 closed candles around T0.
-    // Post-fix: full 3600 seconds of buckets get rolled for NVDA.
-    expect(closedTimes.length).toBeGreaterThan(3500)
+    // Pre-fix: warmup exited after first 30s → bulk snapshot would carry
+    // <40 candles for NVDA. Post-fix: full 3600 1s buckets get rolled.
+    const nvda = bulkSnapshots.find(s => s.sym === SYM)
+    expect(nvda).toBeDefined()
+    expect(nvda!.candles).toBeGreaterThan(3500)
 
-    const minT = Math.min(...closedTimes)
-    const maxT = Math.max(...closedTimes)
-    const spanSec = maxT - minT
+    const spanSec = Math.max(...bulkCandles) - Math.min(...bulkCandles)
     // candle.time is in seconds (SIMULATOR_CANDLE_INTERVAL_SEC = 1).
-    // The pre-fix bug capped spanSec at ~30; post-fix it spans the full hour
-    // (3599 seconds, allowing for the in-flight final bucket).
     expect(spanSec).toBeGreaterThan(3500)
   })
 
@@ -104,12 +107,12 @@ describe('ReplaySource.warmup — sparse-tape regression', () => {
     )
 
     const replay = new ReplaySource('test')
-    let calls = 0
-    replay.onCandle(() => { calls++ })
+    let bulkCalls = 0
+    replay.onBulkCandlesReplace(() => { bulkCalls++ })
     replay.seek(T0 + ROWS - 1)
 
     // We don't care about the exact count — just that warmup completed
-    // without hitting the safety bound and emitted plenty of events.
-    expect(calls).toBeGreaterThan(0)
+    // without hitting the safety bound and produced a bulk snapshot.
+    expect(bulkCalls).toBeGreaterThanOrEqual(1)
   })
 })

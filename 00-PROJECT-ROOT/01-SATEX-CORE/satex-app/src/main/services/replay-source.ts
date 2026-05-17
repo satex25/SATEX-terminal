@@ -104,9 +104,18 @@ export class ReplaySource implements MarketDataSource {
   private emittedTicks = 0
 
   // ── Listeners ───────────────────────────────────────────────────────────────
-  private quoteListeners  = new Set<(q: Quote[]) => void>()
-  private candleListeners = new Set<(s: string, c: Candle, isNew: boolean) => void>()
-  private newsListeners   = new Set<(n: NewsItem) => void>()
+  private quoteListeners       = new Set<(q: Quote[]) => void>()
+  private candleListeners      = new Set<(s: string, c: Candle, isNew: boolean) => void>()
+  /** Bulk-snapshot listeners — fired once per symbol at the end of warmup
+   *  with the full candle history. The per-bucket candleListeners are
+   *  suppressed during warmup; bulk listeners replace them so the renderer
+   *  can swap in a full day's worth of bars in a single React update. */
+  private bulkReplaceListeners = new Set<(s: string, candles: Candle[]) => void>()
+  private newsListeners        = new Set<(n: NewsItem) => void>()
+  /** Set while warmup is running so maybeRollCandle skips its per-bucket
+   *  candleListener emits. The bulk-replace path emits one event per
+   *  symbol at the END of warmup instead. */
+  private suppressCandleEmits = false
 
   // ── Hooks for the controller ────────────────────────────────────────────────
   /** Optional callback fired after each emission, for cheap status pushes. */
@@ -150,11 +159,16 @@ export class ReplaySource implements MarketDataSource {
     this.prefetched = []
     this.quoteListeners.clear()
     this.candleListeners.clear()
+    this.bulkReplaceListeners.clear()
     this.newsListeners.clear()
   }
 
   onQuotes(fn: (q: Quote[]) => void):                       Unsub { this.quoteListeners.add(fn);  return () => this.quoteListeners.delete(fn) }
   onCandle(fn: (s: string, c: Candle, n: boolean) => void): Unsub { this.candleListeners.add(fn); return () => this.candleListeners.delete(fn) }
+  onBulkCandlesReplace(fn: (s: string, candles: Candle[]) => void): Unsub {
+    this.bulkReplaceListeners.add(fn)
+    return () => this.bulkReplaceListeners.delete(fn)
+  }
   onNews(fn: (n: NewsItem) => void):                        Unsub { this.newsListeners.add(fn);   return () => this.newsListeners.delete(fn) }
   /** P0-1 footprint — replay tape lacks per-trade side info, so this source
    *  emits nothing. Renderer treats an empty trade stream as "no delta data
@@ -291,34 +305,57 @@ export class ReplaySource implements MarketDataSource {
     // 8000) it fired after the first page, so only ~30 seconds of an 8h day
     // was warmed up. Now we iterate by fixed 30s pages until cursor > target,
     // and only paginate INSIDE a window when we actually hit the 8000 cap.
-    const PAGE_MS = 30_000
-    const PAGE_ROW_LIMIT = 8000
-    let pageStart = this.tapeStartTs
-    while (pageStart <= targetTs) {
-      const pageEnd = Math.min(targetTs, pageStart + PAGE_MS)
-      let innerCursor = pageStart
-      // Drain this window. Loops only when we hit the row cap (extremely
-      // unlikely in practice — live tape is ~48 rows/sec at 12 symbols, 30s
-      // = 1440 rows; synthetic historical tape is ~24 rows). Safety bound
-      // prevents pathological lock-up on a future schema change.
-      for (let safety = 0; safety < 50; safety++) {
-        const rows = db.readTapeRange(this.sessionId, innerCursor, pageEnd, PAGE_ROW_LIMIT)
-        if (rows.length === 0) break
-        for (const r of rows) {
-          this.applyTape(r, /*emitCandleListener=*/ false)
-          this.cursorTs = r.ts
-          this.maybeRollCandle()
+    //
+    // 2026-05-17 (2) — suppress per-bucket candleListener emits during the
+    // walk; the full-day warmup would otherwise fire ~hundreds of thousands
+    // of CANDLES_UPDATE events through the IPC pipeline and wedge the
+    // renderer (observed: 1012ms/frame). The bulk-replace emit at the END
+    // of this method takes the place of those events — one snapshot per
+    // symbol with the full candle history.
+    this.suppressCandleEmits = true
+    try {
+      const PAGE_MS = 30_000
+      const PAGE_ROW_LIMIT = 8000
+      let pageStart = this.tapeStartTs
+      while (pageStart <= targetTs) {
+        const pageEnd = Math.min(targetTs, pageStart + PAGE_MS)
+        let innerCursor = pageStart
+        // Drain this window. Loops only when we hit the row cap (extremely
+        // unlikely in practice — live tape is ~48 rows/sec at 12 symbols, 30s
+        // = 1440 rows; synthetic historical tape is ~24 rows). Safety bound
+        // prevents pathological lock-up on a future schema change.
+        for (let safety = 0; safety < 50; safety++) {
+          const rows = db.readTapeRange(this.sessionId, innerCursor, pageEnd, PAGE_ROW_LIMIT)
+          if (rows.length === 0) break
+          for (const r of rows) {
+            this.applyTape(r, /*emitCandleListener=*/ false)
+            this.cursorTs = r.ts
+            this.maybeRollCandle()
+          }
+          if (rows.length < PAGE_ROW_LIMIT) break
+          innerCursor = rows[rows.length - 1]!.ts + 1
         }
-        if (rows.length < PAGE_ROW_LIMIT) break
-        innerCursor = rows[rows.length - 1]!.ts + 1
+        pageStart = pageEnd + 1
       }
-      pageStart = pageEnd + 1
+    } finally {
+      this.suppressCandleEmits = false
     }
-    // Final emit: each symbol's in-flight candle (mid-bucket close) so the
-    // chart shows the latest bar without waiting for the next bucket roll.
+
+    // Bulk emit — one snapshot per symbol with the full warmed-up history.
+    // Subscribers that need per-bucket updates (none in current codebase)
+    // are explicitly NOT served during warmup; this trades per-event fidelity
+    // for renderer health. The full s.candles[] plus the in-flight
+    // currentCandle is the complete picture at targetTs.
     for (const [sym, s] of this.states) {
       if (s.lastEmittedTs === 0) continue
-      for (const l of this.candleListeners) l(sym, s.currentCandle, true)
+      const full: Candle[] = [...s.candles, s.currentCandle]
+      for (const l of this.bulkReplaceListeners) l(sym, full)
+      // Fall back to a single per-event emit for any candleListener that
+      // wasn't replaced by a bulk subscriber — preserves the original
+      // contract ("at least one in-flight candle visible after warmup").
+      if (this.bulkReplaceListeners.size === 0) {
+        for (const l of this.candleListeners) l(sym, s.currentCandle, true)
+      }
     }
     this.cursorTs = targetTs
     this.currentCandleStart = Math.floor(targetTs / 1000 / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
@@ -438,11 +475,19 @@ export class ReplaySource implements MarketDataSource {
         if (s.lastEmittedTs === 0) continue
         const closed = { ...s.currentCandle }
         s.candles.push(closed)
-        if (s.candles.length > 2000) s.candles.shift()
-        for (const l of this.candleListeners) l(sym, closed, false)
+        // 30k matches the renderer's MAX_CANDLES — covers a full 8h US
+        // session at 1-second granularity (~28.8k buckets) with headroom.
+        // Pre-fix this was 2000 (~33 min), which silently truncated the
+        // bulk emit even when warmup made it through the full day.
+        if (s.candles.length > 30_000) s.candles.shift()
+        if (!this.suppressCandleEmits) {
+          for (const l of this.candleListeners) l(sym, closed, false)
+        }
         const next: Candle = { time: nextBucket, open: closed.close, high: closed.close, low: closed.close, close: closed.close, volume: 0 }
         s.currentCandle = next
-        for (const l of this.candleListeners) l(sym, next, true)
+        if (!this.suppressCandleEmits) {
+          for (const l of this.candleListeners) l(sym, next, true)
+        }
       }
       this.currentCandleStart = nextBucket
       safety++

@@ -172,6 +172,9 @@ export class TradingEngine {
   // Push listeners — main/index.ts subscribes here
   private quoteListeners:  Set<QuotesBatchListener> = new Set()
   private candleListeners: Set<CandleListener>      = new Set()
+  /** Bulk-snapshot path — fires once per symbol when ReplaySource.warmup
+   *  finishes. main/index.ts forwards to renderer via CANDLES_BULK_REPLACE. */
+  private bulkCandlesListeners: Set<(symbol: string, candles: Candle[]) => void> = new Set()
   private newsListeners:   Set<NewsListener>        = new Set()
   private accountListeners:Set<AccountListener>     = new Set()
   private ordersListeners: Set<OrdersListener>      = new Set()
@@ -501,6 +504,10 @@ export class TradingEngine {
   // ── Subscription API ────────────────────────────────────────────────────────
   onQuotes(fn: QuotesBatchListener):  () => void { this.quoteListeners.add(fn);   return () => this.quoteListeners.delete(fn) }
   onCandle(fn: CandleListener):       () => void { this.candleListeners.add(fn);  return () => this.candleListeners.delete(fn) }
+  onBulkCandlesReplace(fn: (symbol: string, candles: Candle[]) => void): () => void {
+    this.bulkCandlesListeners.add(fn)
+    return () => this.bulkCandlesListeners.delete(fn)
+  }
   onNews(fn: NewsListener):           () => void { this.newsListeners.add(fn);    return () => this.newsListeners.delete(fn) }
   onAccount(fn: AccountListener):     () => void { this.accountListeners.add(fn); return () => this.accountListeners.delete(fn) }
   onOrders(fn: OrdersListener):       () => void { this.ordersListeners.add(fn);  return () => this.ordersListeners.delete(fn) }
@@ -1127,6 +1134,15 @@ export class TradingEngine {
     this.marketSubs.push(source.onCandle((sym, c, isNew) => {
       for (const l of this.candleListeners) l(sym, c, isNew)
     }))
+    // Bulk-snapshot path (ReplaySource only — LiveMarket/Simulator don't
+    // implement this). Fans to engine-level bulk listeners that the main
+    // IPC layer subscribes to. Skips silently when the source doesn't
+    // expose the optional method.
+    if (typeof source.onBulkCandlesReplace === 'function') {
+      this.marketSubs.push(source.onBulkCandlesReplace((sym, candles) => {
+        for (const l of this.bulkCandlesListeners) l(sym, candles)
+      }))
+    }
     this.marketSubs.push(source.onNews((item) => {
       for (const l of this.newsListeners) l(item)
     }))

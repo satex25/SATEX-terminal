@@ -10,6 +10,13 @@ export const IPC = {
   // ── Push: main → renderer ─────────────────────────────────────────────────
   QUOTES_TICK:        'satex:quotes:tick',
   CANDLES_UPDATE:     'satex:candles:update',
+  /** Bulk-replace the candle history for a single symbol in ONE event.
+   *  Used by ReplaySource.warmup so the renderer can swap in a full day
+   *  of historical bars without processing per-candle updates (which
+   *  wedges the renderer at hundreds of thousands of events). The live
+   *  tick path stays on CANDLES_UPDATE for low-latency single-bar
+   *  appends. */
+  CANDLES_BULK_REPLACE: 'satex:candles:bulkReplace',
   NEWS_APPEND:        'satex:news:append',
   SYSTEM_STATUS:      'satex:system:status',
   ACCOUNT_UPDATE:     'satex:account:update',
@@ -181,6 +188,7 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC]
 export const PUSH_CHANNELS = [
   IPC.QUOTES_TICK,
   IPC.CANDLES_UPDATE,
+  IPC.CANDLES_BULK_REPLACE,
   IPC.NEWS_APPEND,
   IPC.SYSTEM_STATUS,
   IPC.ACCOUNT_UPDATE,

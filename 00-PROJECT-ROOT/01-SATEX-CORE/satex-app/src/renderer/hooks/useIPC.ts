@@ -17,7 +17,7 @@ import { useFootprintStore } from '../stores/footprintStore'
 import type { NewsItem, ReplayMode, ClosedTrade, Trade } from '@shared/types'
 
 export function useIPC(): void {
-  const { updateQuotes, updateCandle, appendNews, resetCandles } = useMarketStore()
+  const { updateQuotes, updateCandle, bulkReplaceCandles, appendNews, resetCandles } = useMarketStore()
   const { setAccount, setOrders, setStatus, setAutonomous } = useAccountStore()
   const setRegime    = useRegimeStore(s => s.setSnapshot)
   const setRiskGates = useRiskGatesStore(s => s.setSnapshot)
@@ -35,6 +35,12 @@ export function useIPC(): void {
     // ── Legacy push subscriptions ──────────────────────────────────────────
     const unsubQuotes  = window.satex.onQuotesTick((quotes) => updateQuotes(quotes))
     const unsubCandles = window.satex.onCandlesUpdate(({ symbol, candle, isNew }) => updateCandle(symbol, candle, isNew))
+    // Bulk-replace channel — one event per symbol with the full warmed-up
+    // history. Currently fired only by ReplaySource.warmup; safe to leave
+    // subscribed always (the live tick path doesn't emit on this channel).
+    const unsubCandlesBulk = window.satex.onCandlesBulkReplace?.(({ symbol, candles }) => {
+      bulkReplaceCandles(symbol, candles)
+    }) ?? (() => {})
     const unsubNews    = window.satex.onNewsAppend((item) => appendNews(item as NewsItem))
     const unsubAccount = window.satex.onAccountUpdate(setAccount)
     const unsubOrders  = window.satex.onOrdersUpdate(setOrders)
@@ -85,6 +91,7 @@ export function useIPC(): void {
     return () => {
       unsubQuotes()
       unsubCandles()
+      unsubCandlesBulk()
       unsubNews()
       unsubAccount()
       unsubOrders()

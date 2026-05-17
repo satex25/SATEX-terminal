@@ -359,6 +359,7 @@ let lastRegimeState:    string | null = null
 function wireEngineEvents(): void {
   engine.onQuotes((quotes)            => push(IPC.QUOTES_TICK,   quotes))
   engine.onCandle((sym, candle, isNew)=> push(IPC.CANDLES_UPDATE, { symbol: sym, candle, isNew }))
+  engine.onBulkCandlesReplace((sym, candles) => push(IPC.CANDLES_BULK_REPLACE, { symbol: sym, candles }))
   engine.onNews((item)                => push(IPC.NEWS_APPEND,    item))
   engine.onAccount((account)          => {
     push(IPC.ACCOUNT_UPDATE, account)

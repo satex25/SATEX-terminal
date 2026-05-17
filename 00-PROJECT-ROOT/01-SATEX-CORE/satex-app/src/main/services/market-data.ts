@@ -30,6 +30,11 @@ export interface MarketDataSource {
   stop(): void
   onQuotes(fn: (quotes: Quote[]) => void): Unsub
   onCandle(fn: (symbol: string, candle: Candle, isNew: boolean) => void): Unsub
+  /** Optional bulk-snapshot stream — fires once per symbol with the full
+   *  candle history when a source has a "warmed up" moment (currently only
+   *  ReplaySource after seek). LiveMarket and MarketSimulator don't
+   *  implement this; subscribers must tolerate the listener never firing. */
+  onBulkCandlesReplace?(fn: (symbol: string, candles: Candle[]) => void): Unsub
   onNews(fn: (item: NewsItem) => void): Unsub
   /** P0-1 Footprint — per-trade event stream. MarketSimulator infers from
    *  tick direction; LiveMarket forwards Alpaca SIP trades when entitled;
