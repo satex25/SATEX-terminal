@@ -140,6 +140,134 @@ export function setAlpacaCreds(req: CredentialsSetRequest): { ok: boolean; reaso
   return { ok: true }
 }
 
+/**
+ * Pure parser — extracted from `migratePlaintextEnvLocalCreds` so the
+ * line-stripping logic can be unit-tested without fs / safeStorage mocks.
+ *
+ * Scans the .env.local body for ALPACA_KEY_ID / ALPACA_SECRET_KEY /
+ * ALPACA_FEED. Returns:
+ *   - `found`: the extracted values (empty strings when missing)
+ *   - `residueText`: the file body with those three keys removed; preserves
+ *     comments, blank lines, and any other key=value pairs the user has
+ *
+ * Handles: optional `export ` prefix, single- and double-quoted values, `#`
+ * full-line comments, CRLF line endings.
+ *
+ * Does NOT handle: inline `#` comments after a value, multi-line values,
+ * escaped quotes — none of the three Alpaca tokens use those constructs.
+ */
+export function parseEnvLocalForAlpacaKeys(text: string): {
+  found: { keyId: string; secretKey: string; feed: 'iex' | 'sip' }
+  residueText: string
+} {
+  const ALPACA_KEYS = new Set(['ALPACA_KEY_ID', 'ALPACA_SECRET_KEY', 'ALPACA_FEED'])
+  // Preserve the user's line endings — split on \r?\n and remember which
+  // separator each original line had so we can rejoin without converting
+  // CRLF → LF on Windows.
+  const lines = text.split(/\r?\n/)
+  const raw: Record<string, string> = {}
+  const keepIdx: number[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line     = lines[i]!
+    const stripped = line.replace(/^\s*export\s+/, '').trim()
+    if (!stripped || stripped.startsWith('#')) { keepIdx.push(i); continue }
+    const eq = stripped.indexOf('=')
+    if (eq <= 0)                                { keepIdx.push(i); continue }
+    const key = stripped.slice(0, eq).trim()
+    if (!ALPACA_KEYS.has(key))                  { keepIdx.push(i); continue }
+    let val = stripped.slice(eq + 1).trim()
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1)
+    }
+    raw[key] = val
+    // Do NOT push i — this line is to be removed.
+  }
+  const feedRaw = raw['ALPACA_FEED'] ?? 'iex'
+  return {
+    found: {
+      keyId:     raw['ALPACA_KEY_ID']     ?? '',
+      secretKey: raw['ALPACA_SECRET_KEY'] ?? '',
+      feed:      feedRaw === 'sip' ? 'sip' : 'iex',
+    },
+    residueText: keepIdx.map(i => lines[i]!).join('\n'),
+  }
+}
+
+/**
+ * Migrate plaintext Alpaca credentials out of `<userData>/.env.local` into
+ * safeStorage. Some users paste keys directly into the env file (it's the
+ * documented dev-mode path) and the file stays on disk in cleartext after
+ * the first run. This helper:
+ *
+ *   1. Reads userData/.env.local (silently no-ops when absent).
+ *   2. Scans for ALPACA_KEY_ID / ALPACA_SECRET_KEY / ALPACA_FEED lines.
+ *   3. If BOTH key+secret are present and non-empty, persists them into
+ *      safeStorage via setAlpacaCreds(paper-slot).
+ *   4. Strips those three lines from the file and rewrites — or deletes the
+ *      file entirely when nothing meaningful remains after the strip.
+ *
+ * Only the userData copy is touched. The dev-checkout `.env.local` at
+ * `process.cwd()` is intentionally left alone because it lives outside the
+ * user-installed surface and is the documented developer path.
+ *
+ * Idempotent: a subsequent run finds nothing to migrate. Failure modes
+ * (safeStorage unavailable, fs error) leave the file untouched so the user
+ * still has a usable fallback path and can re-attempt on a healthy machine.
+ *
+ * Returns the migration outcome for the boot log.
+ */
+export function migratePlaintextEnvLocalCreds(): {
+  status: 'no-file' | 'no-keys' | 'migrated' | 'skipped-no-encryption' | 'error'
+  detail?: string
+} {
+  const envPath = file('.env.local')
+  if (!fs.existsSync(envPath)) return { status: 'no-file' }
+
+  let text: string
+  try { text = fs.readFileSync(envPath, 'utf8') }
+  catch (e) {
+    log.warn('env.local migration: read failed', { err: String(e) })
+    return { status: 'error', detail: String(e) }
+  }
+
+  const { found, residueText } = parseEnvLocalForAlpacaKeys(text)
+  if (!found.keyId || !found.secretKey) return { status: 'no-keys' }
+
+  if (!safeStorage.isEncryptionAvailable()) {
+    // Don't strip plaintext from a file we can't replace with an encrypted
+    // copy — the user would lose access to their keys without warning.
+    log.warn('env.local migration: safeStorage unavailable, leaving plaintext in place')
+    return { status: 'skipped-no-encryption' }
+  }
+
+  const res = setAlpacaCreds({ keyId: found.keyId, secretKey: found.secretKey, feed: found.feed, mode: 'paper' })
+  if (!res.ok) {
+    log.error('env.local migration: setAlpacaCreds failed', { reason: res.reason })
+    return { status: 'error', detail: res.reason }
+  }
+
+  // Strip the Alpaca lines. If the residue is just blanks + comments, drop
+  // the whole file — leaving an empty husk lying around is noise.
+  const meaningful = residueText.replace(/^\s*#.*$/gm, '').trim().length > 0
+  try {
+    if (!meaningful) {
+      fs.rmSync(envPath, { force: true })
+      log.warn('env.local migration: plaintext Alpaca keys migrated to safeStorage; empty .env.local removed', { keyIdLen: found.keyId.length })
+    } else {
+      fs.writeFileSync(envPath, residueText, 'utf8')
+      log.warn('env.local migration: plaintext Alpaca keys migrated to safeStorage; other settings retained', { keyIdLen: found.keyId.length })
+    }
+  } catch (e) {
+    // The encrypted copy was already saved successfully. The plaintext file
+    // is now redundant but still on disk — surface this so the user knows
+    // to delete it manually if the rewrite kept failing.
+    log.error('env.local migration: cleartext strip failed AFTER successful safeStorage write — delete the file manually', { path: envPath, err: String(e) })
+    return { status: 'error', detail: `keys migrated but plaintext strip failed: ${String(e)}` }
+  }
+
+  return { status: 'migrated' }
+}
+
 /** Clear a specific slot, or both slots if mode is omitted. */
 export function clearAlpacaCreds(mode?: AccountMode): void {
   if (!mode) {

@@ -25,6 +25,25 @@ import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
 import { IndicatorSettingsService } from './services/indicator-settings'
 import { WorkspaceStateService } from './services/workspace-state'
+import { migratePlaintextEnvLocalCreds } from './services/credential-store'
+
+// Migrate plaintext Alpaca keys out of userData/.env.local into safeStorage
+// BEFORE dotenv runs. If keys are migrated the file is rewritten (or deleted)
+// so the subsequent dotenv pass sees no plaintext credentials for this run
+// either. The migration is idempotent — second run finds nothing to do.
+{
+  const result = migratePlaintextEnvLocalCreds()
+  if (result.status === 'migrated') {
+    // eslint-disable-next-line no-console
+    console.warn('[satex] plaintext Alpaca keys migrated from userData/.env.local → OS keychain')
+  } else if (result.status === 'skipped-no-encryption') {
+    // eslint-disable-next-line no-console
+    console.error('[satex] WARNING: plaintext Alpaca keys present in userData/.env.local but OS keychain is unavailable. Keys remain on disk in cleartext — fix DPAPI/Keychain/libsecret and reboot to migrate.')
+  } else if (result.status === 'error') {
+    // eslint-disable-next-line no-console
+    console.error('[satex] env.local migration error:', result.detail)
+  }
+}
 
 // Load .env.local early — before any service reads process.env
 import { config as dotenvConfig } from 'dotenv'
