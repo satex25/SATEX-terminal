@@ -16,9 +16,10 @@
  *  • Bounded retention: writes are append-only; pruning is a separate cron
  *    not yet wired (intentional — recorded sessions should survive restarts).
  */
-import { insertTickBatch } from './persistence'
+import { insertTickBatch, getTapeBounds, upsertTapeManifest } from './persistence'
 import type { Quote, TickTapeRow } from '@shared/types'
 import { createLogger } from './logger'
+import { computeTapeManifestHash } from './tape-integrity'
 
 const log = createLogger('tick-recorder')
 
@@ -56,6 +57,35 @@ export class TickRecorder {
     this.active = false
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     this.flush()
+    // S1-10 — seal an integrity manifest. Skipped on empty tape: nothing to
+    // verify later, and ReplaySource refuses to open empty sessions anyway.
+    // Bounds come from the DB after flush so we capture exactly what's on
+    // disk (in-memory totalRecorded could drift if a flush partially failed).
+    try {
+      const bounds = getTapeBounds(this.sessionId)
+      if (bounds.count > 0 && bounds.firstTs !== null && bounds.lastTs !== null) {
+        const manifest = {
+          sessionId:    this.sessionId,
+          tickCount:    bounds.count,
+          firstTs:      bounds.firstTs,
+          lastTs:       bounds.lastTs,
+        }
+        upsertTapeManifest({
+          ...manifest,
+          manifestHash: computeTapeManifestHash(manifest),
+          sealedAt:     Date.now(),
+        })
+        log.info('tape manifest sealed', manifest)
+      } else {
+        log.info('tape manifest skipped (empty tape)', { sessionId: this.sessionId })
+      }
+    } catch (err) {
+      // Manifest sealing is best-effort. A failure here just means the next
+      // open of this tape will run in `no-manifest` mode — operationally
+      // equivalent to the pre-S1-10 behavior, so we never crash the engine
+      // over it.
+      log.warn('tape manifest seal failed', { sessionId: this.sessionId, err: String(err) })
+    }
     log.info('recorder stopped', { sessionId: this.sessionId, totalRecorded: this.totalRecorded })
   }
 

@@ -41,6 +41,7 @@ import type { Candle, NewsItem, Quote, TickTapeRow, Trade } from '@shared/types'
 import * as db from './persistence'
 import type { MarketDataSource, Unsub } from './market-data'
 import { createLogger } from './logger'
+import { verifyTapeManifest, type ManifestVerdict } from './tape-integrity'
 
 const log = createLogger('replay')
 
@@ -121,6 +122,11 @@ export class ReplaySource implements MarketDataSource {
   /** Optional callback fired after each emission, for cheap status pushes. */
   onTickEmitted: ((snap: ReplaySnapshot) => void) | null = null
 
+  /** S1-10 — manifest verdict from open-time integrity check. Surfaced via
+   *  getManifestStatus() so the renderer can show a warning banner when a
+   *  replay opens with `no-manifest` or `mismatch`. */
+  private manifestVerdict: ManifestVerdict | null = null
+
   constructor(sessionId: string, opts?: { speed?: number; fromTs?: number }) {
     this.sessionId = sessionId
     const bounds = db.getTapeBounds(sessionId)
@@ -129,6 +135,44 @@ export class ReplaySource implements MarketDataSource {
     }
     this.tapeStartTs = bounds.firstTs
     this.tapeEndTs   = bounds.lastTs
+
+    // S1-10 — verify integrity against the stored manifest BEFORE setting up
+    // any tape state. Three outcomes:
+    //   ok          — log info, continue
+    //   no-manifest — log warn (pre-S1-10 tape), continue
+    //   mismatch    — log error with bounds diff, continue but flag verdict
+    // We do not throw on mismatch: in-the-field we don't want a corrupt tape
+    // to make the app unusable. The verdict is surfaced to the renderer so
+    // the user sees a warning banner.
+    try {
+      const stored = db.getTapeManifest(sessionId)
+      this.manifestVerdict = verifyTapeManifest(stored, {
+        sessionId,
+        tickCount: bounds.count,
+        firstTs:   bounds.firstTs,
+        lastTs:    bounds.lastTs,
+      })
+      switch (this.manifestVerdict.status) {
+        case 'ok':
+          log.info('tape integrity verified', { sessionId, sealedAt: this.manifestVerdict.manifest.sealedAt })
+          break
+        case 'no-manifest':
+          log.warn('tape opened without integrity manifest', { sessionId, reason: this.manifestVerdict.reason })
+          break
+        case 'mismatch':
+          log.error('tape integrity MISMATCH at open', {
+            sessionId,
+            reason: this.manifestVerdict.reason,
+            expected: this.manifestVerdict.expected,
+            observed: this.manifestVerdict.observed,
+          })
+          break
+      }
+    } catch (err) {
+      // Verification path is best-effort. A DB error here shouldn't take
+      // down replay; we'll just operate without a verdict.
+      log.warn('tape integrity check failed at open', { sessionId, err: String(err) })
+    }
 
     const requestedFrom = opts?.fromTs ?? this.tapeStartTs
     this.cursorTs = this.clampToTape(requestedFrom)
@@ -146,6 +190,10 @@ export class ReplaySource implements MarketDataSource {
     })
   }
 
+  /** S1-10 — last manifest verdict from open or stop. Renderer uses this to
+   *  show a "tape integrity warning" banner during replay. */
+  getManifestVerdict(): ManifestVerdict | null { return this.manifestVerdict }
+
   // ── MarketDataSource API ────────────────────────────────────────────────────
   start(): void {
     // Warm up state so the first emitted Quote is consistent with where the
@@ -156,6 +204,35 @@ export class ReplaySource implements MarketDataSource {
 
   stop(): void {
     this.pause()
+    // S1-10 — close-time integrity re-verify. Spec asks for verify-on-open
+    // AND verify-on-close. The close-time check catches drift that happened
+    // DURING replay (parallel writer, DB corruption mid-session, etc.). On
+    // a healthy system this should always agree with the open-time verdict.
+    try {
+      const bounds = db.getTapeBounds(this.sessionId)
+      if (bounds.firstTs !== null && bounds.lastTs !== null) {
+        const stored = db.getTapeManifest(this.sessionId)
+        const closeVerdict = verifyTapeManifest(stored, {
+          sessionId: this.sessionId,
+          tickCount: bounds.count,
+          firstTs:   bounds.firstTs,
+          lastTs:    bounds.lastTs,
+        })
+        if (closeVerdict.status === 'mismatch') {
+          log.error('tape integrity MISMATCH at close — tape drifted during replay', {
+            sessionId: this.sessionId,
+            reason: closeVerdict.reason,
+            openVerdict: this.manifestVerdict?.status ?? null,
+          })
+        } else if (closeVerdict.status === 'ok' && this.manifestVerdict?.status !== 'ok') {
+          // Healed during replay — uncommon but worth recording.
+          log.info('tape integrity healed during replay', { sessionId: this.sessionId, openStatus: this.manifestVerdict?.status })
+        }
+        this.manifestVerdict = closeVerdict
+      }
+    } catch (err) {
+      log.warn('tape integrity check failed at close', { sessionId: this.sessionId, err: String(err) })
+    }
     this.prefetched = []
     this.quoteListeners.clear()
     this.candleListeners.clear()

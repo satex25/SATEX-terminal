@@ -36,6 +36,7 @@ import type {
 } from '@shared/types'
 import * as db from './persistence'
 import { createLogger } from './logger'
+import { computeTapeManifestHash } from './tape-integrity'
 
 void REPLAY_MIN_SPEED  // re-exported for sibling modules; silences unused-import in some build configs
 
@@ -164,6 +165,21 @@ export class HistoricalImporter {
       tradeCount:     0,
     }
     db.insertSession(sessionRow)
+
+    // S1-10 — seal an integrity manifest for the freshly-imported tape so
+    // ReplaySource can verify it the same way it does for live recordings.
+    // Re-imports hit the `existing.count > 0` early-return above so we only
+    // seal once per (date, tf, symbols) tuple.
+    try {
+      const manifestInputs = { sessionId, tickCount: written, firstTs, lastTs }
+      db.upsertTapeManifest({
+        ...manifestInputs,
+        manifestHash: computeTapeManifestHash(manifestInputs),
+        sealedAt:     Date.now(),
+      })
+    } catch (err) {
+      log.warn('historical tape manifest seal failed', { sessionId, err: String(err) })
+    }
 
     log.info('historical import complete', {
       sessionId, ticks: written, symbols: imported.length, skipped: skipped.length,

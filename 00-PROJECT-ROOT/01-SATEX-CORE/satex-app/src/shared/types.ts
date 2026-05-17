@@ -571,6 +571,26 @@ export interface ReplayBookmark {
   createdAt: number
 }
 
+/**
+ * S1-10 — Tape integrity manifest. Sealed when a recording stops (or right
+ * after a historical-day import materializes its synthetic tape), then
+ * verified by ReplaySource on construction (open) and on stop (close).
+ *
+ * `manifestHash` is a hex SHA-256 over the canonical projection of the four
+ * inputs below — see main/services/tape-integrity.ts. A bounds/count mismatch
+ * at open time means rows were added, removed, or rewritten outside the
+ * recorder's control (parallel record session, manual DB edit, corruption).
+ */
+export interface TapeManifest {
+  sessionId:    string
+  manifestHash: string    // 64-char hex SHA-256
+  tickCount:    number
+  firstTs:      number
+  lastTs:       number
+  /** Wall-clock millis when the manifest was sealed. */
+  sealedAt:     number
+}
+
 /** Sessions surfaced to the picker — annotated with tape-availability metadata. */
 export interface ReplayableSession {
   sessionId: string

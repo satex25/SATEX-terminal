@@ -16,7 +16,7 @@ import { app } from 'electron'
 import type {
   Order, SessionRecord, PnlSnapshot, BrainParameter,
   Observation, PatternWeight, LearningCycle, MarketRegime,
-  TickTapeRow, ReplayBookmark, ReplayableSession,
+  TickTapeRow, ReplayBookmark, ReplayableSession, TapeManifest,
 } from '@shared/types'
 import { createLogger } from './logger'
 
@@ -198,6 +198,21 @@ function migrate(db: DB): void {
       created_at    INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_bookmarks_session_ts ON replay_bookmarks(session_id, ts);
+
+    -- S1-10: Tape integrity manifest. One row per session, sealed when the
+    -- recorder finalizes (or right after historical-day import materializes
+    -- its synthetic tape). ReplaySource recomputes bounds + hash at open
+    -- time and logs an error on mismatch. Sessions without a manifest open
+    -- in "no-manifest" mode (warned but not blocked) so this rollout is
+    -- backwards compatible with tapes recorded before the column existed.
+    CREATE TABLE IF NOT EXISTS tape_manifest (
+      session_id     TEXT PRIMARY KEY,
+      manifest_hash  TEXT    NOT NULL,
+      tick_count     INTEGER NOT NULL,
+      first_ts       INTEGER NOT NULL,
+      last_ts        INTEGER NOT NULL,
+      sealed_at      INTEGER NOT NULL
+    );
   `)
   log.info('sqlite schema migrated')
 }
@@ -598,8 +613,41 @@ export function listBookmarks(sessionId: string): ReplayBookmark[] {
 /** Wipe every tape row for a session — used when discarding a historical
  *  import. Live trading sessions should never be passed here. */
 export function deleteTapeForSession(sessionId: string): number {
-  const r = openDB().prepare('DELETE FROM ticks WHERE session_id=?').run(sessionId)
+  const db = openDB()
+  // Drop the manifest first so a half-deleted state can't leave an
+  // integrity-pass row pointing at a fully-empty tape.
+  db.prepare('DELETE FROM tape_manifest WHERE session_id=?').run(sessionId)
+  const r = db.prepare('DELETE FROM ticks WHERE session_id=?').run(sessionId)
   return Number(r.changes)
+}
+
+// ─── S1-10 — Tape integrity manifest ────────────────────────────────────────
+
+/** Insert or replace the integrity manifest for a recorded tape. */
+export function upsertTapeManifest(m: TapeManifest): void {
+  openDB().prepare(`
+    INSERT OR REPLACE INTO tape_manifest
+      (session_id, manifest_hash, tick_count, first_ts, last_ts, sealed_at)
+    VALUES (?,?,?,?,?,?)
+  `).run(m.sessionId, m.manifestHash, m.tickCount, m.firstTs, m.lastTs, m.sealedAt)
+}
+
+/** Returns null when no manifest exists (backwards compat for tapes recorded
+ *  before S1-10 shipped). */
+export function getTapeManifest(sessionId: string): TapeManifest | null {
+  const r = openDB().prepare(`
+    SELECT session_id, manifest_hash, tick_count, first_ts, last_ts, sealed_at
+    FROM tape_manifest WHERE session_id=?
+  `).get(sessionId) as Record<string, unknown> | undefined
+  if (!r) return null
+  return {
+    sessionId:    String(r['session_id']),
+    manifestHash: String(r['manifest_hash']),
+    tickCount:    Number(r['tick_count']),
+    firstTs:      Number(r['first_ts']),
+    lastTs:       Number(r['last_ts']),
+    sealedAt:     Number(r['sealed_at']),
+  }
 }
 
 /**
