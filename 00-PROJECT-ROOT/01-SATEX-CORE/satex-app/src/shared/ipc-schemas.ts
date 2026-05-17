@@ -16,7 +16,6 @@ import { z } from 'zod'
 // ── Primitive enums + reusables ────────────────────────────────────────────
 const OrderSideS = z.enum(['buy', 'sell'])
 const OrderTypeS = z.enum(['market', 'limit', 'stop'])
-const TriggeredByS = z.enum(['stop-loss', 'take-profit'])
 const AccountModeS = z.enum(['paper', 'live'])
 const FeedS = z.enum(['iex', 'sip'])
 const JournalTagS = z.enum(['planned', 'breakout', 'fade', 'scalp', 'swing', 'revenge', 'FOMO'])
@@ -37,6 +36,11 @@ const NonNegativeFiniteS = z.number().nonnegative().finite()
 const FiniteIntS = z.number().int().finite()
 
 // ── Orders ──────────────────────────────────────────────────────────────────
+// `.strict()` rejects unknown fields rather than silently stripping them.
+// Defense-in-depth alongside the `triggeredBy` removal (adversarial finding
+// C1, 2026-05-16): a renderer trying to inject `triggeredBy:'stop-loss'`
+// to bypass the kill-switch / stale-quote / market-hours gates now gets a
+// "Unrecognized key" error instead of a silently-stripped field.
 export const OrderSubmitReq = z.object({
   id: z.string().optional(),
   symbol: SymbolS,
@@ -46,11 +50,10 @@ export const OrderSubmitReq = z.object({
   limitPrice: PositiveFiniteS.optional(),
   stopLoss: PositiveFiniteS.optional(),
   takeProfit: PositiveFiniteS.optional(),
-  triggeredBy: TriggeredByS.optional(),
   source: z.string().max(64).optional(),
   tags: z.array(JournalTagS).max(16).optional(),
   conviction: z.number().int().min(1).max(10).optional(),
-})
+}).strict()
 export type OrderSubmitReq = z.infer<typeof OrderSubmitReq>
 
 export const OrderCancelReq = z.string().min(1).max(128)

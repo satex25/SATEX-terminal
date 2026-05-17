@@ -94,10 +94,23 @@ export class OrderManager {
   onKillSwitch(fn: KillSwitchCallback): () => void { this.killCbs.add(fn); return () => this.killCbs.delete(fn) }
 
   // ── Validation ──────────────────────────────────────────────────────────────
+  /** Pre-trade risk validation. Gates fire in order; first failure wins.
+   *
+   *  2026-05-16 (adversarial finding C1) — removed `triggeredBy === 'stop-loss'`
+   *  / `'take-profit'` carve-outs from Gates 0 and 1. The old logic exempted
+   *  any order tagged as a stop/TP from freshness, kill-switch, and tactics
+   *  checks on the theory that "stops reduce risk so they're always safe to
+   *  send." But the tag was renderer-supplied and never set by any internal
+   *  code path, so the only callers exercising the bypass were hostile/buggy.
+   *  Today's reality: bracket child orders execute server-side at Alpaca and
+   *  never round-trip through this validator; the local engine never emits a
+   *  standalone stop order. If we ever add programmatic close-on-regime-flip
+   *  exits, those should bypass the kill switch through an EXPLICIT internal
+   *  flag (not a string copied from the request), and that future flag must
+   *  be unsettable from any IPC payload. */
   validate(req: OrderRequest, ctx?: OrderValidationContext): OrderValidationResult {
-    // Gate 0: quote freshness (live mode only; stop-loss/take-profit bypass — they reduce risk)
+    // Gate 0: quote freshness (live mode only — paper mode tolerates simulator gaps).
     if (ctx?.liveMode
-        && req.triggeredBy !== 'stop-loss' && req.triggeredBy !== 'take-profit'
         && ctx.refPriceAge !== undefined
         && ctx.refPriceAge > MAX_QUOTE_AGE_MS) {
       return {
@@ -107,8 +120,8 @@ export class OrderManager {
       }
     }
 
-    // Gate 1: kill switch (stop-loss/take-profit may bypass — they reduce risk)
-    if (this.account.killSwitchArmed && req.triggeredBy !== 'stop-loss' && req.triggeredBy !== 'take-profit')
+    // Gate 1: kill switch — halts ALL order submission, no carve-outs.
+    if (this.account.killSwitchArmed)
       return { ok: false, reason: 'Kill switch is armed', gate: 'kill-switch' }
 
     // Gate 2: market closed (live mode + non-crypto only)

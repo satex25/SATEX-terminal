@@ -191,7 +191,10 @@ export class VaultWriter {
       exitPrice: order.fillPrice ?? null,
       pnl,
       holdMinutes: Math.round(holdMs / 60_000),
-      triggeredBy: order.request.triggeredBy ?? null,
+      // `triggeredBy` removed from OrderRequest (adversarial finding C1). The
+      // vault frontmatter field stays null until server-side bracket-fill
+      // tagging is wired through AlpacaTradeUpdate.
+      triggeredBy: null,
       regimeAtEntry,
       tacticsState: tacticsAtEntry?.state ?? null,
       aiBias: aiDecision?.bias ?? null,
@@ -211,7 +214,8 @@ export class VaultWriter {
     lines.push(`- PnL: **$${fmtMoney(pnl)}**`)
     lines.push(`- Entry: $${fmtMoney(position.avgPrice)} → Exit: $${fmtMoney(order.fillPrice ?? 0)}`)
     lines.push(`- Quantity: ${order.request.quantity}`)
-    if (order.request.triggeredBy) lines.push(`- Closed by: \`${order.request.triggeredBy}\``)
+    // "Closed by" bullet removed alongside OrderRequest.triggeredBy removal
+    // (C1). Re-add when bracket-leg classification arrives via AlpacaTradeUpdate.
     lines.push('')
     lines.push('## Context at entry')
     lines.push('')
@@ -312,7 +316,7 @@ export class VaultWriter {
       )
     } catch (e) {
       // Surface via caller's logger — vault failures must never crash trade flow.
-      throw new Error(`appendTradeReflection failed: ${String(e)}`)
+      throw new Error(`appendTradeReflection failed: ${String(e)}`, { cause: e })
     }
   }
 
@@ -522,7 +526,7 @@ function yamlScalar(v: unknown): string {
   if (typeof v === 'number') return Number.isFinite(v) ? v.toString() : 'null'
   if (typeof v === 'boolean') return v ? 'true' : 'false'
   const s = String(v)
-  if (s === '' || /[:#&*!|>'"%@`,\[\]{}]/.test(s) || /^\s|\s$/.test(s)) {
+  if (s === '' || /[:#&*!|>'"%@`,[\]{}]/.test(s) || /^\s|\s$/.test(s)) {
     return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
   }
   return s
@@ -543,11 +547,13 @@ function extractLossLearnings(ctx: {
 }): string {
   const bullets: string[] = []
   const { pnl, holdMs, regimeAtEntry, tacticsAtEntry, aiDecision, order } = ctx
-  if (order.request.triggeredBy === 'stop-loss') {
-    bullets.push(`- Stop-loss fired — risk gate worked as designed. Loss of $${fmtMoney(-pnl)} is the *cost of being wrong*, not a bug.`)
-  } else {
-    bullets.push(`- Closed at a loss without stop firing. Re-examine whether the exit logic respected the stop level.`)
-  }
+  // OrderRequest.triggeredBy was removed (adversarial finding C1). Until we
+  // re-derive the trigger from AlpacaTradeUpdate bracket-leg metadata, every
+  // loss narrative just notes "closed at a loss" without speculating about
+  // whether the stop fired. Better to leave the question open than to fake a
+  // signal from a field that the renderer used to fully control.
+  void order
+  bullets.push(`- Closed at a loss of $${fmtMoney(-pnl)}. Re-examine whether the exit logic respected the stop level.`)
   if (regimeAtEntry === 'chop' || regimeAtEntry === 'unknown') {
     bullets.push(`- Entered in **${regimeAtEntry}** regime — historically the lowest-edge regimes. Future sessions: prefer trend_up/trend_down regimes for this symbol.`)
   }

@@ -325,31 +325,25 @@ function wireEngineEvents(): void {
   engine.onOrders((orders)            => {
     push(IPC.ORDERS_UPDATE,  orders)
     // Detect newly-filled orders by comparing fill state against last snapshot.
-    // Stop-loss exits get a distinct urgent toast — they signal risk realized,
-    // not normal entry/take-profit fills, and the user needs to know fast.
+    //
+    // 2026-05-16 (adversarial finding C1) — the special "■ Stop hit" toast
+    // path was removed alongside `OrderRequest.triggeredBy`. The old branch
+    // only fired when the renderer set `triggeredBy:'stop-loss'`, which was
+    // both a security bypass surface and unused in practice (no caller ever
+    // set the field). All fills now share the standard "✓ Filled" toast.
+    // Stop-loss UX clarity will return once we derive trigger-type from
+    // AlpacaTradeUpdate bracket-leg metadata in `onAlpacaTradeUpdate`.
     for (const o of orders) {
       const key = `${o.id}:${o.status}`
       if (o.status === 'filled' && !lastSeenOrderIds.has(key)) {
-        if (o.request.triggeredBy === 'stop-loss') {
-          notify({
-            key:   `stop-${o.id}`,
-            title: `■ Stop hit · ${o.request.symbol}`,
-            body:  o.fillPrice != null
-              ? `${o.request.side.toUpperCase()} ${o.request.quantity} @ $${o.fillPrice.toFixed(2)} — risk gate fired`
-              : `${o.request.side.toUpperCase()} ${o.request.quantity} — stop-loss closed position`,
-            urgent: true,
-            minIntervalMs: 1_000,
-          })
-        } else {
-          notify({
-            key:   `fill-${o.id}`,
-            title: `✓ Filled · ${o.request.side.toUpperCase()} ${o.request.quantity} ${o.request.symbol}`,
-            body:  o.fillPrice != null
-              ? `@ $${o.fillPrice.toFixed(2)} · ${o.request.type.toUpperCase()}`
-              : `${o.request.type.toUpperCase()} order filled`,
-            minIntervalMs: 1_000,
-          })
-        }
+        notify({
+          key:   `fill-${o.id}`,
+          title: `✓ Filled · ${o.request.side.toUpperCase()} ${o.request.quantity} ${o.request.symbol}`,
+          body:  o.fillPrice != null
+            ? `@ $${o.fillPrice.toFixed(2)} · ${o.request.type.toUpperCase()}`
+            : `${o.request.type.toUpperCase()} order filled`,
+          minIntervalMs: 1_000,
+        })
       }
     }
     lastSeenOrderIds = new Set(orders.map(o => `${o.id}:${o.status}`))

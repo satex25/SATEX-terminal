@@ -585,7 +585,12 @@ export class TradingEngine {
       notionalCap: getNotionalCap(),
       assetClass: quote?.assetClass ?? 'equity',
       signalConfidence: opts?.signalConfidence ?? 0.6,
-      tacticsGate: req.side === 'buy' && !req.triggeredBy
+      // Tactics gate fires for all buy entries. The old `!req.triggeredBy`
+      // carve-out was tied to the same renderer-controlled field that
+      // adversarial finding C1 closed out; with `triggeredBy` removed from
+      // OrderRequest it can never be set, so the gate decision is just
+      // "is this a buy?".
+      tacticsGate: req.side === 'buy'
         ? (sc) => this.tactics.preTradeGate(sc)
         : undefined,
     }
@@ -1282,7 +1287,11 @@ export class TradingEngine {
         pnlPct: notional > 0 ? realizedPnl / notional : 0,
         holdMs: Date.now() - entry.openedAt,
         closedAt: Date.now(),
-        triggeredBy: order?.request.triggeredBy ?? null,
+        // triggeredBy was removed from OrderRequest (adversarial finding C1).
+        // Stop/TP fills from Alpaca bracket children land via onAlpacaTradeUpdate
+        // and currently surface as `source: 'alpaca-bracket'`. Future work:
+        // derive triggeredBy from AlpacaTradeUpdate.order legs.
+        triggeredBy: null,
         source: order?.request.source ?? source,
         tags: entry.tags ?? [],
         conviction: entry.conviction ?? null,

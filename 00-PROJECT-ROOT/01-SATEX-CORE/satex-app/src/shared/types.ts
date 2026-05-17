@@ -119,7 +119,6 @@ export interface OrderRequest {
   limitPrice?: number
   stopLoss?: number
   takeProfit?: number
-  triggeredBy?: TriggeredBy
   source?: string
   /** Trading-journal metadata (Phase 11 — modern-terminal-survey §6).
    *  Carried from OrderTicketPanel through IPC into the engine; today the
@@ -129,6 +128,13 @@ export interface OrderRequest {
   tags?: string[]
   /** 1–10 self-rated entry conviction. Maps to signalConfidence internally. */
   conviction?: number
+  // NOTE — `triggeredBy` was removed from OrderRequest 2026-05-16 (adversarial
+  // finding C1). The renderer used to be able to set it to 'stop-loss' and
+  // bypass the kill-switch / stale-quote / market-hours gates. Stop-loss
+  // tagging is a server-side concern: when bracket child orders fill via the
+  // AlpacaTradeUpdate stream, the engine can attach a `triggeredBy` value
+  // directly to the ClosedTrade record without ever round-tripping through
+  // OrderRequest.
 }
 
 /** Curated tag set surfaced in OrderTicketPanel. Stored on the order request
@@ -511,7 +517,9 @@ export interface VaultCheckpointRequest {
   detail?: string
 }
 
-export interface CalendarImpact extends Number {}
+// CalendarImpact previously declared as `interface CalendarImpact extends Number {}` —
+// an empty interface equivalent to its supertype, never used. Deleted 2026-05-16
+// alongside the C1 OrderRequest cleanup.
 export interface ForexEvent {
   id: string
   title: string
