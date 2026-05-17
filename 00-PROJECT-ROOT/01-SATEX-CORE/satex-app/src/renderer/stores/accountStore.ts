@@ -29,6 +29,7 @@ const defaultAccount: Account = {
 const defaultStatus: SystemStatus = {
   connected: false, mode: 'simulator', tickHz: 0, latencyMs: 0,
   cpuPct: 0, memMb: 0, uptime: 0, lastError: null, lastTickIso: null,
+  crypto: { connected: false, subscribedSymbols: 0 },
 }
 
 export const useAccountStore = create<AccountState>((set) => ({

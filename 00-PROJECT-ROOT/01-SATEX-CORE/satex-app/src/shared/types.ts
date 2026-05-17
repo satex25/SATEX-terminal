@@ -287,6 +287,9 @@ export interface SystemStatus {
   uptime: number
   lastError: string | null
   lastTickIso: string | null
+  /** Crypto-feed snapshot (separate Alpaca WebSocket — v1beta3/crypto/us).
+   *  Runs in parallel with the equity source so BTC/ETH stream 24/7. */
+  crypto: { connected: boolean; subscribedSymbols: number }
 }
 
 export interface AutonomousStatus {

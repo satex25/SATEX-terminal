@@ -1279,6 +1279,10 @@ export class TradingEngine {
 
   private broadcastStatus(): void {
     const mem = process.memoryUsage()
+    // Crypto status — the active client is either the equity-side alpaca
+    // (when live equity feed is up) or the dedicated cryptoAlpaca built in
+    // simulator mode. Either one's cryptoWs is authoritative.
+    const cryptoClient = this.cryptoAlpaca ?? this.alpaca
     const status: SystemStatus = {
       connected:   this.alpaca ? this.alpaca.isMarketConnected : true,
       mode:        this.alpaca ? 'paper' : 'simulator',
@@ -1289,6 +1293,10 @@ export class TradingEngine {
       uptime:      Math.floor((Date.now() - this.startedAt) / 1000),
       lastError:   null,
       lastTickIso: this.lastTickAt ? new Date(this.lastTickAt).toISOString() : null,
+      crypto: {
+        connected:         cryptoClient?.isCryptoConnected ?? false,
+        subscribedSymbols: cryptoClient?.cryptoSubscribedCount ?? 0,
+      },
     }
     for (const l of this.statusListeners) l(status)
   }

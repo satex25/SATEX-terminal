@@ -139,6 +139,11 @@ export class AlpacaClient {
   get isAccountConnected():boolean { return this.accountConnected }
   get msSinceLastTick():   number  { return this.lastDataMessageAt === 0 ? Infinity : Date.now() - this.lastDataMessageAt }
   get subscribedSymbols(): string[] { return Array.from(this.subscribed) }
+  /** Live status of the crypto data feed (separate from the equity WS). True
+   *  once Alpaca has confirmed the subscription frame for at least one symbol;
+   *  becomes false when the socket closes or hasn't yet authenticated. */
+  get isCryptoConnected():     boolean { return this.cryptoWs !== null && this.cryptoSubscribed.size > 0 }
+  get cryptoSubscribedCount(): number  { return this.cryptoSubscribed.size }
 
   private headers(): Record<string, string> {
     return { 'APCA-API-KEY-ID': this.cfg.keyId, 'APCA-API-SECRET-KEY': this.cfg.secretKey, 'Content-Type': 'application/json' }
