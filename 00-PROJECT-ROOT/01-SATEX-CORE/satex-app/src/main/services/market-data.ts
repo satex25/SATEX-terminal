@@ -7,9 +7,20 @@ import {
   SIMULATOR_CANDLE_INTERVAL_SEC, SPARKLINE_LENGTH, TICK_HZ, UNIVERSE, type UniverseEntry
 } from '@shared/constants'
 import type { Candle, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
+import { isUsEquityMarketOpen } from '@shared/market-hours'
 import { shortId } from './id-generator'
 import { mulberry32, randomSeed, type Rng } from './rng'
 import { createLogger } from './logger'
+
+/** Power-user escape hatch: set SATEX_SIMULATOR_24_7=true to keep the
+ *  simulator emitting fake ticks around the clock for off-hours testing.
+ *  Default behaviour pauses the simulator outside US equity RTH so the
+ *  chart doesn't display fictitious movement when real markets are closed
+ *  (2026-05-17 user request: "charts are still showing moving data, this
+ *  is impossible, markets are closed"). */
+function simulatorBypassMarketHours(): boolean {
+  return (process.env['SATEX_SIMULATOR_24_7'] ?? 'false').toLowerCase() === 'true'
+}
 
 const log = createLogger('simulator')
 
@@ -94,13 +105,35 @@ export class MarketSimulator implements MarketDataSource {
     log.info('simulator initialized', { symbols: UNIVERSE.length })
   }
 
+  /** Cached market-open state so we only log on transition, not on every
+   *  20Hz tick. Initialized to the current state at start() time. */
+  private lastMarketOpenSeen: boolean | null = null
+
+  /** Returns true when the simulator should emit ticks/candles/news right
+   *  now. Bypass via SATEX_SIMULATOR_24_7=true. Logs transitions. */
+  private shouldEmit(): boolean {
+    if (simulatorBypassMarketHours()) return true
+    const open = isUsEquityMarketOpen()
+    if (open !== this.lastMarketOpenSeen) {
+      log.info(open
+        ? 'simulator emitting — US equity RTH'
+        : 'simulator paused — US equity market closed (chart will freeze at last quote)')
+      this.lastMarketOpenSeen = open
+    }
+    return open
+  }
+
   start(): void {
     if (this.tickTimer) return
     const tickMs = Math.floor(1000 / TICK_HZ)
     this.tickTimer   = setInterval(() => this.tick(), tickMs)
     this.candleTimer = setInterval(() => this.rollCandle(), 1000)
     this.newsTimer   = setInterval(() => this.maybeEmitNews(), 4_000)
-    log.info('simulator started', { tickHz: TICK_HZ })
+    log.info('simulator started', {
+      tickHz: TICK_HZ,
+      marketHoursBypass: simulatorBypassMarketHours(),
+      currentlyEmitting: this.shouldEmit(),
+    })
   }
 
   stop(): void {
@@ -141,6 +174,10 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private tick(): void {
+    // 2026-05-17 — freeze ticks outside US equity RTH. Without this, the
+    // simulator emits fictitious 20Hz movement while real markets are closed
+    // and the chart looks live. Bypassable via SATEX_SIMULATOR_24_7=true.
+    if (!this.shouldEmit()) return
     const batch: Quote[] = []
     const trades: Trade[] = []
     const now = Date.now()
@@ -184,6 +221,11 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private rollCandle(): void {
+    // Same off-hours guard as tick() — when the market is closed we
+    // shouldn't roll new candles either, otherwise the candle history would
+    // grow with empty (open=high=low=close=lastPrice) bars timestamped
+    // outside RTH, again misleading the user.
+    if (!this.shouldEmit()) return
     const nowSec = Math.floor(Date.now() / 1000)
     const bucket = Math.floor(nowSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
     if (bucket === this.currentCandleStart) return
@@ -200,6 +242,12 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private maybeEmitNews(): void {
+    // Skip fake news while markets are closed too — half the headlines
+    // reference live flow / price action that wouldn't make sense without
+    // active tick emission. The trade-off is acceptable: news is a
+    // simulator-only stub anyway, real sessions get news from the news/EDGAR
+    // pipelines independent of this code path.
+    if (!this.shouldEmit()) return
     if (this.rng.next() > 0.4) return
     const tpl = HEADLINES[this.rng.nextInt(HEADLINES.length)]!
     const syms = Array.from(this.states.keys())
