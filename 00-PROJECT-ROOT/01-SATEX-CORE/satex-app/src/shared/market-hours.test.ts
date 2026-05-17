@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { isUsEquityMarketOpen, mostRecentClosedSessionDate } from './market-hours'
+import {
+  isUsEquityMarketOpen,
+  mostRecentClosedSessionDate,
+  mostRecentFridayDate,
+  previousTradingDate,
+} from './market-hours'
 
 // All Date constructors below use UTC ISO strings. Offsets:
 //   EDT (Mar-Nov, e.g. May) = UTC-4
@@ -72,5 +77,47 @@ describe('mostRecentClosedSessionDate', () => {
   it('Winter (EST) — Sunday noon → previous Friday', () => {
     // Sun 12:00 EST 2026-01-18 → Fri 2026-01-16
     expect(mostRecentClosedSessionDate(new Date('2026-01-18T17:00:00Z'))).toBe('2026-01-16')
+  })
+})
+
+describe('previousTradingDate', () => {
+  it('Monday → previous Friday', () => {
+    // Mon 2026-05-18 10:00 EDT → Fri 2026-05-15
+    expect(previousTradingDate(new Date('2026-05-18T14:00:00Z'))).toBe('2026-05-15')
+  })
+
+  it('Tuesday → previous Monday', () => {
+    expect(previousTradingDate(new Date('2026-05-19T14:00:00Z'))).toBe('2026-05-18')
+  })
+
+  it('Sunday → previous Friday', () => {
+    expect(previousTradingDate(new Date('2026-05-17T14:00:00Z'))).toBe('2026-05-15')
+  })
+
+  it('Saturday → previous Friday', () => {
+    expect(previousTradingDate(new Date('2026-05-16T14:00:00Z'))).toBe('2026-05-15')
+  })
+
+  it('Friday during RTH → previous Thursday', () => {
+    expect(previousTradingDate(new Date('2026-05-15T14:00:00Z'))).toBe('2026-05-14')
+  })
+})
+
+describe('mostRecentFridayDate', () => {
+  it('Sunday → that Friday (2 days ago)', () => {
+    expect(mostRecentFridayDate(new Date('2026-05-17T14:00:00Z'))).toBe('2026-05-15')
+  })
+
+  it('Monday → previous Friday', () => {
+    expect(mostRecentFridayDate(new Date('2026-05-18T14:00:00Z'))).toBe('2026-05-15')
+  })
+
+  it('Wednesday → previous Friday (5 days ago)', () => {
+    expect(mostRecentFridayDate(new Date('2026-05-20T14:00:00Z'))).toBe('2026-05-15')
+  })
+
+  it('Friday during RTH → previous Friday (7 days ago)', () => {
+    // Today is a Friday but we want the PREVIOUS Friday strictly before.
+    expect(mostRecentFridayDate(new Date('2026-05-15T14:00:00Z'))).toBe('2026-05-08')
   })
 })

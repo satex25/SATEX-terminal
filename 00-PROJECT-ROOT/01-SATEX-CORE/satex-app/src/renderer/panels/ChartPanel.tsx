@@ -32,7 +32,12 @@ import {
   type ChartTimeframe,
 } from '@shared/constants'
 import type { Candle, ReplayStatus } from '@shared/types'
-import { isUsEquityMarketOpen, mostRecentClosedSessionDate } from '@shared/market-hours'
+import {
+  isUsEquityMarketOpen,
+  mostRecentClosedSessionDate,
+  mostRecentFridayDate,
+  previousTradingDate,
+} from '@shared/market-hours'
 import { fmt } from '../lib/format'
 
 // ── Historical-day picker helpers ────────────────────────────────────────────
@@ -1014,6 +1019,35 @@ export function ChartPanel() {
                   title="Fetch Alpaca bars for the chosen day and load into the chart"
                 >
                   {histBusy ? '⟳ Loading…' : '⤓ Load Day'}
+                </button>
+                {/* One-click quick picks. Both call the same import pipeline
+                    as the main "Load Day" button — they just pre-fill the
+                    date based on the calendar position relative to now. */}
+                <button
+                  type="button"
+                  className="chart-histday-btn chart-histday-quick"
+                  onClick={() => {
+                    const d = previousTradingDate()
+                    setHistDate(d)
+                    void loadHistoricalDayForDate(d)
+                  }}
+                  disabled={histBusy}
+                  title="Load the previous trading day's full session"
+                >
+                  Yesterday
+                </button>
+                <button
+                  type="button"
+                  className="chart-histday-btn chart-histday-quick"
+                  onClick={() => {
+                    const d = mostRecentFridayDate()
+                    setHistDate(d)
+                    void loadHistoricalDayForDate(d)
+                  }}
+                  disabled={histBusy}
+                  title="Load the most recent Friday's full session"
+                >
+                  Last Fri
                 </button>
               </>
             )}

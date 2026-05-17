@@ -53,6 +53,50 @@ export function isUsEquityMarketOpen(now: Date = new Date()): boolean {
   return hm >= RTH_START_MIN && hm < RTH_END_MIN
 }
 
+/** Format a Date as YYYY-MM-DD using NY-local components. */
+function fmtYmd(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** Returns the same Date but represented in NY-local — useful when the
+ *  caller wants getDay/setDate operations to behave as if we were in ET. */
+function nyLocalDate(now: Date): Date {
+  return new Date(
+    new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' })).getTime(),
+  )
+}
+
+/** Previous TRADING day (Mon-Fri) strictly before today's NY-local date.
+ *  Skips weekends. Used by the chart's "Yesterday" quick-pick — the
+ *  result is always a date Alpaca has bars for (modulo holidays). */
+export function previousTradingDate(now: Date = new Date()): string {
+  const d = nyLocalDate(now)
+  d.setDate(d.getDate() - 1)
+  for (let guard = 0; guard < 7; guard++) {
+    const dow = d.getDay()
+    if (dow !== 0 && dow !== 6) break
+    d.setDate(d.getDate() - 1)
+  }
+  return fmtYmd(d)
+}
+
+/** Most recent FRIDAY strictly before today's NY-local date. Used by the
+ *  chart's "Last Friday" quick-pick. When today is Friday, returns the
+ *  Friday from one week ago. */
+export function mostRecentFridayDate(now: Date = new Date()): string {
+  const d = nyLocalDate(now)
+  d.setDate(d.getDate() - 1)
+  // getDay: 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
+  for (let guard = 0; guard < 7; guard++) {
+    if (d.getDay() === 5) break
+    d.setDate(d.getDate() - 1)
+  }
+  return fmtYmd(d)
+}
+
 /** Most recent calendar date (YYYY-MM-DD in NY-local) that should have a
  *  completed NY trading session. Used by the chart's auto-load-last-session
  *  feature so we default to a date Alpaca actually has historical bars for.
@@ -67,9 +111,7 @@ export function mostRecentClosedSessionDate(now: Date = new Date()): string {
   // before market open on a weekday (no session to reference yet today).
   const todayHasClosedSession =
     weekday !== 'Sat' && weekday !== 'Sun' && hm >= RTH_END_MIN
-  const d = new Date(
-    new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' })).getTime(),
-  )
+  const d = nyLocalDate(now)
   if (!todayHasClosedSession) d.setDate(d.getDate() - 1)
   // Roll back from weekend to most recent weekday.
   for (let guard = 0; guard < 7; guard++) {
@@ -77,8 +119,5 @@ export function mostRecentClosedSessionDate(now: Date = new Date()): string {
     if (dow !== 0 && dow !== 6) break
     d.setDate(d.getDate() - 1)
   }
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+  return fmtYmd(d)
 }
