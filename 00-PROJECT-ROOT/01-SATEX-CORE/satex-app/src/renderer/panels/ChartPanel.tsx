@@ -32,6 +32,7 @@ import {
   type ChartTimeframe,
 } from '@shared/constants'
 import type { Candle, ReplayStatus } from '@shared/types'
+import { isUsEquityMarketOpen, mostRecentClosedSessionDate } from '@shared/market-hours'
 import { fmt } from '../lib/format'
 
 // ── Historical-day picker helpers ────────────────────────────────────────────
@@ -205,6 +206,54 @@ export function ChartPanel() {
     return () => clearTimeout(t)
   }, [histErr])
 
+  // ── Auto-load most recent NY session on first mount (2026-05-17) ──────────
+  // User request: when the app opens outside RTH, the chart should default to
+  // the most recent COMPLETED NY trading session instead of staying on
+  // (potentially fake) live data. Guards:
+  //   • Fires at most ONCE per panel mount (autoLoadedRef latch).
+  //   • Skips if the user is already in a replay session — don't clobber.
+  //   • Skips during US equity RTH — live data is what the user wants then.
+  //   • Skips if there are no Alpaca credentials — the historical-bars
+  //     endpoint would just return the same "No Alpaca credentials" error
+  //     the user already saw in their 2026-05-17 02:52 recording. We log
+  //     and latch instead so the failed import doesn't repeat every render.
+  // Once latched, the user can still manually use the date picker / load
+  // button; this effect just provides a sensible default on cold start.
+  const autoLoadedRef = useRef(false)
+  useEffect(() => {
+    if (autoLoadedRef.current) return
+    if (replayStatus === null) return           // wait for first status
+    if (inReplay) { autoLoadedRef.current = true; return }
+    if (isUsEquityMarketOpen()) { autoLoadedRef.current = true; return }
+    let cancelled = false
+    void (async () => {
+      try {
+        const creds = await window.satex?.getCredentialsMasked()
+        if (cancelled) return
+        const hasCreds = !!(creds && (creds.paperConfigured || creds.liveConfigured))
+        if (!hasCreds) {
+          console.info('[chart] auto-load skipped — no Alpaca credentials')
+          autoLoadedRef.current = true
+          return
+        }
+        // Latch BEFORE the await so a re-render during loadHistoricalDayForDate
+        // doesn't queue a second auto-load.
+        autoLoadedRef.current = true
+        const date = mostRecentClosedSessionDate()
+        setHistDate(date)
+        await loadHistoricalDayForDate(date)
+      } catch (e) {
+        console.warn('[chart] auto-load failed:', e)
+      }
+    })()
+    return () => { cancelled = true }
+    // `loadHistoricalDayForDate` intentionally omitted from deps — it
+    // recreates every render (closes over local state setters), and the
+    // autoLoadedRef latch guarantees we only fire once anyway. Adding it
+    // would loop. Same reasoning applies to `setHistDate`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inReplay, replayStatus])
+
   /**
    * Load a previous calendar day into the chart via Phase 9.1 historical
    * replay. Pipeline:
@@ -222,6 +271,14 @@ export function ChartPanel() {
    * (existing TradingEngine guardrail). User clicks "Return to Live" to resume.
    */
   async function loadHistoricalDay(): Promise<void> {
+    return loadHistoricalDayForDate(histDate)
+  }
+
+  /** Body of `loadHistoricalDay` parameterized by the target date. Extracted
+   *  2026-05-17 so the auto-load-on-mount effect (below) can request a
+   *  specific date without round-tripping through state and waiting for a
+   *  re-render. */
+  async function loadHistoricalDayForDate(date: string): Promise<void> {
     if (histBusy) return
     setHistBusy(true); setHistErr(null)
     try {
@@ -241,7 +298,7 @@ export function ChartPanel() {
       }
 
       const importRes = await window.satex?.replay?.importHistorical({
-        date: histDate, symbols, timeframe: '1Min',
+        date, symbols, timeframe: '1Min',
       })
       if (!importRes?.ok || !importRes.sessionId) {
         setHistErr(importRes?.reason ?? 'Import failed')
