@@ -1378,9 +1378,13 @@ export class TradingEngine {
         openedAt: entry.openedAt,
       }
       // Synthesize an order record for bracket-path closes where we have no
-      // real Order object — the vault writer expects one.
+      // real Order object — the vault writer expects one. The traceId is
+      // tagged `bracket-synth-…` so post-mortem grep can distinguish these
+      // from user-initiated orders that flowed through OrderManager.
+      const syntheticId = `bracket-${symbol}-${Date.now()}`
       const orderForVault: Order = order ?? {
-        id: `bracket-${symbol}-${Date.now()}`,
+        id: syntheticId,
+        traceId: `bracket-synth-${syntheticId}`,
         createdAt: Date.now(),
         filledAt:  Date.now(),
         status: 'filled' as const,

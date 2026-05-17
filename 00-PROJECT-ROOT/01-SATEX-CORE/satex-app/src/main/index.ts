@@ -4,7 +4,7 @@
  * contextIsolation: true, nodeIntegration: false — renderer is sandboxed.
  * All renderer↔main communication flows through the typed IPC registry.
  */
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Notification, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -73,6 +73,32 @@ app.disableHardwareAcceleration()
 // both switches to stop the network service from cycling.
 app.commandLine.appendSwitch('disable-gpu')
 app.commandLine.appendSwitch('disable-gpu-compositing')
+
+// ── A4 — Crash dump capture (Chromium Crashpad) ─────────────────────────────
+// Enables minidump generation on main / renderer / GPU process crashes. The
+// dumps land in app.getPath('crashDumps') — on Windows that's
+// %APPDATA%/satex-app/Crashpad/. uploadToServer:false keeps them local; we
+// don't currently operate a crash-reporting endpoint, but the dumps + the
+// rotating S1-7 log file are enough to investigate a crash after the fact.
+//
+// crashReporter.start MUST run before app.whenReady() to capture pre-ready
+// crashes; calling it later silently no-ops for the bootstrap phase.
+try {
+  crashReporter.start({
+    productName: 'SATEX',
+    companyName: 'SATEX Trading',
+    submitURL: '',          // unused when uploadToServer is false
+    uploadToServer: false,  // keep dumps local — no PII leaves the box
+    compress: true,         // smaller .dmp.gz files on disk
+    ignoreSystemCrashHandler: false,
+    rateLimit: false,       // we never overwhelm anyone since we don't upload
+  })
+} catch (e) {
+  // Don't take down the app if crashReporter fails to initialize — file
+  // logs (S1-7) are still the primary forensic channel.
+  // eslint-disable-next-line no-console
+  console.error('[satex] crashReporter.start failed:', e)
+}
 
 // ── Single-instance lock ────────────────────────────────────────────────────
 // Alpaca's IEX feed allows exactly 1 concurrent WS connection per account.

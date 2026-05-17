@@ -22,6 +22,7 @@ import {
   BUYING_POWER_MULT, DAILY_LOSS_LIMIT_PCT, MAX_OPEN_POSITIONS,
   MAX_POSITION_CONCENTRATION, STARTING_EQUITY
 } from '@shared/constants'
+import { randomUUID } from 'node:crypto'
 
 export interface OrderValidationContext {
   /** Current quote/last price for the symbol — used for notional computation. */
@@ -196,9 +197,21 @@ export class OrderManager {
 
   // ── Order lifecycle ─────────────────────────────────────────────────────────
   createOrder(req: OrderRequest, status: OrderStatus = 'pending'): Order {
-    const order: Order = { id: req.id ?? orderId(), createdAt: Date.now(), status, request: req }
+    // A4 — every Order gets a traceId at create time. crypto.randomUUID
+    // gives us 122 bits of entropy with zero coordination, which is plenty
+    // for log correlation (collision probability is negligible even at
+    // billions of orders/day for years). The id is included on every log
+    // line that touches this order so a post-mortem can reconstruct the
+    // full lifecycle by grepping the rotating log files.
+    const order: Order = {
+      id: req.id ?? orderId(),
+      traceId: randomUUID(),
+      createdAt: Date.now(),
+      status,
+      request: req,
+    }
     this.orders.set(order.id, order)
-    log.info('order created', { id: order.id, symbol: req.symbol, side: req.side, qty: req.quantity })
+    log.info('order created', { id: order.id, traceId: order.traceId, symbol: req.symbol, side: req.side, qty: req.quantity })
     return order
   }
 
@@ -209,7 +222,7 @@ export class OrderManager {
     order.filledAt  = Date.now()
     order.fillPrice = fillPrice
     this.applyFill(order, fillPrice)
-    log.info('order filled', { id, symbol: order.request.symbol, side: order.request.side, fillPrice })
+    log.info('order filled', { id, traceId: order.traceId, symbol: order.request.symbol, side: order.request.side, fillPrice })
     for (const cb of this.fillCbs) cb(order, this.positions.get(order.request.symbol) ?? null)
   }
 
@@ -217,7 +230,7 @@ export class OrderManager {
     const order = this.orders.get(id)
     if (!order) return
     order.status = 'rejected'; order.rejectionReason = reason
-    log.warn('order rejected', { id, reason })
+    log.warn('order rejected', { id, traceId: order.traceId, reason })
     for (const cb of this.fillCbs) cb(order, null)
   }
 
@@ -225,7 +238,7 @@ export class OrderManager {
     const order = this.orders.get(id)
     if (!order || order.status !== 'pending') return
     order.status = 'canceled'
-    log.info('order canceled', { id })
+    log.info('order canceled', { id, traceId: order.traceId })
     for (const cb of this.fillCbs) cb(order, null)
   }
 

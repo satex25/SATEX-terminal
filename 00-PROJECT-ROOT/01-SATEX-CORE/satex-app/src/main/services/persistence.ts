@@ -103,7 +103,10 @@ function migrate(db: DB): void {
       take_profit     REAL,
       fill_price      REAL,
       source          TEXT,
-      rejection_reason TEXT
+      rejection_reason TEXT,
+      -- A4 — correlation id stamped at order creation. NULL only for rows
+      -- predating A4; rowToOrder synthesizes "legacy-<id>" for those.
+      trace_id        TEXT
     );
 
     CREATE TABLE IF NOT EXISTS pnl (
@@ -214,6 +217,20 @@ function migrate(db: DB): void {
       sealed_at      INTEGER NOT NULL
     );
   `)
+
+  // A4 — idempotent additive migration for orders.trace_id. The CREATE TABLE
+  // IF NOT EXISTS above only takes effect on fresh installs; existing
+  // databases need ALTER. SQLite ALTER ADD COLUMN throws "duplicate column
+  // name" on the second run, which is the success signal — we swallow it.
+  // ENOENT-on-table is impossible at this point (we just ran the CREATE).
+  try {
+    db.exec('ALTER TABLE orders ADD COLUMN trace_id TEXT')
+  } catch (e) {
+    const msg = String(e)
+    if (!/duplicate column/i.test(msg)) {
+      log.warn('orders.trace_id migration unexpected error', { err: msg })
+    }
+  }
   log.info('sqlite schema migrated')
 }
 
@@ -264,13 +281,13 @@ export function insertOrder(o: Order, sessionId: string): void {
   openDB().prepare(`
     INSERT OR REPLACE INTO orders
       (id, session_id, created_at, filled_at, status, symbol, side, type, quantity,
-       limit_price, stop_loss, take_profit, fill_price, source, rejection_reason)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       limit_price, stop_loss, take_profit, fill_price, source, rejection_reason, trace_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     o.id, sessionId, o.createdAt, o.filledAt ?? null, o.status,
     r.symbol, r.side, r.type, r.quantity,
     r.limitPrice ?? null, r.stopLoss ?? null, r.takeProfit ?? null,
-    o.fillPrice ?? null, r.source ?? null, o.rejectionReason ?? null
+    o.fillPrice ?? null, r.source ?? null, o.rejectionReason ?? null, o.traceId
   )
 }
 
@@ -283,8 +300,13 @@ export function listAllOrders(limit = 500): Order[] {
 }
 
 function rowToOrder(r: Record<string, unknown>): Order {
+  const id = String(r['id'])
   return {
-    id: String(r['id']),
+    id,
+    // A4 — orders predating the trace_id column read as `legacy-<id>` so
+    // every Order still has a stable identifier downstream code can rely on
+    // without null-checking.
+    traceId: r['trace_id'] != null ? String(r['trace_id']) : `legacy-${id}`,
     createdAt: Number(r['created_at']),
     filledAt: r['filled_at'] != null ? Number(r['filled_at']) : undefined,
     status: r['status'] as Order['status'],

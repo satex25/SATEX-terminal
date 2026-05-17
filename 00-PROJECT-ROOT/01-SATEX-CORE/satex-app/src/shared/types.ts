@@ -200,6 +200,12 @@ export interface ClosedTrade {
 
 export interface Order {
   id: string
+  /** A4 — correlation id stamped at create time. Threaded through every log
+   *  line that mentions the order (created/filled/rejected/canceled) so a
+   *  post-mortem can reconstruct the full lifecycle by grepping the rotating
+   *  log files for a single traceId. Persisted to the `orders.trace_id`
+   *  column too — orders predating A4 read as `legacy-<id>`. */
+  traceId: string
   createdAt: number
   filledAt?: number
   status: OrderStatus
