@@ -69,10 +69,16 @@ function statusForPct(pct: number, watch: number, breach: number): RiskGateStatu
   return 'OK'
 }
 
-/** Pearson correlation of two equal-length close-price arrays. */
-function correlation(a: number[], b: number[]): number {
+/** Minimum overlapping bars required for a meaningful Pearson correlation.
+ *  Below this we'd be reading noise as signal; the pair is skipped. */
+const MIN_CORR_OVERLAP = 20
+
+/** Pearson correlation of two equal-length close-price arrays. Caller is
+ *  responsible for timestamp alignment — see alignCloses() below. Exported
+ *  for unit tests of adversarial-finding C4. */
+export function correlation(a: number[], b: number[]): number {
   const n = Math.min(a.length, b.length)
-  if (n < 5) return 0
+  if (n < MIN_CORR_OVERLAP) return 0
   let sumA = 0, sumB = 0
   for (let i = 0; i < n; i++) { sumA += a[i]!; sumB += b[i]! }
   const ma = sumA / n, mb = sumB / n
@@ -83,6 +89,24 @@ function correlation(a: number[], b: number[]): number {
   }
   const denom = Math.sqrt(da * db)
   return denom === 0 ? 0 : num / denom
+}
+
+/** Align two candle series by `time` and return the matched close-price arrays.
+ *  When series have different lengths (one symbol joined the portfolio later,
+ *  feed gap, late subscribe) raw index-based correlation reads garbage from
+ *  misaligned timestamps — produces a number that looks meaningful but compares
+ *  bar T of A against bar T-k of B. This alignment drops unmatched bars.
+ *  Exported for unit tests of adversarial-finding C4. */
+export function alignCloses(a: Candle[], b: Candle[]): { a: number[]; b: number[] } {
+  const bByTime = new Map<number, number>()
+  for (const c of b) bByTime.set(c.time, c.close)
+  const outA: number[] = []
+  const outB: number[] = []
+  for (const c of a) {
+    const matched = bByTime.get(c.time)
+    if (matched !== undefined) { outA.push(c.close); outB.push(matched) }
+  }
+  return { a: outA, b: outB }
 }
 
 /** Sample stdev of an array. */
@@ -204,33 +228,44 @@ export class RiskGatesService {
     // Gate 5 — CORRELATION (rolling avg pairwise rho across open symbols)
     let avgRho = 0
     let dominantPair: string | null = null
+    let usablePairCount = 0
+    let droppedPairCount = 0
     if (positions.length >= 2) {
-      const closes: Record<string, number[]> = {}
+      const candlesBySym: Record<string, Candle[]> = {}
       for (const p of positions) {
-        const cs = this.deps.getCandles(p.symbol, 60).map(c => c.close)
-        if (cs.length >= 5) closes[p.symbol] = cs
+        const cs = this.deps.getCandles(p.symbol, 60)
+        if (cs.length >= MIN_CORR_OVERLAP) candlesBySym[p.symbol] = cs
       }
-      const syms = Object.keys(closes)
-      let sumRho = 0, pairCount = 0
+      const syms = Object.keys(candlesBySym)
+      let sumRho = 0
       let topRho = 0
       for (let i = 0; i < syms.length; i++) {
         for (let j = i + 1; j < syms.length; j++) {
-          const rho = correlation(closes[syms[i]!]!, closes[syms[j]!]!)
+          const aligned = alignCloses(candlesBySym[syms[i]!]!, candlesBySym[syms[j]!]!)
+          if (aligned.a.length < MIN_CORR_OVERLAP) {
+            droppedPairCount++
+            continue
+          }
+          const rho = correlation(aligned.a, aligned.b)
           sumRho += Math.abs(rho)
-          pairCount++
+          usablePairCount++
           if (Math.abs(rho) > Math.abs(topRho)) {
             topRho = rho
             dominantPair = `${syms[i]}/${syms[j]}`
           }
         }
       }
-      avgRho = pairCount > 0 ? sumRho / pairCount : 0
+      avgRho = usablePairCount > 0 ? sumRho / usablePairCount : 0
     }
     const corrPct = Math.min(1, avgRho / 1.0)
     const corrStatus = statusForPct(corrPct, cfg.correlationWatch, 0.9)
-    const corrValue = positions.length >= 2 && dominantPair
-      ? `${avgRho.toFixed(2)} · ${dominantPair} tight`
-      : 'n/a · need ≥2 positions'
+    const corrValue = positions.length < 2
+      ? 'n/a · need ≥2 positions'
+      : usablePairCount === 0
+        ? `n/a · need ≥${MIN_CORR_OVERLAP} aligned bars (dropped ${droppedPairCount})`
+        : dominantPair
+          ? `${avgRho.toFixed(2)} · ${dominantPair} tight`
+          : `${avgRho.toFixed(2)} avg`
 
     // Gate 6 — SESSION VAR (95%)
     const snaps = this.deps.getPnlSnapshots()
