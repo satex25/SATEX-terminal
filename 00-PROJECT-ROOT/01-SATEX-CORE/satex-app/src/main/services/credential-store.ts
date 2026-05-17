@@ -1,9 +1,15 @@
 /**
  * SATEX — Encrypted credential store.
  * Uses Electron safeStorage (OS keychain on macOS/Windows, libsecret on Linux).
- * Falls back to plaintext file ONLY in dev when safeStorage is unavailable
- * (logs a warning loudly). Credentials are never logged or sent over IPC in
- * plaintext after they're stored.
+ *
+ * Hard fail (adversarial finding C7, 2026-05-16): if `safeStorage` reports
+ * encryption unavailable we REFUSE both read and write. Previously the store
+ * fell back to a plaintext JSON file with only a log warning, which meant a
+ * broken DPAPI / corrupted user profile silently wrote live API keys to disk
+ * in cleartext. The new behavior surfaces the error to the renderer (set
+ * returns `{ ok:false, reason:'…' }`; reads return null and force re-entry).
+ * The user re-enters credentials, the OS keychain issue gets diagnosed, no
+ * key ever lands on disk unencrypted.
  *
  * Dual storage (added 2026-05-13): one slot per mode. Both paper and live
  * keypairs can be configured side-by-side; the active endpoint is chosen by
@@ -31,16 +37,27 @@ interface StoredBaidu { key: string }
 
 function file(name: string): string { return path.join(app.getPath('userData'), name) }
 
+export class SecureStorageUnavailableError extends Error {
+  constructor() {
+    super('OS secure-storage (safeStorage) is unavailable on this system — credentials cannot be stored or read securely.')
+    this.name = 'SecureStorageUnavailableError'
+  }
+}
+
 function readEncrypted<T>(p: string): T | null {
   if (!fs.existsSync(p)) return null
+  // Refuse to read if safeStorage is unavailable. A file on disk written
+  // by a prior session would have been encrypted — we can't decrypt without
+  // safeStorage anyway. The defensive read here also rejects any plaintext
+  // file an attacker may have planted in userData.
+  if (!safeStorage.isEncryptionAvailable()) {
+    log.error('safeStorage unavailable — refusing to read credentials', { path: p })
+    return null
+  }
   try {
     const raw = fs.readFileSync(p)
-    if (safeStorage.isEncryptionAvailable()) {
-      const json = safeStorage.decryptString(raw)
-      return JSON.parse(json) as T
-    }
-    log.warn('safeStorage unavailable — reading plaintext fallback', { path: p })
-    return JSON.parse(raw.toString('utf8')) as T
+    const json = safeStorage.decryptString(raw)
+    return JSON.parse(json) as T
   } catch (err) {
     log.error('failed to read credentials', { path: p, err: String(err) })
     return null
@@ -48,13 +65,14 @@ function readEncrypted<T>(p: string): T | null {
 }
 
 function writeEncrypted(p: string, data: unknown): void {
-  const json = JSON.stringify(data)
-  if (safeStorage.isEncryptionAvailable()) {
-    fs.writeFileSync(p, safeStorage.encryptString(json))
-  } else {
-    log.warn('safeStorage unavailable — writing plaintext fallback', { path: p })
-    fs.writeFileSync(p, json, 'utf8')
+  if (!safeStorage.isEncryptionAvailable()) {
+    // Hard fail — caller must surface this to the user. Previously the
+    // function silently wrote a plaintext JSON file with API keys.
+    log.error('safeStorage unavailable — refusing to write credentials', { path: p })
+    throw new SecureStorageUnavailableError()
   }
+  const json = JSON.stringify(data)
+  fs.writeFileSync(p, safeStorage.encryptString(json))
 }
 
 // ── Alpaca ────────────────────────────────────────────────────────────────
@@ -72,7 +90,14 @@ function loadStored(): Stored | null {
     const legacy = raw as LegacyStored
     const migrated: Stored = { feed: legacy.feed, paper: { keyId: legacy.keyId, secretKey: legacy.secretKey } }
     log.warn('migrating legacy single-keypair credential file → paper slot')
-    writeEncrypted(file(ALPACA_FILE), migrated)
+    try {
+      writeEncrypted(file(ALPACA_FILE), migrated)
+    } catch (e) {
+      // SecureStorageUnavailableError or fs failure. Return the in-memory
+      // migrated shape so this session still works; persistence retries
+      // next session when the user re-saves.
+      log.warn('legacy credential migration could not persist', { err: String(e) })
+    }
     return migrated
   }
   return raw as Stored
@@ -102,7 +127,15 @@ export function setAlpacaCreds(req: CredentialsSetRequest): { ok: boolean; reaso
   const next: Stored = { ...existing, feed: req.feed }
   if (mode === 'live') next.live  = { keyId, secretKey }
   else                 next.paper = { keyId, secretKey }
-  writeEncrypted(file(ALPACA_FILE), next)
+  try {
+    writeEncrypted(file(ALPACA_FILE), next)
+  } catch (e) {
+    if (e instanceof SecureStorageUnavailableError) {
+      return { ok: false, reason: 'OS secure-storage unavailable — credentials cannot be saved on this system. Check that your OS keychain (Keychain on macOS, DPAPI on Windows, libsecret on Linux) is functional, then retry.' }
+    }
+    log.error('alpaca credentials write failed', { err: String(e) })
+    return { ok: false, reason: `Failed to save credentials: ${String(e)}` }
+  }
   log.info('alpaca credentials saved', { mode, feed: req.feed, keyIdLen: keyId.length })
   return { ok: true }
 }
@@ -155,7 +188,15 @@ export function getBaiduKey(): string | null {
 export function setBaiduKey(key: string): { ok: boolean; reason?: string } {
   const k = key.trim()
   if (k.length < 20) return { ok: false, reason: 'Access token looks too short — paste the full AI Studio token.' }
-  writeEncrypted(file(BAIDU_FILE), { key: k })
+  try {
+    writeEncrypted(file(BAIDU_FILE), { key: k })
+  } catch (e) {
+    if (e instanceof SecureStorageUnavailableError) {
+      return { ok: false, reason: 'OS secure-storage unavailable — token cannot be saved on this system. Check your OS keychain, then retry.' }
+    }
+    log.error('baidu key write failed', { err: String(e) })
+    return { ok: false, reason: `Failed to save token: ${String(e)}` }
+  }
   log.info('baidu ai-studio key saved')
   return { ok: true }
 }
