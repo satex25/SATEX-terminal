@@ -210,10 +210,25 @@ export class OrderManager {
   }
 
   // ── Signal helpers ───────────────────────────────────────────────────────────
-  signalToRequest(signal: StrategySignal, notionalCap: number): OrderRequest {
-    const price = this.account.equity / (this.account.equity / notionalCap)
-    // qty is floored to 1 minimum
-    const qty   = Math.max(1, Math.floor(notionalCap / (price || 1)))
+  /** Convert a strategy signal into an order request sized to fit `notionalCap`.
+   *
+   *  `refPrice` is the current quoted/last price for the symbol. Caller must
+   *  supply a positive price — typically `market.getQuote(symbol).last` or a
+   *  candle close. A non-positive refPrice falls back to qty=1 so the caller
+   *  still gets a syntactically-valid order (and the engine's downstream
+   *  Gate 0 stale-quote check will reject it under live mode).
+   *
+   *  Prior to 2026-05-16 this function used `equity / (equity / notionalCap)`
+   *  which is algebraically `notionalCap`, then `floor(notionalCap /
+   *  notionalCap)` which is always 1 — so every autonomous order was
+   *  silently sized to 1 share regardless of cap. Closes adversarial
+   *  finding C3.
+   */
+  signalToRequest(signal: StrategySignal, notionalCap: number, refPrice: number): OrderRequest {
+    const safePrice = refPrice > 0 ? refPrice : 0
+    const qty = safePrice > 0
+      ? Math.max(1, Math.floor(notionalCap / safePrice))
+      : 1
     return {
       symbol:    signal.symbol,
       side:      signal.action,
