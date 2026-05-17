@@ -1033,7 +1033,13 @@ export class TradingEngine {
 
   // ── Historical-day importer ─────────────────────────────────────────────────
   async importHistoricalDay(req: HistoricalImportRequest): Promise<HistoricalImportResult> {
-    const importer = new HistoricalImporter(this.alpaca)
+    // Fall back to a REST-only AlpacaClient when the engine booted in
+    // simulator mode (SATEX_USE_SIMULATOR=true, or no creds at boot) but the
+    // user has since saved credentials. Without this fallback `this.alpaca`
+    // is null and the importer fails with "No Alpaca credentials" even
+    // though the credential store has perfectly good keys.
+    const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
+    const importer = new HistoricalImporter(alpaca)
     return importer.import(req)
   }
 
@@ -1041,8 +1047,33 @@ export class TradingEngine {
     if (this.replay && this.replay.snapshot().sessionId === sessionId) {
       return { ok: false, reason: 'Stop replay before deleting the active session.' }
     }
+    // deleteSession is local-DB-only — no Alpaca call. Passing null is fine.
     const importer = new HistoricalImporter(this.alpaca)
     return importer.deleteSession(sessionId)
+  }
+
+  /** Construct a REST-only AlpacaClient from currently-stored credentials,
+   *  without touching `this.alpaca` or starting any WS connection. Used by
+   *  features that need historical/account REST access (e.g. the chart
+   *  historical-day importer) when the engine is running the simulator as
+   *  its live market source. Returns null when no usable credentials exist
+   *  on disk or in env — callers should still surface the original
+   *  "no credentials" error in that case. */
+  private buildRestOnlyAlpacaClient(): AlpacaClient | null {
+    const env = getEnv()
+    const mode = getAlpacaMode()
+    const stored = getAlpacaCreds(mode)
+    const keyId     = stored?.keyId     ?? (mode === 'paper' ? env.alpacaKeyId     : '')
+    const secretKey = stored?.secretKey ?? (mode === 'paper' ? env.alpacaSecretKey : '')
+    if (!keyId || !secretKey) return null
+    const cfg: AlpacaConfig = {
+      keyId, secretKey,
+      baseUrl: resolveBaseUrl(env.alpacaBaseUrl),
+      dataUrl: env.alpacaDataUrl,
+      feed:    stored?.feed ?? env.alpacaFeed,
+    }
+    log.info('historical-import: built REST-only AlpacaClient (engine in simulator mode)', { mode, feed: cfg.feed })
+    return new AlpacaClient(cfg)
   }
 
   /**
