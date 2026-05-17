@@ -346,6 +346,15 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
           ].join('\n')}
         />
         <StatPill
+          dot={status.crypto.connected ? 'var(--bb-pos)' : 'var(--bb-txt-mute)'}
+          label="₿"
+          value={status.crypto.connected ? `${status.crypto.subscribedSymbols}` : '—'}
+          title={status.crypto.connected
+            ? `Crypto feed live · ${status.crypto.subscribedSymbols} symbol${status.crypto.subscribedSymbols === 1 ? '' : 's'} streaming (separate from US-equity WebSocket)`
+            : 'Crypto feed offline — save Alpaca keys (Settings → Data Source) to enable 24/7 BTC/ETH streaming'}
+          pulse={status.crypto.connected}
+        />
+        <StatPill
           dot={status.latencyMs > 50 ? 'var(--bb-warn)' : 'var(--bb-pos)'}
           label="LAT"
           value={status.latencyMs ? `${status.latencyMs}ms` : '—'}
