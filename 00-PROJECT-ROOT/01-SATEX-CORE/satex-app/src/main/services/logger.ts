@@ -11,7 +11,7 @@
  * starts. Failures in the file sink are silent (stderr-logged once per day)
  * so a disk-full condition can't crash the trading engine.
  */
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error'
@@ -92,19 +92,45 @@ function currentLogPath(): string | null {
   return join(fileSinkDir, `satex-${yyyy}-${mm}-${dd}.log`)
 }
 
+/** Pure rotation step extracted from `maybeRotate` for testability. After
+ *  invocation:
+ *    `${basePath}.1`      = the just-rotated current file (most recent)
+ *    `${basePath}.{N}`    = oldest surviving rotation
+ *    `${basePath}.{N+1}+` = dropped (would-be next slot's content discarded)
+ *  The previous loop-then-recycle approach (find first empty slot 1..N, else
+ *  overwrite slot 1) froze slots .2..N after the first N rotations because it
+ *  always re-overwrote slot 1, leaving the higher slots holding only their
+ *  initial contents forever. */
+export function rotateSlots(opts: {
+  exists: (path: string) => boolean
+  rename: (from: string, to: string) => void
+  remove: (path: string) => void
+  basePath: string
+  maxSlots: number
+}): void {
+  const { exists, rename, remove, basePath, maxSlots } = opts
+  const oldest = `${basePath}.${maxSlots}`
+  if (exists(oldest)) remove(oldest)
+  for (let i = maxSlots - 1; i >= 1; i--) {
+    const src = `${basePath}.${i}`
+    const dst = `${basePath}.${i + 1}`
+    if (exists(src)) rename(src, dst)
+  }
+  rename(basePath, `${basePath}.1`)
+}
+
 function maybeRotate(path: string): void {
   try {
     if (!existsSync(path)) return
     const size = statSync(path).size
     if (size < FILE_SIZE_CAP_BYTES) return
-    // Find next rotation slot 1..MAX_ROTATIONS. Older slots get overwritten
-    // by the modulo wrap rather than accumulating forever.
-    for (let i = 1; i <= MAX_ROTATIONS; i++) {
-      const rotPath = `${path}.${i}`
-      if (!existsSync(rotPath)) { renameSync(path, rotPath); return }
-    }
-    // All slots full — recycle slot 1.
-    renameSync(path, `${path}.1`)
+    rotateSlots({
+      exists:   existsSync,
+      rename:   renameSync,
+      remove:   (p) => rmSync(p, { force: true }),
+      basePath: path,
+      maxSlots: MAX_ROTATIONS,
+    })
   } catch (e) {
     const now = Date.now()
     if (now - fileSinkFailedAt > 24 * 60 * 60_000) {
