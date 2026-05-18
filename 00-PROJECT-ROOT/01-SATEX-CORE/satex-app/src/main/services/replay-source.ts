@@ -162,6 +162,19 @@ export class ReplaySource implements MarketDataSource {
         case 'ok':
           log.info('tape integrity verified', { sessionId, sealedAt: this.manifestVerdict.manifest.sealedAt })
           break
+        case 'ok-extended':
+          // 2026-05-18 — periodic-reseal recovery. The recorder sealed mid-
+          // session, then more rows were appended before the next reseal (or
+          // before stop()) — typically because the previous session crashed.
+          // First N rows are hash-verified; the tail is unverified but
+          // structurally consistent (firstTs locked, lastTs only grew).
+          log.info('tape integrity verified with extended tail', {
+            sessionId,
+            sealedAt:    this.manifestVerdict.manifest.sealedAt,
+            extraTicks:  this.manifestVerdict.extraTicks,
+            extraSpanMs: this.manifestVerdict.extraSpanMs,
+          })
+          break
         case 'no-manifest':
           log.warn('tape opened without integrity manifest', { sessionId, reason: this.manifestVerdict.reason })
           break

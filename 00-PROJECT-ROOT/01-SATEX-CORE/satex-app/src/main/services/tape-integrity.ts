@@ -63,12 +63,30 @@ export function computeTapeManifestHash(m: ManifestInputs): string {
 
 /** Verdict from comparing a stored manifest against current bounds. */
 export type ManifestVerdict =
-  | { status: 'ok';          manifest: TapeManifest }
-  | { status: 'no-manifest'; reason: 'never sealed' | 'empty tape' }
-  | { status: 'mismatch';    expected: TapeManifest; observed: ManifestInputs; reason: string }
+  | { status: 'ok';           manifest: TapeManifest }
+  | { status: 'ok-extended';  manifest: TapeManifest; extraTicks: number; extraSpanMs: number }
+  | { status: 'no-manifest';  reason: 'never sealed' | 'empty tape' }
+  | { status: 'mismatch';     expected: TapeManifest; observed: ManifestInputs; reason: string }
 
 /**
  * Compare stored manifest against current bounds. Pure — no I/O.
+ *
+ * Three positive outcomes:
+ *   • `ok`           — observed bounds match the stored manifest exactly. Either
+ *                      the manifest was sealed at session-stop and nothing has
+ *                      moved since, or a rolling seal happened to land at the
+ *                      tape's current tail.
+ *   • `ok-extended`  — the tape was legitimately appended after the stored
+ *                      seal: same firstTs, tickCount grew, lastTs grew (or
+ *                      stayed equal). This is the normal "crash-mid-session +
+ *                      a few flushes between last reseal and crash" pattern
+ *                      that the periodic-reseal work (2026-05-18) was designed
+ *                      to recover from. Coverage of the integrity hash is
+ *                      over [firstTs..stored.lastTs] only; the extra tail
+ *                      (extraTicks, extraSpanMs) is reported but not hashed.
+ *   • `mismatch`     — every other shape: firstTs drifted, tickCount shrank,
+ *                      lastTs moved backward, stored hash doesn't match its
+ *                      own bound fields, etc.
  *
  * `mismatch` distinguishes between same-bounds-but-bad-hash (table or row
  * tampering invisible at the bounds level) and bound divergence (rows
@@ -98,30 +116,35 @@ export function verifyTapeManifest(
       reason: 'stored manifest hash does not match its own bound fields (manifest row corrupted)',
     }
   }
-  const observedHash = computeTapeManifestHash(observed)
-  if (observedHash !== stored.manifestHash) {
+  // Stored row is self-consistent. Now classify observed-vs-stored shape.
+  const sessionDrifted    = stored.sessionId !== observed.sessionId
+  const startDrifted      = stored.firstTs   !== observed.firstTs
+  const ticksShrank       = observed.tickCount < stored.tickCount
+  const endMovedBack      = observed.lastTs   < stored.lastTs
+  // Append-only invariant: tickCount strictly grows when new rows are inserted.
+  // If tickCount is unchanged but lastTs changed (either direction), the only
+  // explanation is that an existing row's timestamp was rewritten — corruption.
+  const sameCountDifferentEnd = observed.tickCount === stored.tickCount
+                             && observed.lastTs    !== stored.lastTs
+  if (sessionDrifted || startDrifted || ticksShrank || endMovedBack || sameCountDifferentEnd) {
     return {
       status: 'mismatch',
       expected: stored,
       observed,
-      reason: 'tape bounds drifted from sealed manifest (rows added, removed, or rewritten)',
+      reason: 'tape bounds drifted from sealed manifest (rows removed, start rewritten, last-ts moved backward, or row timestamp rewritten)',
     }
   }
-  // All three of (stored.bounds, observed.bounds, stored.hash) agree.
-  if (
-    stored.tickCount !== observed.tickCount ||
-    stored.firstTs   !== observed.firstTs   ||
-    stored.lastTs    !== observed.lastTs
-  ) {
-    // This branch is theoretically unreachable given the hash matches, but
-    // we keep it for defense-in-depth — if the hash function ever degrades
-    // (collisions in our small input space), this catches it.
-    return {
-      status: 'mismatch',
-      expected: stored,
-      observed,
-      reason: 'bound fields disagree despite hash match — possible hash collision',
-    }
+  // Either an exact match (stop-time seal, or rolling seal that happens to be
+  // at current tail) or an extension (rolling seal followed by N more flushes).
+  const exactMatch = observed.tickCount === stored.tickCount
+                  && observed.lastTs    === stored.lastTs
+  if (exactMatch) {
+    return { status: 'ok', manifest: stored }
   }
-  return { status: 'ok', manifest: stored }
+  return {
+    status: 'ok-extended',
+    manifest: stored,
+    extraTicks:  observed.tickCount - stored.tickCount,
+    extraSpanMs: observed.lastTs    - stored.lastTs,
+  }
 }

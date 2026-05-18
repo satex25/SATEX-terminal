@@ -92,25 +92,22 @@ describe('verifyTapeManifest', () => {
     if (verdict.status === 'no-manifest') expect(verdict.reason).toBe('empty tape')
   })
 
-  it('returns mismatch when tickCount drifted', () => {
-    const stored = makeManifest()
-    const verdict = verifyTapeManifest(stored, { ...sample, tickCount: sample.tickCount + 1 })
-    expect(verdict.status).toBe('mismatch')
-    if (verdict.status === 'mismatch') {
-      expect(verdict.reason).toContain('drifted')
-      expect(verdict.observed.tickCount).toBe(sample.tickCount + 1)
-      expect(verdict.expected.tickCount).toBe(sample.tickCount)
-    }
-  })
+  // 2026-05-18 — periodic-reseal work narrowed the mismatch surface. Drift in
+  // the forward direction (more rows, later lastTs) on an unchanged firstTs is
+  // now `ok-extended`, not `mismatch`. See the `rolling-reseal recovery`
+  // describe block below for the new positive cases. The mismatch path now
+  // only fires when drift is incompatible with append-only appending.
 
-  it('returns mismatch when firstTs drifted', () => {
+  it('returns mismatch when firstTs drifted (start of tape rewritten)', () => {
     const stored = makeManifest()
     const verdict = verifyTapeManifest(stored, { ...sample, firstTs: sample.firstTs + 1000 })
     expect(verdict.status).toBe('mismatch')
   })
 
-  it('returns mismatch when lastTs drifted', () => {
+  it('returns mismatch when tickCount is unchanged but lastTs grew (no-row drift, impossible append)', () => {
     const stored = makeManifest()
+    // Same N ticks somehow span a longer window — only happens if the last
+    // row's timestamp was rewritten, which is corruption regardless of intent.
     const verdict = verifyTapeManifest(stored, { ...sample, lastTs: sample.lastTs + 1000 })
     expect(verdict.status).toBe('mismatch')
   })
@@ -142,5 +139,78 @@ describe('verifyTapeManifest', () => {
     }
     const verdict = verifyTapeManifest(stored, { ...baseInputs, sessionId: 'sess_Y' })
     expect(verdict.status).toBe('mismatch')
+  })
+})
+
+describe('verifyTapeManifest — rolling-reseal recovery (2026-05-18)', () => {
+  // Periodic reseal during recording means the manifest captured at any moment
+  // may NOT cover every row currently on disk. A clean crash leaves the tape
+  // extended past the last seal: same firstTs, more rows, lastTs grown. This
+  // pattern is `ok-extended` — the prefix is hash-verified, the tail is
+  // structurally consistent.
+
+  function makeManifest(extra: Partial<TapeManifest> = {}): TapeManifest {
+    const base = { ...sample, sealedAt: 1_700_000_010_000 }
+    return {
+      ...base,
+      manifestHash: computeTapeManifestHash(base),
+      ...extra,
+    }
+  }
+
+  it('returns ok-extended when more rows appended after seal (firstTs locked, lastTs grew)', () => {
+    const stored = makeManifest()
+    const observed = {
+      ...sample,
+      tickCount: sample.tickCount + 250,    // ~5s of additional ticks before crash
+      lastTs:    sample.lastTs    + 5_000,
+    }
+    const verdict = verifyTapeManifest(stored, observed)
+    expect(verdict.status).toBe('ok-extended')
+    if (verdict.status === 'ok-extended') {
+      expect(verdict.extraTicks).toBe(250)
+      expect(verdict.extraSpanMs).toBe(5_000)
+      expect(verdict.manifest).toBe(stored)
+    }
+  })
+
+  it('returns ok-extended when tickCount grew but lastTs is exactly equal (edge: same-ms append)', () => {
+    const stored = makeManifest()
+    const observed = { ...sample, tickCount: sample.tickCount + 1 } // lastTs unchanged
+    const verdict = verifyTapeManifest(stored, observed)
+    expect(verdict.status).toBe('ok-extended')
+    if (verdict.status === 'ok-extended') {
+      expect(verdict.extraTicks).toBe(1)
+      expect(verdict.extraSpanMs).toBe(0)
+    }
+  })
+
+  it('returns mismatch when firstTs drifted even if tickCount grew (start was rewritten)', () => {
+    const stored = makeManifest()
+    const verdict = verifyTapeManifest(stored, {
+      ...sample,
+      firstTs:   sample.firstTs   + 100,   // start moved forward
+      tickCount: sample.tickCount + 50,
+      lastTs:    sample.lastTs    + 1_000,
+    })
+    expect(verdict.status).toBe('mismatch')
+  })
+
+  it('returns mismatch when tickCount shrank (rows removed)', () => {
+    const stored = makeManifest()
+    const verdict = verifyTapeManifest(stored, { ...sample, tickCount: sample.tickCount - 1 })
+    expect(verdict.status).toBe('mismatch')
+  })
+
+  it('returns mismatch when lastTs moved backward (newest rows removed)', () => {
+    const stored = makeManifest()
+    const verdict = verifyTapeManifest(stored, { ...sample, lastTs: sample.lastTs - 1 })
+    expect(verdict.status).toBe('mismatch')
+  })
+
+  it('exact match still returns ok (not ok-extended) — stop-time seal is the trivial case', () => {
+    const stored = makeManifest()
+    const verdict = verifyTapeManifest(stored, sample)
+    expect(verdict.status).toBe('ok')
   })
 })

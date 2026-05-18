@@ -29,6 +29,14 @@ const MIN_SAMPLE_MS = 250
 const FLUSH_MS      = 1_000
 const MAX_BUFFER    = 4_000
 
+// 2026-05-18 — periodic manifest reseal cadence (deferred issue #1 item).
+// Trades off "max ticks at risk on crash" vs. "DB write rate during long
+// sessions." 5s = a manifest is at most ~5s stale at any moment; a crash
+// leaves the tape recoverable via the `ok-extended` verify outcome with at
+// most ~5s of unverified tail. Cost is one bounds-read + one INSERT OR
+// REPLACE every 5s — sub-millisecond on better-sqlite3.
+const RESEAL_INTERVAL_MS = 5_000
+
 export class TickRecorder {
   private sessionId: string
   private buffer:    TickTapeRow[] = []
@@ -40,6 +48,11 @@ export class TickRecorder {
   private totalRecorded = 0
   private lastFlushSize = 0
   private lastFlushAt: number | null = null
+  /** Wall-clock millis of the last successful (rolling or final) manifest seal.
+   *  Zero before any seal has fired. Drives the 5s periodic reseal cadence —
+   *  see RESEAL_INTERVAL_MS for the rationale. */
+  private lastSealedAt = 0
+  private totalSeals   = 0
 
   constructor(sessionId: string) {
     this.sessionId = sessionId
@@ -57,36 +70,55 @@ export class TickRecorder {
     this.active = false
     if (this.flushTimer) { clearInterval(this.flushTimer); this.flushTimer = null }
     this.flush()
-    // S1-10 — seal an integrity manifest. Skipped on empty tape: nothing to
-    // verify later, and ReplaySource refuses to open empty sessions anyway.
-    // Bounds come from the DB after flush so we capture exactly what's on
-    // disk (in-memory totalRecorded could drift if a flush partially failed).
+    // Final seal — same code path as periodic rolling reseal. After this and
+    // a clean shutdown, the manifest matches the tape exactly; verify-on-open
+    // returns `ok`. If we crash before reaching stop(), the most recent
+    // rolling seal becomes the recovery anchor and verify returns
+    // `ok-extended` for any rows appended after that seal.
+    this.resealManifest('final')
+    log.info('recorder stopped', { sessionId: this.sessionId, totalRecorded: this.totalRecorded, totalSeals: this.totalSeals })
+  }
+
+  /** Read current tape bounds and rewrite the integrity manifest. Best-effort
+   *  — a seal failure leaves the prior manifest (or none) intact and is
+   *  logged at warn. Skipped on empty tape: nothing to verify and ReplaySource
+   *  refuses empty sessions anyway. Called periodically from flush() (every
+   *  RESEAL_INTERVAL_MS) and once at stop(). */
+  private resealManifest(trigger: 'rolling' | 'final'): void {
     try {
       const bounds = getTapeBounds(this.sessionId)
       if (bounds.count > 0 && bounds.firstTs !== null && bounds.lastTs !== null) {
-        const manifest = {
+        const inputs = {
           sessionId:    this.sessionId,
           tickCount:    bounds.count,
           firstTs:      bounds.firstTs,
           lastTs:       bounds.lastTs,
         }
         upsertTapeManifest({
-          ...manifest,
-          manifestHash: computeTapeManifestHash(manifest),
+          ...inputs,
+          manifestHash: computeTapeManifestHash(inputs),
           sealedAt:     Date.now(),
         })
-        log.info('tape manifest sealed', manifest)
-      } else {
+        this.lastSealedAt = Date.now()
+        this.totalSeals += 1
+        if (trigger === 'final') {
+          log.info('tape manifest sealed (final)', inputs)
+        } else {
+          // Periodic reseal is high-frequency — keep log volume down by
+          // emitting at debug for rolling and info only on final.
+          log.debug('tape manifest sealed (rolling)', inputs)
+        }
+      } else if (trigger === 'final') {
+        // Only worth surfacing for the final-seal path; periodic reseal on an
+        // empty tape is silent (a long warmup with no quotes shouldn't spam).
         log.info('tape manifest skipped (empty tape)', { sessionId: this.sessionId })
       }
     } catch (err) {
       // Manifest sealing is best-effort. A failure here just means the next
-      // open of this tape will run in `no-manifest` mode — operationally
-      // equivalent to the pre-S1-10 behavior, so we never crash the engine
-      // over it.
-      log.warn('tape manifest seal failed', { sessionId: this.sessionId, err: String(err) })
+      // open of this tape will run with whatever the prior manifest stored
+      // (or in `no-manifest` mode if no prior seal succeeded).
+      log.warn('tape manifest seal failed', { sessionId: this.sessionId, trigger, err: String(err) })
     }
-    log.info('recorder stopped', { sessionId: this.sessionId, totalRecorded: this.totalRecorded })
   }
 
   pause(): void {
@@ -136,7 +168,15 @@ export class TickRecorder {
   }
 
   private flush(): void {
-    if (this.buffer.length === 0) return
+    if (this.buffer.length === 0) {
+      // Even with nothing to flush, check the reseal cadence — there are paths
+      // where rows landed via a MAX_BUFFER flush between timer ticks, so a
+      // periodic-tick flush() with an empty buffer is exactly when we'd want
+      // to capture those rows into a rolling seal. Cheap when the interval
+      // hasn't elapsed yet.
+      this.maybeResealManifest()
+      return
+    }
     const drain = this.buffer
     this.buffer = []
     try {
@@ -148,12 +188,24 @@ export class TickRecorder {
       // Best-effort persistence — never crash the engine over a flush error.
       log.warn('tape flush failed; rows dropped', { err: String(err), dropped: drain.length })
     }
+    this.maybeResealManifest()
+  }
+
+  /** Fire a rolling reseal if the cadence interval has elapsed since the last
+   *  seal. Called from flush() (post-insert) so the new rows are visible to
+   *  `getTapeBounds`. The first flush after start() also reseals — `lastSealedAt`
+   *  defaults to 0 which is always more than RESEAL_INTERVAL_MS ago. */
+  private maybeResealManifest(): void {
+    const now = Date.now()
+    if (now - this.lastSealedAt < RESEAL_INTERVAL_MS) return
+    this.resealManifest('rolling')
   }
 
   stats(): {
     active: boolean; paused: boolean; sessionId: string
     totalRecorded: number; buffered: number
     lastFlushAt: number | null; lastFlushSize: number
+    lastSealedAt: number | null; totalSeals: number
   } {
     return {
       active: this.active,
@@ -163,6 +215,8 @@ export class TickRecorder {
       buffered: this.buffer.length,
       lastFlushAt: this.lastFlushAt,
       lastFlushSize: this.lastFlushSize,
+      lastSealedAt: this.lastSealedAt > 0 ? this.lastSealedAt : null,
+      totalSeals: this.totalSeals,
     }
   }
 }
