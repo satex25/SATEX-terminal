@@ -3,7 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://stream.data.alpaca.markets wss://stream.data.alpaca.markets https://paper-api.alpaca.markets wss://paper-api.alpaca.markets https://api.alpaca.markets wss://api.alpaca.markets https://data.alpaca.markets https://aistudio.baidu.com;" />
+    <!-- 2026-05-18 — 'unsafe-inline' removed from script-src so an injected
+         <script> tag (XSS via news/AI content) is blocked by CSP. Vite's HMR
+         runtime in dev mode and the production bundle both load JS as
+         external <script type="module"> — no inline scripts required. style-src
+         retains 'unsafe-inline' because React inline style attributes are
+         common and useful; img-src defaults to default-src 'self' so no data:
+         exfiltration channel. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://stream.data.alpaca.markets wss://stream.data.alpaca.markets https://paper-api.alpaca.markets wss://paper-api.alpaca.markets https://api.alpaca.markets wss://api.alpaca.markets https://data.alpaca.markets https://aistudio.baidu.com;" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />

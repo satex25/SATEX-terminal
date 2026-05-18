@@ -86,7 +86,10 @@ const satexApi = {
   getAutonomousStatus:  ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_STATUS)  as Promise<AutonomousStatus>,
   getAutonomousRecent:  ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_RECENT)  as Promise<AutonomousDecision[]>,
   getAutonomousConfig:  ()                            => ipcRenderer.invoke(IPC.AUTONOMOUS_CONFIG_GET) as Promise<Record<string, number>>,
-  setAutonomousConfig:  (patch: Record<string, number>) => ipcRenderer.invoke(IPC.AUTONOMOUS_CONFIG_SET, patch) as Promise<Record<string, number>>,
+  setAutonomousConfig:  (patch: Partial<Record<
+    'intervalMs' | 'confidenceThreshold' | 'notionalPct' | 'minNotional' |
+    'maxNotional' | 'cooldownMs' | 'stopAtrMult' | 'takeProfitAtrMult', number
+  >>) => ipcRenderer.invoke(IPC.AUTONOMOUS_CONFIG_SET, patch) as Promise<Record<string, number>>,
 
   // ── AI brain decision (Phase 6) ─────────────────────────────────────────────
   getAiDecision: (symbol: string)                  => ipcRenderer.invoke(IPC.BRAIN_DECISION, symbol) as Promise<AiDecision>,

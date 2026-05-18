@@ -179,7 +179,14 @@ function createWindow(): void {
     backgroundColor: '#060607',
     webPreferences: {
       preload:          join(__dirname, '../preload/index.js'),
-      sandbox:          false,
+      // 2026-05-18 — sandbox enabled. Chromium isolates the renderer process
+      // at the OS level so a renderer RCE can't directly touch the file
+      // system or spawn processes. preload still works because it only uses
+      // electron.contextBridge + electron.ipcRenderer, both of which are
+      // available inside the sandbox; native Node modules (fs, path, etc.)
+      // are NOT available to preload under sandbox, but this preload doesn't
+      // need them — every privileged operation is delegated to main via IPC.
+      sandbox:          true,
       contextIsolation: true,
       nodeIntegration:  false,
     },
@@ -265,7 +272,23 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    // 2026-05-18 — scheme allowlist. Pre-fix `shell.openExternal(url)` would
+    // forward any URL the renderer requested, including `file:`, `ms-…:`,
+    // and custom protocol handlers. On Windows, those can launch external
+    // programs via protocol associations — a renderer compromise (XSS via
+    // news/AI content) could chain into local code execution. Limit to
+    // http(s); anything else is denied with a warn log so we notice if a
+    // legitimate use case (e.g., mailto:) ever needs the allowlist widened.
+    try {
+      const protocol = new URL(url).protocol
+      if (protocol === 'https:' || protocol === 'http:') {
+        shell.openExternal(url)
+      } else {
+        log.warn('window-open denied — disallowed scheme', { protocol, url: url.slice(0, 200) })
+      }
+    } catch (e) {
+      log.warn('window-open denied — invalid URL', { err: String(e), url: url.slice(0, 200) })
+    }
     return { action: 'deny' }
   })
 
@@ -527,8 +550,14 @@ function validated<S extends ZodTypeAny, R>(
     // Byte-size guard runs BEFORE Zod so a hostile payload can't waste cycles
     // on schema traversal. JSON.stringify is the closest cheap proxy for the
     // structured-clone size that ipcRenderer.invoke actually transferred.
+    // 2026-05-18 — Buffer.byteLength gives the real UTF-8 byte count instead
+    // of String#length, which counts UTF-16 code units. Pre-fix a multi-byte
+    // payload (emoji in journal `lesson`, Chinese symbol names) registered
+    // as 1 unit per character — the effective cap was up to ~4× looser than
+    // the documented 1MB. The cap was still enforcing something but not the
+    // documented number.
     try {
-      const approxBytes = raw === undefined ? 0 : JSON.stringify(raw).length
+      const approxBytes = raw === undefined ? 0 : Buffer.byteLength(JSON.stringify(raw), 'utf8')
       if (approxBytes > MAX_IPC_PAYLOAD_BYTES) {
         log.warn('ipc payload too large', { approxBytes, cap: MAX_IPC_PAYLOAD_BYTES })
         throw new Error(`Invalid IPC payload — exceeds ${MAX_IPC_PAYLOAD_BYTES} byte cap (got ${approxBytes})`)

@@ -126,9 +126,25 @@ export const BrainDecisionReq = SymbolS
 export type BrainDecisionReq = z.infer<typeof BrainDecisionReq>
 
 // ── Autonomous trader ───────────────────────────────────────────────────────
-/** Patch is a partial config: any numeric fields the caller wants to update.
- *  Engine clamps to safe ranges (autonomous-trader.ts), so we just gate types. */
-export const AutonomousConfigSetReq = z.record(z.string(), z.number().finite())
+/** Patch is a partial config: any subset of the known AutonomousConfig fields.
+ *  Engine clamps to safe ranges (autonomous-trader.ts setConfig).
+ *
+ *  2026-05-18 — was `z.record(z.string(), z.number().finite())`, which accepted
+ *  unbounded key counts. Combined with the 1MB IPC payload cap, a hostile
+ *  renderer could pin the main process on Map insert/iterate work via a
+ *  config patch with ~50k spurious keys. The `.strict()` allowlist drops
+ *  unknown keys at the boundary; every value is a finite number. Keep this
+ *  in sync with AutonomousConfig in services/autonomous-trader.ts. */
+export const AutonomousConfigSetReq = z.object({
+  intervalMs:           z.number().finite().optional(),
+  confidenceThreshold:  z.number().finite().optional(),
+  notionalPct:          z.number().finite().optional(),
+  minNotional:          z.number().finite().optional(),
+  maxNotional:          z.number().finite().optional(),
+  cooldownMs:           z.number().finite().optional(),
+  stopAtrMult:          z.number().finite().optional(),
+  takeProfitAtrMult:    z.number().finite().optional(),
+}).strict()
 export type AutonomousConfigSetReq = z.infer<typeof AutonomousConfigSetReq>
 
 // ── Vault ───────────────────────────────────────────────────────────────────
