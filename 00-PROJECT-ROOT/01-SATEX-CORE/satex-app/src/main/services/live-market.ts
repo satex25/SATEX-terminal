@@ -110,29 +110,42 @@ export class LiveMarket implements MarketDataSource {
     q.last = tick.price || q.last
     q.bid  = tick.bid   || q.bid   || q.last * 0.9999
     q.ask  = tick.ask   || q.ask   || q.last * 1.0001
-    q.volume    += Math.max(0, tick.size)
-    q.vwapNumer += q.last * Math.max(0, tick.size)
-    q.vwapVol   += Math.max(0, tick.size)
     q.timestamp  = tick.timestamp
     q.sparkline.shift(); q.sparkline.push(q.last)
-    this.buffer.ingestTick(tick.symbol, q.last, tick.size, tick.timestamp)
-    for (const l of this.quoteListeners) l([this.toPublic(q)])
+    // 2026-05-18 — volume/VWAP only accumulate on REAL trades. Pre-fix every
+    // quote-update frame added (bid_size + ask_size) to volume, inflating the
+    // metric ~10× and poisoning VWAP with mid × quote-depth instead of
+    // price × traded-size. ingestTick also gets gated on 't' so the per-bar
+    // OHLCV in LiveCandleBuffer reflects traded volume, not book depth.
+    if (tick.kind === 't') {
+      const tradeSize = Math.max(0, tick.size)
+      q.volume    += tradeSize
+      q.vwapNumer += q.last * tradeSize
+      q.vwapVol   += tradeSize
+      this.buffer.ingestTick(tick.symbol, q.last, tradeSize, tick.timestamp)
 
-    // P0-1 footprint — infer per-tick aggressor side and emit a Trade.
-    // Skip zero-size ticks (Alpaca emits a synthetic 0-size quote on
-    // bid/ask updates that aren't actual trades). Only emit on positive
-    // size so the footprint reflects real prints, not just quote shifts.
-    const tradeSize = Math.max(0, tick.size)
-    if (tradeSize > 0) {
-      const inferredSide: TradeSide = q.last > prevLast ? 'buy'
-        : q.last < prevLast ? 'sell'
-        : this.lastTradeSide.get(tick.symbol) ?? 'buy'
-      this.lastTradeSide.set(tick.symbol, inferredSide)
-      const trade: Trade = {
-        symbol: tick.symbol, ts: tick.timestamp, price: q.last,
-        size: tradeSize, side: inferredSide, provenance: 'inferred',
+      // P0-1 footprint — infer per-tick aggressor side and emit a Trade.
+      // Gated on kind === 't' so the footprint reflects real prints, not
+      // quote-update flicker. inferred side compares the trade price to the
+      // last trade price (prevLast captured above), which still gives the
+      // standard up/down tick classification.
+      if (tradeSize > 0) {
+        const inferredSide: TradeSide = q.last > prevLast ? 'buy'
+          : q.last < prevLast ? 'sell'
+          : this.lastTradeSide.get(tick.symbol) ?? 'buy'
+        this.lastTradeSide.set(tick.symbol, inferredSide)
+        const trade: Trade = {
+          symbol: tick.symbol, ts: tick.timestamp, price: q.last,
+          size: tradeSize, side: inferredSide, provenance: 'inferred',
+        }
+        for (const l of this.tradeListeners) l([trade])
       }
-      for (const l of this.tradeListeners) l([trade])
+    } else {
+      // Quote-only update: still need to refresh the in-flight candle's
+      // close/high/low against the mid so the chart tracks live price, but
+      // pass size=0 so the OHLCV volume column stays on traded shares only.
+      this.buffer.ingestTick(tick.symbol, q.last, 0, tick.timestamp)
     }
+    for (const l of this.quoteListeners) l([this.toPublic(q)])
   }
 }

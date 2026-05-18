@@ -351,9 +351,29 @@ export class ReplaySource implements MarketDataSource {
 
   private refillPrefetch(toTs: number): void {
     if (toTs <= this.prefetchedThroughTs) return
-    const fromTs = Math.max(this.cursorTs + 1, this.prefetchedThroughTs + 1)
-    const rows = db.readTapeRange(this.sessionId, fromTs, toTs, 5000)
-    if (rows.length > 0) this.prefetched.push(...rows)
+    // 2026-05-18 — page through the window until either exhausted or the
+    // safety cap fires. Pre-fix this was a single readTapeRange(…, 5000) call
+    // that unconditionally set prefetchedThroughTs = toTs, so any window with
+    // >5000 rows silently lost the overflow forever (cursor advanced past
+    // them on the next tick). At ≥30× speed on a live-recorded tape
+    // (~68 rows/sec × 17 symbols), per-tick windows exceed 5000 rows and
+    // 25-50% of ticks were being dropped. Historical-import tape (~24
+    // rows/min) was unaffected because no window came close to the cap.
+    const PAGE_LIMIT = 5000
+    let fromTs = Math.max(this.cursorTs + 1, this.prefetchedThroughTs + 1)
+    let safety = 0
+    while (fromTs <= toTs && safety < 200) {
+      const rows = db.readTapeRange(this.sessionId, fromTs, toTs, PAGE_LIMIT)
+      if (rows.length === 0) break
+      this.prefetched.push(...rows)
+      if (rows.length < PAGE_LIMIT) break
+      // Hit the cap — advance fromTs past the last row and keep paging.
+      fromTs = rows[rows.length - 1]!.ts + 1
+      safety++
+    }
+    if (safety >= 200) {
+      log.warn('refillPrefetch hit safety cap', { sessionId: this.sessionId, fromTs, toTs })
+    }
     this.prefetchedThroughTs = toTs
   }
 

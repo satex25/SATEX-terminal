@@ -26,6 +26,7 @@ import { createLogger } from './services/logger'
 import { IndicatorSettingsService } from './services/indicator-settings'
 import { WorkspaceStateService } from './services/workspace-state'
 import { migratePlaintextEnvLocalCreds } from './services/credential-store'
+import { isLive } from './services/live-mode'
 
 // Migrate plaintext Alpaca keys out of userData/.env.local into safeStorage
 // BEFORE dotenv runs. If keys are migrated the file is rewritten (or deleted)
@@ -595,9 +596,50 @@ function registerIpcHandlers(): void {
   register(IPC.ORDER_CANCEL, validated(OrderCancelReq, (id)  => engine.cancelOrder(id)))
 
   // ── Risk ─────────────────────────────────────────────────────────────────────
-  register(IPC.RISK_KILL, validated(KillSwitchReq, (arm) => {
-    if (arm) engine.armKillSwitch()
-    else     engine.disarmKillSwitch()
+  // 2026-05-18 — kill-switch DISARM gated on a native dialog whenever the
+  // typed-phrase live-mode interlock (live-mode.ts) is armed. Mirrors the
+  // adversarial-finding C6 hardening that closed live-mode enable: a
+  // compromised renderer (XSS via injected news/AI content) could otherwise
+  // disarm the kill switch via window.satex.killSwitch(false) and then
+  // submit orders within the notional cap. Arming (true) stays ungated —
+  // it's the panic button.
+  //
+  // In paper/simulator mode (isLive() === false) no real capital can flow
+  // regardless of kill-switch state, so the dialog would just be friction
+  // without any safety value. Gate only when isLive() is armed.
+  register(IPC.RISK_KILL, validated(KillSwitchReq, async (arm) => {
+    if (arm) {
+      engine.armKillSwitch()
+      return
+    }
+    if (isLive()) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        log.warn('kill-switch disarm refused — no main window for native dialog')
+        throw new Error('No window available to confirm kill-switch disarm')
+      }
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['Cancel', 'Disarm kill switch'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'SATEX — Disarm kill switch (LIVE)',
+        message: 'Disarm the kill switch while live trading is armed?',
+        detail: [
+          'New orders will be eligible for submission to the real-capital broker',
+          'as soon as this is disarmed.',
+          '',
+          'Only your click on the button below can authorize this.',
+          'No renderer process, AI output, or injected script can bypass this dialog.',
+        ].join('\n'),
+        noLink: true,
+      })
+      if (response !== 1) {
+        log.warn('kill-switch disarm cancelled at native dialog')
+        return
+      }
+      log.warn('kill-switch disarm authorized via native dialog')
+    }
+    engine.disarmKillSwitch()
   }))
 
   // ── Market data ──────────────────────────────────────────────────────────────

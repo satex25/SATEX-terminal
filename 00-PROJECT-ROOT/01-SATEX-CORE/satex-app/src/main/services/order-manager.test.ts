@@ -156,6 +156,81 @@ describe('OrderManager — C3: signalToRequest sizes by refPrice', () => {
   })
 })
 
+describe('OrderManager — applyFill accounting (2026-05-18 regression)', () => {
+  // Locks down the CRITICAL fix from the 2026-05-18 audit:
+  //   • sell branch no longer double-counts realized PnL into cash
+  //   • rebuildEquity adds position mark-to-market, not just unrealizedPnl
+  // Pre-fix: 100 sh bought @ $4 then sold @ $5 left paper cash $100 over
+  // the true value, with equity wrong during the hold by exactly the cost
+  // basis.
+
+  function buyMarket(om: OrderManager, sym: string, qty: number, fill: number): void {
+    const req: OrderRequest = { symbol: sym, side: 'buy', type: 'market', quantity: qty }
+    om.setMarketOpen(true)
+    const o = om.createOrder(req)
+    om.fillOrder(o.id, fill)
+  }
+  function sellMarket(om: OrderManager, sym: string, qty: number, fill: number): void {
+    const req: OrderRequest = { symbol: sym, side: 'sell', type: 'market', quantity: qty }
+    const o = om.createOrder(req)
+    om.fillOrder(o.id, fill)
+  }
+
+  it('equity is preserved across a buy fill (cash drop offset by position value)', () => {
+    const om = new OrderManager(10_000)
+    expect(om.getAccount().equity).toBeCloseTo(10_000)
+    expect(om.getAccount().cash).toBeCloseTo(10_000)
+    buyMarket(om, 'NVDA', 100, 4)
+    const acct = om.getAccount()
+    expect(acct.cash).toBeCloseTo(9_600)
+    expect(acct.equity).toBeCloseTo(10_000) // pre-fix: $9,600
+    expect(acct.dailyPnl).toBeCloseTo(0)
+  })
+
+  it('equity tracks unrealized PnL while a position is open', () => {
+    const om = new OrderManager(10_000)
+    buyMarket(om, 'NVDA', 100, 4)
+    om.updatePositionPrice('NVDA', 5)
+    const acct = om.getAccount()
+    expect(acct.cash).toBeCloseTo(9_600)
+    expect(acct.equity).toBeCloseTo(10_100) // 9_600 cash + (100*4 + 100) position
+    expect(acct.dailyPnl).toBeCloseTo(100)
+  })
+
+  it('winning sell realizes correct cash and equity (no double-count)', () => {
+    const om = new OrderManager(10_000)
+    buyMarket(om, 'NVDA', 100, 4)
+    om.updatePositionPrice('NVDA', 5)
+    sellMarket(om, 'NVDA', 100, 5)
+    const acct = om.getAccount()
+    expect(acct.cash).toBeCloseTo(10_100) // pre-fix: 10_200
+    expect(acct.equity).toBeCloseTo(10_100) // pre-fix: 10_200
+    expect(acct.dailyPnl).toBeCloseTo(100)
+    expect(acct.openPositions.length).toBe(0)
+  })
+
+  it('losing sell realizes correct cash and equity', () => {
+    const om = new OrderManager(10_000)
+    buyMarket(om, 'NVDA', 100, 4)
+    om.updatePositionPrice('NVDA', 3)
+    sellMarket(om, 'NVDA', 100, 3)
+    const acct = om.getAccount()
+    expect(acct.cash).toBeCloseTo(9_900)
+    expect(acct.equity).toBeCloseTo(9_900)
+    expect(acct.dailyPnl).toBeCloseTo(-100)
+  })
+
+  it('round-trip at entry price is cash-neutral and equity-neutral', () => {
+    const om = new OrderManager(10_000)
+    buyMarket(om, 'NVDA', 50, 20)
+    sellMarket(om, 'NVDA', 50, 20)
+    const acct = om.getAccount()
+    expect(acct.cash).toBeCloseTo(10_000)
+    expect(acct.equity).toBeCloseTo(10_000)
+    expect(acct.dailyPnl).toBeCloseTo(0)
+  })
+})
+
 describe('OrderManager — other gates still behave', () => {
   it('Gate 7 (live notional cap) fires when notional > cap', () => {
     const om = new OrderManager(100_000)

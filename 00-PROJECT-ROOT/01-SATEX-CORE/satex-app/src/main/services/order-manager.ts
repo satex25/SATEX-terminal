@@ -320,7 +320,13 @@ export class OrderManager {
       if (existing) {
         const pnl = (fillPrice - existing.avgPrice) * quantity
         existing.realizedPnl += pnl
-        this.account.cash += cost + pnl
+        // Sell proceeds = fillPrice * quantity = `cost`. The realized PnL is
+        // already implicit in `cost` (the delta between cost and the original
+        // avgPrice*qty entry outlay). Pre-2026-05-18 this line was
+        // `cash += cost + pnl`, which double-counted the PnL component and
+        // left paper-mode cash inflated by `pnl` on every closed position
+        // (live mode masked it within 15s via syncFromAlpaca).
+        this.account.cash += cost
         this.account.buyingPower += cost * BUYING_POWER_MULT
         existing.quantity -= quantity
         if (existing.quantity <= 0) this.positions.delete(symbol)
@@ -337,9 +343,20 @@ export class OrderManager {
   }
 
   private rebuildEquity(): void {
-    let unrealized = 0
-    for (const p of this.positions.values()) unrealized += p.unrealizedPnl
-    this.account.equity  = this.account.cash + unrealized
+    // Equity = cash + mark-to-market value of open positions.
+    // Position value = qty * lastKnownPrice = qty * avgPrice + unrealizedPnl
+    // (the latter form is the one we have on hand — updatePositionPrice keeps
+    // unrealizedPnl in sync with the current quote). Pre-2026-05-18 this only
+    // summed unrealizedPnl, omitting the cost-basis component, so equity
+    // dropped by the full position cost the instant a buy filled and only
+    // recovered as the position moved into profit. Combined with the
+    // sell-side cash double-count (fixed above) the math happened to cancel
+    // at flat — but during holds and on winning closes the numbers diverged.
+    let positionValue = 0
+    for (const p of this.positions.values()) {
+      positionValue += p.quantity * p.avgPrice + p.unrealizedPnl
+    }
+    this.account.equity  = this.account.cash + positionValue
     this.account.dailyPnl = this.account.equity - this.sessionStartEquity
   }
 }

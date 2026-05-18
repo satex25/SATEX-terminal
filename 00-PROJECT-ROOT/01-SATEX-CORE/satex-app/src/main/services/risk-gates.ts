@@ -21,7 +21,6 @@ import type {
   RiskGate, RiskGatesSnapshot, RiskGateStatus,
   PnlSnapshot,
 } from '@shared/types'
-import { STARTING_EQUITY } from '@shared/constants'
 import { createLogger } from './logger'
 
 const log = createLogger('risk')
@@ -61,6 +60,13 @@ interface RiskGatesDeps {
   getCandles:    (symbol: string, limit?: number) => Candle[]
   /** Recent PnL snapshots for SESSION_VAR computation. */
   getPnlSnapshots: () => PnlSnapshot[]
+  /** Session-start equity baseline. Sourced from OrderManager.getSessionStartEquity
+   *  so the DAILY_LOSS_LIMIT gate is computed against the same value Gate 3
+   *  enforces in OrderManager.validate (adversarial finding C2 rebases this
+   *  to broker-reported equity on the first Alpaca sync). Pre-2026-05-18 this
+   *  service used the imported STARTING_EQUITY constant, which silently
+   *  diverged from OM enforcement by up to 10× once C2 rebased OM. */
+  getSessionStartEquity: () => number
 }
 
 function statusForPct(pct: number, watch: number, breach: number): RiskGateStatus {
@@ -184,11 +190,16 @@ export class RiskGatesService {
     const cfg = this.config
 
     // Gate 1 — DAILY LOSS LIMIT
-    const dailyLossBudget = STARTING_EQUITY * account.dailyLossLimitPct
+    // Baseline is sessionStartEquity (matches OrderManager Gate 3 enforcement
+    // after the C2 broker-equity rebase). Guard against a non-positive baseline
+    // (boot-time race before OM is initialized) by falling back to current
+    // equity — keeps the panel readable instead of NaN/Infinity.
+    const baseline = Math.max(1, this.deps.getSessionStartEquity())
+    const dailyLossBudget = baseline * account.dailyLossLimitPct
     const dailyLossUsed = Math.max(0, -account.dailyPnl)
     const dailyLossPct = Math.min(1, dailyLossUsed / Math.max(1, dailyLossBudget))
     const dailyLossStatus = statusForPct(dailyLossPct, 0.7, 0.95)
-    const dailyLossValue = `${(account.dailyPnl / STARTING_EQUITY * 100).toFixed(1)}% / −${(account.dailyLossLimitPct * 100).toFixed(1)}% buf`
+    const dailyLossValue = `${(account.dailyPnl / baseline * 100).toFixed(1)}% / −${(account.dailyLossLimitPct * 100).toFixed(1)}% buf`
 
     // Gate 2 — POSITION COUNT
     const posPct = Math.min(1, positions.length / cfg.maxPositions)

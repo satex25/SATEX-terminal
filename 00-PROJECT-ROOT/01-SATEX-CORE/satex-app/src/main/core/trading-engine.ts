@@ -425,6 +425,8 @@ export class TradingEngine {
       getQuote:        (s) => this.market.getQuote(s),
       getCandles:      (s, l) => this.market.getCandles(s, l),
       getPnlSnapshots: () => db.listPnlSnapshots(this.currentSessionId),
+      // C2 alignment: panel must read the same baseline OM enforces against.
+      getSessionStartEquity: () => this.om.getSessionStartEquity(),
     })
     this.riskGates.onUpdate((s) => { for (const fn of this.riskGatesListeners) fn(s) })
     this.riskGates.start()
@@ -1123,7 +1125,10 @@ export class TradingEngine {
       prevClose:  entry.seed,
       change:     tick.price - entry.seed,
       changePct:  entry.seed === 0 ? 0 : ((tick.price - entry.seed) / entry.seed) * 100,
-      volume:     tick.size,
+      // 2026-05-18 — only count traded size. Quote-update frames carry
+      // bid_size + ask_size in tick.size; treating that as traded volume
+      // inflated the watchlist crypto column.
+      volume:     tick.kind === 't' ? tick.size : 0,
       vwap:       tick.price,
       sparkline:  new Array(30).fill(tick.price),
       timestamp:  tick.timestamp,

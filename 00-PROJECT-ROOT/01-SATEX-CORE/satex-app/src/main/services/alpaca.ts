@@ -39,6 +39,13 @@ export interface AlpacaClockSnapshot {
 
 export interface AlpacaTick {
   symbol: string; price: number; size: number; bid: number; ask: number; timestamp: number
+  /** Source frame type — 'q' = quote update (bid/ask depth change), 't' = trade
+   *  print. Downstream code (LiveMarket volume/VWAP accumulator, footprint
+   *  side inference) must skip non-trade frames so the metrics reflect actual
+   *  trades, not quote-update churn. Pre-2026-05-18 every quote update was
+   *  treated as a trade with size = bid_size + ask_size, inflating volume by
+   *  ~10× and poisoning VWAP. */
+  kind: 'q' | 't'
 }
 
 type WS = {
@@ -374,12 +381,28 @@ export class AlpacaClient {
     }
     if (m['T'] === 'q') {
       const bid = Number(m['bp'] ?? 0), ask = Number(m['ap'] ?? 0)
-      const tick: AlpacaTick = { symbol: String(m['S'] ?? ''), price: (bid + ask) / 2, size: Number(m['bs'] ?? 0) + Number(m['as'] ?? 0), bid, ask, timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now() }
+      // size is bid_size + ask_size (top-of-book depth, NOT traded size).
+      // Carried for any consumer that wants book depth; LiveMarket gates volume
+      // on kind === 't' so this doesn't leak into traded-volume metrics.
+      const tick: AlpacaTick = {
+        symbol: String(m['S'] ?? ''),
+        price: (bid + ask) / 2,
+        size: Number(m['bs'] ?? 0) + Number(m['as'] ?? 0),
+        bid, ask,
+        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        kind: 'q',
+      }
       for (const l of this.tickListeners) l(tick); return
     }
     if (m['T'] === 't') {
       const price = Number(m['p'] ?? 0)
-      const tick: AlpacaTick = { symbol: String(m['S'] ?? ''), price, size: Number(m['s'] ?? 0), bid: price, ask: price, timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now() }
+      const tick: AlpacaTick = {
+        symbol: String(m['S'] ?? ''),
+        price, size: Number(m['s'] ?? 0),
+        bid: price, ask: price,
+        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        kind: 't',
+      }
       for (const l of this.tickListeners) l(tick); return
     }
   }
@@ -450,6 +473,7 @@ export class AlpacaClient {
         size: Number(m['bs'] ?? 0) + Number(m['as'] ?? 0),
         bid, ask,
         timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        kind: 'q',
       }
       for (const l of this.tickListeners) l(tick)
       return
@@ -463,6 +487,7 @@ export class AlpacaClient {
         price, size: Number(m['s'] ?? 0),
         bid: price, ask: price,
         timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        kind: 't',
       }
       for (const l of this.tickListeners) l(tick)
       return
