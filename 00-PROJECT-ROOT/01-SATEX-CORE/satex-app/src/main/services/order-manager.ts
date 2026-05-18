@@ -50,8 +50,9 @@ import { createLogger } from './logger'
 
 const log = createLogger('order-manager')
 
-export type OrderFillCallback  = (order: Order, position: Position | null) => void
-export type KillSwitchCallback = () => void
+export type OrderFillCallback        = (order: Order, position: Position | null) => void
+export type KillSwitchCallback       = () => void
+export type KillSwitchChangeCallback = (armed: boolean, reason: string) => void
 
 export class OrderManager {
   private account: Account
@@ -59,6 +60,7 @@ export class OrderManager {
   private positions= new Map<string, Position>()
   private fillCbs  = new Set<OrderFillCallback>()
   private killCbs  = new Set<KillSwitchCallback>()
+  private killChangeCb?: KillSwitchChangeCallback
   private sessionStartEquity: number
   private isMarketOpen = false
 
@@ -119,9 +121,33 @@ export class OrderManager {
     this.account.killSwitchArmed = true
     log.warn('KILL SWITCH ARMED', { reason })
     for (const cb of this.killCbs) cb()
+    this.killChangeCb?.(true, reason)
   }
-  disarmKillSwitch(): void { this.account.killSwitchArmed = false; log.info('kill switch disarmed') }
+  disarmKillSwitch(): void {
+    if (!this.account.killSwitchArmed) return
+    this.account.killSwitchArmed = false
+    log.info('kill switch disarmed')
+    this.killChangeCb?.(false, '')
+  }
   onKillSwitch(fn: KillSwitchCallback): () => void { this.killCbs.add(fn); return () => this.killCbs.delete(fn) }
+
+  /** Register a persistence sink fired on every arm/disarm transition (including
+   *  the daily-loss auto-arm in applyFill). Boot-time restoreKillSwitch() does
+   *  NOT fire this — the state was just loaded from the same sink. */
+  setOnKillSwitchChange(cb: KillSwitchChangeCallback): void { this.killChangeCb = cb }
+
+  /** Restore armed state at boot from persistent storage. Fires the operational
+   *  killCbs (so the engine broadcasts the account update and the renderer's
+   *  account-pill paints red on first frame) but skips the change callback —
+   *  the persistence layer is the source of this restore and re-saving would
+   *  bump updatedAt without semantic value. No-op if already armed or restoring
+   *  a disarmed state. */
+  restoreKillSwitch(reason: string): void {
+    if (this.account.killSwitchArmed) return
+    this.account.killSwitchArmed = true
+    log.warn('KILL SWITCH RESTORED FROM DISK', { reason })
+    for (const cb of this.killCbs) cb()
+  }
 
   // ── Validation ──────────────────────────────────────────────────────────────
   /** Pre-trade risk validation. Gates fire in order; first failure wins.

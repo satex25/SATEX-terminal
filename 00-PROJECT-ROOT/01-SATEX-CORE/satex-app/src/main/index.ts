@@ -432,8 +432,12 @@ function wireEngineEvents(): void {
   engine.onNews((item)                => push(IPC.NEWS_APPEND,    item))
   engine.onAccount((account)          => {
     push(IPC.ACCOUNT_UPDATE, account)
-    // Kill switch transition (false→true) is operationally critical.
-    if (lastKillSwitchArmed === false && account.killSwitchArmed === true) {
+    // Kill switch transition (not-armed → armed) is operationally critical.
+    // `lastKillSwitchArmed` starts as null; we treat null and false equally
+    // ("not yet observed armed") so that a boot into a persisted-armed state
+    // (kill-switch-store.ts restore) also fires the toast on the first
+    // account update.
+    if (lastKillSwitchArmed !== true && account.killSwitchArmed === true) {
       notify({
         key: 'kill-switch',
         title: '● Kill switch ARMED',

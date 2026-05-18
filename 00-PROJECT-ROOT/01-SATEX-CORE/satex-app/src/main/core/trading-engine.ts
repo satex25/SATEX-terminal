@@ -47,6 +47,7 @@ import {
 } from '../services/credential-store'
 import { getLiveModeStatus, setLiveMode as storeSetLiveMode, isLive, getNotionalCap } from '../services/live-mode'
 import { getAlpacaMode, setAlpacaMode as storeSetAlpacaMode, resolveBaseUrl } from '../services/alpaca-mode'
+import { loadKillSwitchState, saveKillSwitchState } from '../services/kill-switch-store'
 import { Brain } from '../services/brain'
 import { TacticsEngine } from '../services/tactics'
 import { MarketObserver } from '../services/market-observer'
@@ -288,6 +289,15 @@ export class TradingEngine {
       log.warn('kill switch triggered — broadcasting account state')
       this.broadcastAccount()
     })
+
+    // Kill-switch persistence (2026-05-18 — closes deferred item #1 from
+    // v0.4 stabilization). Manual arms, daily-loss auto-arms, and disarms all
+    // route through saveKillSwitchState so userData/kill-switch.json reflects
+    // current armed state at all times. On boot, restore state IFF disk says
+    // armed — disarmed is the default and needs no restore call.
+    this.om.setOnKillSwitchChange(saveKillSwitchState)
+    const restoredKill = loadKillSwitchState()
+    if (restoredKill.armed) this.om.restoreKillSwitch(restoredKill.reason)
 
     // Brain — load weights from db
     this.brain.initialize()

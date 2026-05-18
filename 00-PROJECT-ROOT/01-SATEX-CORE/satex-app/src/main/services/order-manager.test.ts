@@ -251,3 +251,78 @@ describe('OrderManager — other gates still behave', () => {
     expect(res.gate).toBeDefined()
   })
 })
+
+describe('OrderManager — kill-switch persistence wiring (2026-05-18)', () => {
+  it('armKillSwitch fires the change callback with armed=true and the reason', () => {
+    const om = new OrderManager(100_000)
+    const calls: Array<{ armed: boolean; reason: string }> = []
+    om.setOnKillSwitchChange((armed, reason) => calls.push({ armed, reason }))
+
+    om.armKillSwitch('manual')
+
+    expect(calls).toEqual([{ armed: true, reason: 'manual' }])
+  })
+
+  it('disarmKillSwitch fires the change callback with armed=false and empty reason', () => {
+    const om = new OrderManager(100_000)
+    om.armKillSwitch('manual')          // arm first (no listener yet)
+    const calls: Array<{ armed: boolean; reason: string }> = []
+    om.setOnKillSwitchChange((armed, reason) => calls.push({ armed, reason }))
+
+    om.disarmKillSwitch()
+
+    expect(calls).toEqual([{ armed: false, reason: '' }])
+  })
+
+  it('disarmKillSwitch is a no-op when already disarmed (no callback fire)', () => {
+    const om = new OrderManager(100_000)
+    const calls: Array<{ armed: boolean; reason: string }> = []
+    om.setOnKillSwitchChange((armed, reason) => calls.push({ armed, reason }))
+
+    om.disarmKillSwitch()
+
+    expect(calls).toEqual([])
+  })
+
+  it('armKillSwitch is a no-op when already armed (no duplicate callback)', () => {
+    const om = new OrderManager(100_000)
+    om.armKillSwitch('manual')
+    const calls: Array<{ armed: boolean; reason: string }> = []
+    om.setOnKillSwitchChange((armed, reason) => calls.push({ armed, reason }))
+
+    om.armKillSwitch('manual')
+
+    expect(calls).toEqual([])
+  })
+
+  it('restoreKillSwitch arms state and fires operational killCbs but NOT the change callback', () => {
+    const om = new OrderManager(100_000)
+    const opCalls: number[] = []
+    const persistCalls: Array<{ armed: boolean; reason: string }> = []
+    om.onKillSwitch(() => opCalls.push(Date.now()))
+    om.setOnKillSwitchChange((armed, reason) => persistCalls.push({ armed, reason }))
+
+    om.restoreKillSwitch('daily-loss-limit')
+
+    expect(om.getAccount().killSwitchArmed).toBe(true)
+    expect(opCalls.length).toBe(1)        // killCbs DID fire (so the engine broadcasts)
+    expect(persistCalls).toEqual([])      // change cb did NOT fire (we just loaded it)
+  })
+
+  it('daily-loss auto-arm in applyFill fires the change callback with reason="daily-loss-limit"', () => {
+    const om = new OrderManager(1_000)    // small equity → easy to breach 2% (=$20)
+    om.setMarketOpen(true)
+    om.setSessionStartEquity(1_000)
+    const calls: Array<{ armed: boolean; reason: string }> = []
+    om.setOnKillSwitchChange((armed, reason) => calls.push({ armed, reason }))
+
+    // Buy 1 share @ $100, then sell @ $50 → realized loss $50 > 2% of $1000 = $20
+    const buy = om.createOrder({ symbol: 'NVDA', side: 'buy',  type: 'market', quantity: 1 })
+    om.fillOrder(buy.id, 100)
+    const sell = om.createOrder({ symbol: 'NVDA', side: 'sell', type: 'market', quantity: 1 })
+    om.fillOrder(sell.id, 50)
+
+    expect(calls).toEqual([{ armed: true, reason: 'daily-loss-limit' }])
+    expect(om.getAccount().killSwitchArmed).toBe(true)
+  })
+})
