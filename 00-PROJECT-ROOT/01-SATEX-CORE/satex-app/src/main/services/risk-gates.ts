@@ -280,8 +280,10 @@ export class RiskGatesService {
 
     // Gate 6 — SESSION VAR (95%)
     const snaps = this.deps.getPnlSnapshots()
+    const MIN_SNAPS = 8
     let varDollar = 0
-    if (snaps.length >= 8) {
+    const haveEnoughSnaps = snaps.length >= MIN_SNAPS
+    if (haveEnoughSnaps) {
       const equities = snaps.map(s => s.equity)
       const returns: number[] = []
       for (let i = 1; i < equities.length; i++) {
@@ -293,7 +295,12 @@ export class RiskGatesService {
     }
     const varPct = Math.min(1, varDollar / cfg.sessionVarTarget)
     const varStatus = statusForPct(varPct, 0.7, 1.0)
-    const varValue = `$${Math.round(varDollar).toLocaleString()} / ${(cfg.sessionVarTarget / 1000).toFixed(0)}k tgt`
+    // 2026-05-18 — explicit "n/a" while warming up instead of "$0 / 12k tgt"
+    // which read as "perfectly healthy" but was actually "no data yet". PnL
+    // snapshots accumulate at 60s cadence; MIN_SNAPS=8 → ~8 minutes warmup.
+    const varValue = haveEnoughSnaps
+      ? `$${Math.round(varDollar).toLocaleString()} / ${(cfg.sessionVarTarget / 1000).toFixed(0)}k tgt`
+      : `n/a · need ≥${MIN_SNAPS} snapshots (${snaps.length})`
 
     const gates: RiskGate[] = [
       { key: 'DAILY_LOSS_LIMIT', label: 'DAILY LOSS LIMIT',  pct: dailyLossPct,  status: dailyLossStatus, value: dailyLossValue },

@@ -103,6 +103,12 @@ export class ReplaySource implements MarketDataSource {
   private tickTimer: NodeJS.Timeout | null = null
   private currentCandleStart = 0
   private emittedTicks = 0
+  /** 2026-05-18 — count tape rows for symbols not present in the current
+   *  UNIVERSE. Pre-fix these were silently dropped in applyTape; if the user
+   *  changed their watchlist between recording and replay, history simply
+   *  vanished without explanation. We log on first sight per symbol so the
+   *  trader knows the tape contained data the current build can't render. */
+  private droppedSymbols = new Map<string, number>()
 
   // ── Listeners ───────────────────────────────────────────────────────────────
   private quoteListeners       = new Set<(q: Quote[]) => void>()
@@ -193,6 +199,11 @@ export class ReplaySource implements MarketDataSource {
   /** S1-10 — last manifest verdict from open or stop. Renderer uses this to
    *  show a "tape integrity warning" banner during replay. */
   getManifestVerdict(): ManifestVerdict | null { return this.manifestVerdict }
+
+  /** 2026-05-18 — snapshot of tape rows dropped because their symbol isn't
+   *  in current UNIVERSE. Empty Map = clean replay. Engine can surface to
+   *  the renderer alongside the manifest verdict. */
+  getDroppedSymbols(): ReadonlyMap<string, number> { return this.droppedSymbols }
 
   // ── MarketDataSource API ────────────────────────────────────────────────────
   start(): void {
@@ -525,7 +536,18 @@ export class ReplaySource implements MarketDataSource {
    *  via `maybeRollCandle`, never on intra-bar updates — matches live engine. */
   private applyTape(row: TickTapeRow, _emit: boolean): void {
     const s = this.states.get(row.symbol)
-    if (!s) return
+    if (!s) {
+      // 2026-05-18 — surface tape rows for symbols not in current UNIVERSE.
+      // First sight per symbol logs; subsequent rows just bump the counter.
+      const prior = this.droppedSymbols.get(row.symbol) ?? 0
+      this.droppedSymbols.set(row.symbol, prior + 1)
+      if (prior === 0) {
+        log.warn('replay tape contains symbol not in current UNIVERSE — dropping rows', {
+          symbol: row.symbol, sessionId: this.sessionId,
+        })
+      }
+      return
+    }
     // First tape row seen for this symbol: reset every price-anchored field
     // to the tape price so the seed-era UNIVERSE values (e.g. NVDA $965)
     // don't bleed into the first candle's open/high. Pre-fix, the in-flight

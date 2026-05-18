@@ -149,6 +149,12 @@ export class TradingEngine {
   private startedAt        = Date.now()
   private tickCount        = 0
   private lastTickAt       = 0
+  /** Rolling 1-second tick timestamps. broadcastStatus reads .length as the
+   *  true tickHz. Pre-2026-05-18 status panel computed tickHz from
+   *  `lastTickAt - Date.now() + 2000`, which is always ≤ 2000 and inverted
+   *  the metric (high tick rate showed as low number). */
+  private tickWindow: number[] = []
+  private static TICK_WINDOW_MS = 1000
   /** Adversarial finding C2 (2026-05-16) — gates the one-shot
    *  sessionStartEquity sync that runs on the first successful Alpaca
    *  account sync of the session. See `syncAlpacaAccount`. */
@@ -170,6 +176,13 @@ export class TradingEngine {
   private static TAPE_RETENTION_DAYS = 7
   private quoteBatch:      Quote[] = []
   private batchTimer:      NodeJS.Timeout | null = null
+  /** 2026-05-18 — trade batch + timer mirror the quote-batch coalescing.
+   *  Pre-fix LiveMarket.onTick fired tradeListeners with a 1-element batch
+   *  per tick (~360 IPC events/sec at peak), wedging the renderer's
+   *  footprint store under load. Matches the 50ms window used elsewhere. */
+  private tradeBatch: Trade[] = []
+  private tradeBatchTimer: NodeJS.Timeout | null = null
+  private static TRADE_BATCH_MS = 50
   /** Snapshot of features at order entry, keyed by order id — drives brain.learn on close. */
   private entryFeatures = new Map<string, EntryFeaturesValue>()
   /** Last seen tactics state — used to detect transitions so we can vault them. */
@@ -493,6 +506,7 @@ export class TradingEngine {
     if (this.tapePruneTimer)         { clearInterval(this.tapePruneTimer);         this.tapePruneTimer = null }
     if (this.replayStatusTimer)      { clearInterval(this.replayStatusTimer);      this.replayStatusTimer = null }
     if (this.batchTimer)             { clearTimeout(this.batchTimer);              this.batchTimer = null }
+    if (this.tradeBatchTimer)        { clearTimeout(this.tradeBatchTimer);         this.tradeBatchTimer = null }
     this.recorder?.stop()
     this.replay?.stop()
     this.observer?.stop()
@@ -602,6 +616,19 @@ export class TradingEngine {
       return { ok: false, reason: 'Order submission disabled during historical replay — stop replay to trade' }
     }
     const quote = this.market.getQuote(req.symbol)
+    // 2026-05-18 — explicit no-quote refusal under live mode. Pre-fix, when
+    // `quote` was undefined (symbol never received a tick, just-subscribed,
+    // feed gap on first request), OrderManager.validate fell through to its
+    // `refPrice = equity / qty` synthesized fallback, then every buy tripped
+    // Gate 5 (concentration) or Gate 6 (buying power) with a wildly
+    // misleading "100% concentration" reason. Surface the actual cause here
+    // so the trader sees "no quote available" instead of chasing a fake
+    // concentration alarm. Paper/simulator mode keeps the old behavior since
+    // refPrice fallback there is harmless and useful for offline testing.
+    if (!quote && isLive() && req.side === 'buy') {
+      log.warn('order refused — no quote in live mode', { symbol: req.symbol })
+      return { ok: false, reason: `No quote available for ${req.symbol} — refusing live order` }
+    }
     const refPrice = quote?.last ?? req.limitPrice ?? 0
     // Gate 0 (quote freshness) only fires for live-interlock orders, but we
     // compute the age unconditionally so the validator has the data it needs.
@@ -1225,8 +1252,19 @@ export class TradingEngine {
     }))
     // P0-1 Footprint — fan trade events from whichever source is active.
     // ReplaySource's onTrades is a no-op so this is safe across hot-swaps.
+    // 2026-05-18 — trade emissions batched on a 50ms window to match the
+    // quote-batch cadence. Live-market fires once per tick (~20Hz × 18 sym =
+    // ~360 ev/s); coalescing cuts the renderer IPC load by ~18×.
     this.marketSubs.push(source.onTrades((trades) => {
-      for (const l of this.tradesListeners) l(trades)
+      if (trades.length === 0) return
+      this.tradeBatch.push(...trades)
+      if (this.tradeBatchTimer) return
+      this.tradeBatchTimer = setTimeout(() => {
+        this.tradeBatchTimer = null
+        if (this.tradeBatch.length === 0) return
+        const out = this.tradeBatch.splice(0)
+        for (const l of this.tradesListeners) l(out)
+      }, TradingEngine.TRADE_BATCH_MS)
     }))
   }
 
@@ -1243,7 +1281,13 @@ export class TradingEngine {
   // ── Internal ─────────────────────────────────────────────────────────────────
   private onQuotesBatch(quotes: Quote[]): void {
     this.tickCount++
-    this.lastTickAt = Date.now()
+    const now = Date.now()
+    this.lastTickAt = now
+    // Rolling-1s tick rate. Drop stale entries, then push current.
+    while (this.tickWindow.length > 0 && this.tickWindow[0]! < now - TradingEngine.TICK_WINDOW_MS) {
+      this.tickWindow.shift()
+    }
+    this.tickWindow.push(now)
     // Update unrealized P&L for all positions
     for (const q of quotes) this.om.updatePositionPrice(q.symbol, q.last)
     // Continuous observer — runs independently of the brain
@@ -1288,10 +1332,17 @@ export class TradingEngine {
     // (when live equity feed is up) or the dedicated cryptoAlpaca built in
     // simulator mode. Either one's cryptoWs is authoritative.
     const cryptoClient = this.cryptoAlpaca ?? this.alpaca
+    // tickHz reads the rolling-window count directly. Also drop any stale
+    // entries here so an idle period (no ticks) doesn't show a frozen
+    // high number; the next broadcast sees an accurate decay.
+    const nowStatus = Date.now()
+    while (this.tickWindow.length > 0 && this.tickWindow[0]! < nowStatus - TradingEngine.TICK_WINDOW_MS) {
+      this.tickWindow.shift()
+    }
     const status: SystemStatus = {
       connected:   this.alpaca ? this.alpaca.isMarketConnected : true,
       mode:        this.alpaca ? 'paper' : 'simulator',
-      tickHz:      this.tickCount > 0 ? Math.round(1000 / Math.max(1, this.lastTickAt - Date.now() + 2000)) : 0,
+      tickHz:      this.tickWindow.length,
       latencyMs:   this.alpaca ? this.alpaca.msSinceLastTick : 0,
       cpuPct:      0,
       memMb:       Math.round(mem.heapUsed / 1024 / 1024),
