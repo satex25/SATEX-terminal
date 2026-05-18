@@ -118,25 +118,63 @@ export class LiveCandleBuffer {
       clearTimeout(this.updateFlushTimer)
       this.updateFlushTimer = null
     }
-    // Roll all symbols
-    for (const [symbol, state] of this.states) {
-      const closed = { ...state.current }
-      state.history.push(closed)
-      if (state.history.length > MAX_CANDLES_PER_SYMBOL) state.history.shift()
-      for (const l of this.listeners) l(symbol, closed, false) // finalised
+    // 2026-05-18 — fill-forward across skipped buckets so a laptop suspend,
+    // NTP step, or stalled timer doesn't silently drop intermediate candles.
+    // Pre-fix this snapped currentBucket = bucket and emitted exactly one
+    // roll per call, so an N-bucket gap looked like a single huge bucket
+    // to downstream consumers (chart, observer, learner). Now we emit one
+    // closed + new pair per skipped bucket with `volume: 0` (no ticks
+    // landed in those buckets by definition) — the chart shows a flat
+    // continuation rather than a missing range. Capped at MAX_FILL_BUCKETS
+    // so a 6-hour suspend doesn't blast tens of thousands of events into
+    // the IPC pipe; beyond the cap we snap forward and log.
+    const MAX_FILL_BUCKETS = 600  // 10 minutes at 1s buckets
+    let cur = this.currentBucket
+    let safety = 0
+    let snapped = false
+    while (cur < bucket && safety < MAX_FILL_BUCKETS) {
+      const next = cur + this.intervalSec
+      for (const [symbol, state] of this.states) {
+        const closed = { ...state.current }
+        state.history.push(closed)
+        if (state.history.length > MAX_CANDLES_PER_SYMBOL) state.history.shift()
+        for (const l of this.listeners) l(symbol, closed, false)
 
-      const next: Candle = {
-        time:   bucket,
-        open:   closed.close,
-        high:   closed.close,
-        low:    closed.close,
-        close:  closed.close,
-        volume: 0,
+        const newCandle: Candle = {
+          time:   next,
+          open:   closed.close,
+          high:   closed.close,
+          low:    closed.close,
+          close:  closed.close,
+          volume: 0,
+        }
+        state.current = newCandle
+        for (const l of this.listeners) l(symbol, { ...newCandle }, true)
       }
-      state.current = next
-      for (const l of this.listeners) l(symbol, { ...next }, true) // new candle
+      cur = next
+      safety++
+    }
+    if (cur < bucket) {
+      snapped = true
+      log.warn('maybeRoll snapped over large gap (suspend / clock jump)', {
+        skippedBuckets: Math.floor((bucket - cur) / this.intervalSec),
+        cap: MAX_FILL_BUCKETS,
+      })
+      // Snap each symbol's current-candle time forward without emitting the
+      // intermediate buckets. The next live tick will reanchor open/close.
+      for (const [, state] of this.states) {
+        state.current = {
+          time:   bucket,
+          open:   state.current.close,
+          high:   state.current.close,
+          low:    state.current.close,
+          close:  state.current.close,
+          volume: 0,
+        }
+      }
     }
     this.currentBucket = bucket
+    void snapped
   }
 
   private getOrCreate(symbol: string, price: number): CandleState {

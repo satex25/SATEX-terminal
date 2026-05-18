@@ -123,6 +123,12 @@ export class AlpacaClient {
    *  successful authenticate; capped at MAX_BACKOFF_MS so we never sleep too
    *  long during a transient outage. */
   private reconnectAttempts = 0
+  /** Separate backoff counters for the crypto + account WS reconnect paths.
+   *  2026-05-18 — pre-fix crypto used a fixed 5s retry and account used 3s.
+   *  Both could storm an unreachable endpoint at 12-20 req/min. Backoff
+   *  matches the equity-feed shape so behavior is consistent across feeds. */
+  private cryptoReconnectAttempts = 0
+  private accountReconnectAttempts = 0
   private staleWatchdog: NodeJS.Timeout | null = null
   /** Absolute deadline before which reconnect attempts must wait. Set when the
    *  server reports code 406 (connection-limit exceeded) so an orphan socket on
@@ -156,11 +162,19 @@ export class AlpacaClient {
     return { 'APCA-API-KEY-ID': this.cfg.keyId, 'APCA-API-SECRET-KEY': this.cfg.secretKey, 'Content-Type': 'application/json' }
   }
 
+  /** 2026-05-18 — 10s timeout on every Alpaca REST call. Pre-fix fetch had
+   *  no AbortSignal; a hung endpoint would stall syncAlpacaAccount (15s
+   *  interval) and pile up overlapping fetches. Picked 10s as a value that
+   *  surfaces a slow Alpaca without false-positive timeouts on normal slow
+   *  responses. */
+  private static REST_TIMEOUT_MS = 10_000
+
   private async rest<T>(method: string, path: string, body?: unknown): Promise<T> {
     if (!this.isConfigured) throw new Error('alpaca: missing credentials')
     this.rateLimiter.gate(`${method} ${path}`)
     const res = await fetch(`${this.cfg.baseUrl}${path}`, {
       method, headers: this.headers(),
+      signal: AbortSignal.timeout(AlpacaClient.REST_TIMEOUT_MS),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {})
     })
     if (!res.ok) throw new Error(`alpaca ${method} ${path} → ${res.status}: ${await res.text()}`)
@@ -234,7 +248,10 @@ export class AlpacaClient {
     this.rateLimiter.gate(`GET /v2/stocks/${symbol}/bars`)
     const p = new URLSearchParams({ timeframe: tf, start: startIso, limit: '10000' })
     if (endIso) p.set('end', endIso)
-    const res = await fetch(`${this.cfg.dataUrl}/v2/stocks/${symbol}/bars?${p}`, { headers: this.headers() })
+    const res = await fetch(`${this.cfg.dataUrl}/v2/stocks/${symbol}/bars?${p}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(AlpacaClient.REST_TIMEOUT_MS),
+    })
     if (!res.ok) throw new Error(`alpaca getBars ${symbol} → ${res.status}: ${await res.text()}`)
     const data = await res.json() as { bars?: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> }
     return (data.bars ?? []).map(b => ({
@@ -430,10 +447,18 @@ export class AlpacaClient {
     ws.onclose = (ev) => {
       log.warn('crypto WS closed', { code: ev.code })
       this.cryptoWs = null
-      // Lightweight reconnect — schedule a single retry after 5s. The engine
-      // is responsible for the higher-level retry policy. Avoids the full
-      // exponential-backoff storm that the equity feed uses.
-      setTimeout(() => { void this.connectCryptoStream(symbols) }, 5_000).unref?.()
+      // 2026-05-18 — exponential backoff matching the equity feed (1s, 2s,
+      // 4s, 8s, 16s, capped at MAX_BACKOFF_MS). Pre-fix was a fixed 5s
+      // retry that would storm an unreachable endpoint at 12 req/min for
+      // the duration of an outage. Counter is reset on successful subscribe
+      // in onCryptoDataMsg.
+      const backoff = Math.min(
+        AlpacaClient.MAX_BACKOFF_MS,
+        AlpacaClient.MIN_BACKOFF_MS * Math.pow(2, this.cryptoReconnectAttempts),
+      )
+      this.cryptoReconnectAttempts++
+      log.info('scheduling crypto WS reconnect', { attempt: this.cryptoReconnectAttempts, delayMs: backoff })
+      setTimeout(() => { void this.connectCryptoStream(symbols) }, backoff).unref?.()
     }
     ws.onerror = (e) => log.error('crypto WS error', { err: String(e) })
   }
@@ -450,6 +475,7 @@ export class AlpacaClient {
       log.info('crypto stream authenticated')
       this.cryptoWs?.send(JSON.stringify({ action: 'subscribe', quotes: symbols, trades: symbols }))
       this.cryptoSubscribed = new Set(symbols)
+      this.cryptoReconnectAttempts = 0  // 2026-05-18 — reset backoff on success
       return
     }
     if (m['T'] === 'error') {
@@ -506,7 +532,19 @@ export class AlpacaClient {
     ws.onmessage = (ev) => { const f = frame(ev.data); if (f) for (const m of f) this.onAccountMsg(m as Record<string, unknown>) }
     ws.onclose = () => {
       this.accountConnected = false; this.accountWs = null
-      if (!this.acctReconnectTimer) this.acctReconnectTimer = setTimeout(() => { this.acctReconnectTimer = null; void this.connectAccountStream() }, 3000)
+      if (this.acctReconnectTimer) return
+      // 2026-05-18 — exponential backoff matching equity + crypto feeds.
+      // Counter resets on successful authorize in onAccountMsg.
+      const backoff = Math.min(
+        AlpacaClient.MAX_BACKOFF_MS,
+        AlpacaClient.MIN_BACKOFF_MS * Math.pow(2, this.accountReconnectAttempts),
+      )
+      this.accountReconnectAttempts++
+      log.info('scheduling account WS reconnect', { attempt: this.accountReconnectAttempts, delayMs: backoff })
+      this.acctReconnectTimer = setTimeout(() => {
+        this.acctReconnectTimer = null
+        void this.connectAccountStream()
+      }, backoff)
     }
     ws.onerror = (e) => log.error('account WS error', { err: String(e) })
   }
@@ -520,6 +558,7 @@ export class AlpacaClient {
   private onAccountMsg(m: Record<string, unknown>): void {
     if (m['stream'] === 'authorization') {
       this.accountConnected = true
+      this.accountReconnectAttempts = 0  // 2026-05-18 — reset backoff on success
       this.accountWs?.send(JSON.stringify({ action: 'listen', data: { streams: ['trade_updates'] } })); return
     }
     if (m['stream'] === 'trade_updates' && m['data'] && typeof m['data'] === 'object') {

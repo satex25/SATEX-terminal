@@ -99,17 +99,31 @@ export class TickRecorder {
     this.paused = false
   }
 
-  /** Hook target — register with `engine.market.onQuotes(...)`. */
+  /** Hook target — register with `engine.market.onQuotes(...)`.
+   *
+   *  2026-05-18 — per-symbol throttle now compares against the QUOTE's
+   *  timestamp instead of Date.now(). Pre-fix, two quotes for the same
+   *  symbol arriving in one coalesced batch (post-reconnect catchup,
+   *  high-frequency same-symbol updates) both saw `now` as equal, so the
+   *  second was dropped even when the underlying market timestamps differed
+   *  by far more than MIN_SAMPLE_MS. Recording q.timestamp instead of
+   *  Date.now() also preserves feed-time fidelity for the replay path
+   *  (bucket alignment + replay clock anchor are both more accurate). */
   ingest(quotes: Quote[]): void {
     if (!this.active || this.paused) return
-    const now = Date.now()
+    const fallbackNow = Date.now()
     for (const q of quotes) {
+      // Prefer the feed's own timestamp; fall back to wall clock when the
+      // source didn't stamp one (simulator early frames, defensive default).
+      const ts = q.timestamp && Number.isFinite(q.timestamp) && q.timestamp > 0
+        ? q.timestamp
+        : fallbackNow
       const prev = this.lastSampledAt.get(q.symbol) ?? 0
-      if (now - prev < MIN_SAMPLE_MS) continue
-      this.lastSampledAt.set(q.symbol, now)
+      if (ts - prev < MIN_SAMPLE_MS) continue
+      this.lastSampledAt.set(q.symbol, ts)
       this.buffer.push({
         sessionId: this.sessionId,
-        ts:        now,
+        ts,
         symbol:    q.symbol,
         last:      q.last,
         bid:       q.bid,
