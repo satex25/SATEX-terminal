@@ -13,7 +13,8 @@ import { PanelHead } from '../components/PanelHead'
 import { useClocks } from '../hooks/useClocks'
 import { findUniverseEntry } from '@shared/constants'
 import { fmt } from '../lib/format'
-import type { FeedStatus, Quote, SessionId } from '@shared/types'
+import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
+import type { Quote, SessionId } from '@shared/types'
 
 interface Group { label: string; symbols: string[] }
 
@@ -29,19 +30,6 @@ const GROUPS: ReadonlyArray<Group> = [
 
 function priorityLabel(session: SessionId): string {
   return session === 'LONDON' ? 'FX-priority' : session === 'TOKYO' ? 'Asia-priority' : 'US-priority'
-}
-
-/** B3 (2026-05-18) — true when the symbol's asset class is *not* served by a
- *  live broker feed in the current session. Today futures are always
- *  synthetic (IEX has no futures), equity is live when WS is up, crypto is
- *  live when the v1beta3/crypto WS is up. The badge renders only on stale. */
-function isSyntheticFeed(symbol: string, feed: FeedStatus): boolean {
-  const entry = findUniverseEntry(symbol)
-  const ac = entry?.assetClass
-  if (ac === 'future') return feed.futures !== 'live'
-  if (ac === 'crypto') return feed.crypto  !== 'live'
-  if (ac === 'equity' || ac === 'index') return feed.equity !== 'live'
-  return false
 }
 
 export function WatchlistPanel() {
@@ -118,7 +106,7 @@ export function WatchlistPanel() {
                       {synthetic && (
                         <span
                           className="bb-watchlist-feed-stale"
-                          title="Synthetic seed — no live feed for this asset class"
+                          title={SIM_BADGE_TOOLTIP}
                         >
                           SIM
                         </span>
