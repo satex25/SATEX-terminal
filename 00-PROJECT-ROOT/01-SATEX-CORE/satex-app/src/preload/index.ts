@@ -177,6 +177,17 @@ const satexApi = {
    *  broker feed. Diff-gated in the engine — only fires on class transition. */
   onFeedStatusUpdate: (cb: (s: FeedStatus) => void) => on<FeedStatus>(IPC.FEED_STATUS_UPDATE, cb),
 
+  // ── CSP violation report (B9, 2026-05-19) ──────────────────────────────────
+  /** Fire-and-forget — the renderer's `securitypolicyviolation` listener
+   *  shapes a subset of the SecurityPolicyViolationEvent and ships it here
+   *  so the main process can log to the rotating file sink. Callers should
+   *  NOT await — the resolution carries no information they need. */
+  reportCspViolation: (report: {
+    blockedURI?: string; violatedDirective?: string; effectiveDirective?: string;
+    sourceFile?: string; lineNumber?: number; columnNumber?: number;
+    sample?: string; documentURI?: string;
+  }) => ipcRenderer.invoke(IPC.CSP_VIOLATION_REPORT, report) as Promise<{ ok: true }>,
+
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {
     /** Stream of closed-trade records — one event per position close. */

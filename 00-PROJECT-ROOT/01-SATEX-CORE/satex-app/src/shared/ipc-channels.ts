@@ -188,6 +188,15 @@ export const IPC = {
    *  SIM badge on symbols whose quotes are synthetic-seed rather than from a
    *  live broker feed. Diff-gated — only fires when a class transitions. */
   FEED_STATUS_UPDATE: 'satex:feed:statusUpdate',
+
+  // ── B9 (2026-05-19) — CSP violation reporting ────────────────────────────
+  /** Invoke (renderer → main, fire-and-forget): the renderer's global
+   *  `securitypolicyviolation` listener forwards each event here so the main
+   *  process can log it via the rotating file sink. Without this, CSP
+   *  violations show only as silent renderer console messages and never
+   *  reach the on-disk forensic log. Defense-in-depth: a future XSS
+   *  attempt (via injected news/AI content) will leave an audit trail. */
+  CSP_VIOLATION_REPORT: 'satex:security:cspViolation',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

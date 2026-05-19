@@ -19,7 +19,7 @@ import {
   AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
-  WindowZoomReq,
+  WindowZoomReq, CspViolationReportReq,
 } from '@shared/ipc-schemas'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
@@ -928,6 +928,18 @@ function registerIpcHandlers(): void {
   register(IPC.LOGS_GET,        ()                                       => engine.getLogsTail())
   register(IPC.DEPTH_GET,       validated(OptionalSymbolReq, (symbol)    => engine.getDepth(symbol)))
   register(IPC.DEPTH_SUBSCRIBE, validated(SymbolOnlyReq,     (symbol)    => { engine.subscribeDepth(symbol); return { ok: true } }))
+
+  // ── B9 (2026-05-19) — CSP violation report sink ─────────────────────────────
+  // Receives the renderer's `securitypolicyviolation` events, validates the
+  // shape, and logs at WARN level. The on-disk rotating log (S1-7) is the
+  // forensic channel — any future XSS attempt that bumps into CSP will leave
+  // a structured row here for post-mortem. `register()` already swallows
+  // throws, so a malformed payload becomes a warn-log + a rejected invoke()
+  // promise the renderer can ignore.
+  register(IPC.CSP_VIOLATION_REPORT, validated(CspViolationReportReq, (report) => {
+    log.warn('CSP violation reported by renderer', report)
+    return { ok: true as const }
+  }))
 
   // ── Window controls ──────────────────────────────────────────────────────────
   register(IPC.WINDOW_TOGGLE_FULLSCREEN, () => {

@@ -225,3 +225,21 @@ export type LayoutSaveReq = z.infer<typeof LayoutSaveReq>
 
 export const WindowZoomReq = z.number().finite().min(0.25).max(4.0)
 export type WindowZoomReq = z.infer<typeof WindowZoomReq>
+
+// ── B9 (2026-05-19) — CSP violation report ──────────────────────────────────
+// Renderer's global `securitypolicyviolation` listener shapes a subset of the
+// SecurityPolicyViolationEvent into this payload. Strings are length-capped
+// so a malicious script repeatedly violating CSP can't pin the main process
+// on log-string allocation. `.strict()` rejects any extra fields a hostile
+// renderer might tack on.
+export const CspViolationReportReq = z.object({
+  blockedURI:        z.string().max(2048).optional(),
+  violatedDirective: z.string().max(512).optional(),
+  effectiveDirective: z.string().max(512).optional(),
+  sourceFile:        z.string().max(2048).optional(),
+  lineNumber:        z.number().int().finite().optional(),
+  columnNumber:      z.number().int().finite().optional(),
+  sample:            z.string().max(256).optional(),
+  documentURI:       z.string().max(2048).optional(),
+}).strict()
+export type CspViolationReportReq = z.infer<typeof CspViolationReportReq>
