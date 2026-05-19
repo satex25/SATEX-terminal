@@ -41,6 +41,40 @@ export function loadKillSwitchState(): KillSwitchState {
   } catch { return { ...DEFAULT } }
 }
 
+/**
+ * Atomic JSON write — write payload to a tmp sibling of `finalPath`, then
+ * rename onto the canonical name. On the same filesystem `rename` is atomic:
+ * a reader either sees the previous file or the new one in full, never a
+ * truncated half. Pulled out as an exported helper so a process-kill regression
+ * test can exercise it directly without mocking electron's `app.getPath`.
+ *
+ * Why this matters for the kill switch: pre-fix v0.4.3 used a bare
+ * `writeFileSync(FILE(), …)` which truncates first, then writes. A crash
+ * after truncate-before-write leaves a 0-byte file → next boot's
+ * `loadKillSwitchState` lands on the JSON.parse catch and returns
+ * `{ armed: false }`. An armed kill switch (e.g. from a daily-loss auto-arm)
+ * silently disappears across the crash. Atomic rename closes that hole.
+ *
+ * Returns true on success, false on any I/O failure (original file untouched).
+ * Failure path also unlinks the dangling tmp so disk doesn't accumulate
+ * orphans across long sessions of repeated writes.
+ */
+export function writeJsonAtomic(finalPath: string, data: string): boolean {
+  // High-entropy suffix avoids collisions if two saves arrive in the same ms
+  // (theoretical, but free defense — `Date.now()` alone could collide under
+  // an automated test or a tight save loop).
+  const tmpPath = `${finalPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  try {
+    fs.writeFileSync(tmpPath, data, 'utf8')
+    fs.renameSync(tmpPath, finalPath)
+    return true
+  } catch (e) {
+    log.error('atomic write failed', { err: String(e), path: finalPath })
+    try { fs.unlinkSync(tmpPath) } catch { /* tmp may not exist if writeFileSync threw */ }
+    return false
+  }
+}
+
 export function saveKillSwitchState(armed: boolean, reason: string): void {
   const prev = loadKillSwitchState()
   const now = Date.now()
@@ -50,6 +84,5 @@ export function saveKillSwitchState(armed: boolean, reason: string): void {
     armedAt: armed ? (prev.armed ? prev.armedAt : now) : 0,
     updatedAt: now,
   }
-  try { fs.writeFileSync(FILE(), JSON.stringify(next, null, 2), 'utf8') }
-  catch (e) { log.error('save failed', { err: String(e), armed, reason }) }
+  writeJsonAtomic(FILE(), JSON.stringify(next, null, 2))
 }
