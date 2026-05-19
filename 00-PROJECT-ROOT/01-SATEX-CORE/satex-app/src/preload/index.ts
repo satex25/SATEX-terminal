@@ -22,7 +22,7 @@ import type {
   HistoricalImportRequest, HistoricalImportResult,
   AutonomousStatus, AutonomousDecision,
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
-  ClosedTrade, JournalTag, Trade, FeedStatus,
+  ClosedTrade, JournalTag, Trade, FeedStatus, UpdateAvailable,
 } from '@shared/types'
 import type { IndicatorSettings } from '@shared/chart-indicators'
 import type { WorkspaceState } from '@shared/types'
@@ -187,6 +187,17 @@ const satexApi = {
     sourceFile?: string; lineNumber?: number; columnNumber?: number;
     sample?: string; documentURI?: string;
   }) => ipcRenderer.invoke(IPC.CSP_VIOLATION_REPORT, report) as Promise<{ ok: true }>,
+
+  // ── Auto-update (S1-9, 2026-05-19) ─────────────────────────────────────────
+  /** Subscribe to update notifications. Fires twice per detected update —
+   *  once when electron-updater confirms a newer version exists (downloaded:
+   *  false, button still disabled in the toast), once when the binary finishes
+   *  downloading (downloaded: true, button enables). */
+  onUpdateAvailable: (cb: (u: UpdateAvailable) => void) => on<UpdateAvailable>(IPC.UPDATE_AVAILABLE, cb),
+  /** Trigger quit-and-install. Safe to call only after `downloaded:true` has
+   *  been observed; the main-side handler delegates to electron-updater which
+   *  no-ops if the binary hasn't actually landed yet. */
+  installUpdate:     () => ipcRenderer.invoke(IPC.UPDATE_INSTALL) as Promise<void>,
 
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {

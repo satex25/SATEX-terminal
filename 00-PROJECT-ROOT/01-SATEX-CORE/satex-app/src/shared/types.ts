@@ -780,3 +780,11 @@ export interface DepthSnapshot {
   bids:       DepthLevel[]
   computedAt: number
 }
+
+export interface UpdateAvailable {
+  available: boolean
+  version?: string
+  /** True once electron-updater has finished fetching the new installer.
+   *  The renderer's [Restart Now] button stays disabled until this flips. */
+  downloaded: boolean
+}

@@ -2358,6 +2358,83 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   font-variant-numeric: tabular-nums;
 }
 
+/* B3 follow-up (v0.4.3, 2026-05-19) — generic SIM badge usable by any panel
+   that displays a synthetic-feed quote. WatchlistPanel keeps its existing
+   .bb-watchlist-feed-stale class for backwards compatibility; new surfaces
+   (MarketsOverviewPanel, ChartPanel header) use this one. Same visual shape. */
+.bb-sim-badge {
+  display: inline-block;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 4px;
+  margin-left: 5px;
+  border-radius: 2px;
+  background: rgba(245, 166, 35, 0.18);
+  color: var(--bb-warn);
+  text-transform: uppercase;
+  line-height: 1.1;
+  vertical-align: middle;
+  cursor: help;
+}
+
+/* S1-9 (v0.4.3, 2026-05-19) — auto-update toast. Sits below the TickerTape
+   row in the app stack but renders as a fixed-position banner pinned to the
+   top so it's visible across every workspace tab. JetBrains-Mono UI to match
+   the rest of the terminal; cyan-accent left border ties it to the brand. */
+.bb-update-toast {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: 720px;
+  padding: 10px 14px 10px 18px;
+  background: var(--bb-surf-2);
+  border: 1px solid var(--bb-line-2);
+  border-left: 4px solid var(--bb-accent);
+  color: var(--bb-txt-strong);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55);
+}
+.bb-update-toast-text { flex: 1; min-width: 0; }
+.bb-update-toast-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.bb-update-toast-btn {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+}
+.bb-update-toast-btn.primary {
+  background: var(--bb-accent);
+  color: var(--bb-bg);
+  border-color: var(--bb-accent);
+}
+.bb-update-toast-btn.primary:hover:not(:disabled) { background: var(--bb-accent-d); border-color: var(--bb-accent-d); }
+.bb-update-toast-btn.primary:disabled {
+  background: rgba(0, 200, 255, 0.18);
+  color: var(--bb-txt-dim);
+  border-color: rgba(0, 200, 255, 0.22);
+  cursor: not-allowed;
+}
+.bb-update-toast-btn.ghost {
+  background: transparent;
+  color: var(--bb-txt-dim);
+  border-color: var(--bb-line-2);
+}
+.bb-update-toast-btn.ghost:hover { color: var(--bb-txt); border-color: var(--bb-txt-dim); }
+
 /* ---- Depth book (L2) ------------------------------------------------- */
 .bb-depth-panel { background: var(--bb-surf-1); overflow: hidden; height: 100%; }
 .bb-depth-cols {

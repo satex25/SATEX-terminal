@@ -27,6 +27,7 @@ import { IndicatorSettingsService } from './services/indicator-settings'
 import { WorkspaceStateService } from './services/workspace-state'
 import { migratePlaintextEnvLocalCreds } from './services/credential-store'
 import { isLive } from './services/live-mode'
+import { AutoUpdateService } from './services/auto-update'
 
 // Migrate plaintext Alpaca keys out of userData/.env.local into safeStorage
 // BEFORE dotenv runs. If keys are migrated the file is rewritten (or deleted)
@@ -150,6 +151,7 @@ const engine = new TradingEngine()
 // vault writer uses); we resolve from app.getAppPath() upward to find it.
 const indicatorSettings = new IndicatorSettingsService(resolveVaultProjectRoot())
 const workspaceState    = new WorkspaceStateService(resolveVaultProjectRoot())
+const autoUpdate        = new AutoUpdateService()
 let mainWindow: BrowserWindow | null = null
 
 // ── Process-level crash safety (S0-1) ───────────────────────────────────────
@@ -167,6 +169,9 @@ function gracefulShutdown(label: string, cause: unknown): void {
   })
   try { engine.shutdown() } catch (e) {
     log.error('engine.shutdown threw during graceful shutdown', { err: String(e) })
+  }
+  try { autoUpdate.shutdown() } catch (e) {
+    log.error('autoUpdate.shutdown threw during graceful shutdown', { err: String(e) })
   }
   // Hard-stop after 5s in case anything is still hanging on an async write.
   setTimeout(() => { try { app.exit(1) } catch { process.exit(1) } }, 5_000).unref()
@@ -964,6 +969,11 @@ function registerIpcHandlers(): void {
   }))
   register(IPC.WINDOW_GET_ZOOM, () => mainWindow?.webContents.getZoomFactor() ?? 1.0)
 
+  // ── Auto-update (S1-9) ──────────────────────────────────────────────────────
+  register(IPC.UPDATE_INSTALL, () => {
+    autoUpdate.quitAndInstall()
+  })
+
   log.info('IPC handlers registered', { count: Object.keys(IPC).length })
 }
 
@@ -984,6 +994,7 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers()
   createWindow()
+  if (mainWindow) autoUpdate.setWindow(mainWindow)
   wireEngineEvents()
 
   try {

@@ -197,6 +197,14 @@ export const IPC = {
    *  reach the on-disk forensic log. Defense-in-depth: a future XSS
    *  attempt (via injected news/AI content) will leave an audit trail. */
   CSP_VIOLATION_REPORT: 'satex:security:cspViolation',
+
+  // ── S1-9 (2026-05-19) — Auto-update status ────────────────────────────────
+  /** Push: { available: boolean, version?: string }. Notifies renderer when
+   *  an update is ready to install. Renderer shows a toast and restart prompt. */
+  UPDATE_AVAILABLE: 'satex:update:available',
+  /** Invoke (renderer → main): trigger quit-and-install when user clicks
+   *  the update prompt. Only works after update-downloaded event. */
+  UPDATE_INSTALL: 'satex:update:install',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -223,6 +231,7 @@ export const PUSH_CHANNELS = [
   IPC.TRADE_CLOSED,
   IPC.TRADES_TICK,
   IPC.FEED_STATUS_UPDATE,
+  IPC.UPDATE_AVAILABLE,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

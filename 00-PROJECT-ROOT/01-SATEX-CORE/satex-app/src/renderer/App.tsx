@@ -32,6 +32,7 @@ import { LiveModeModal } from './components/modals/LiveModeModal'
 import { TacticsModal } from './components/modals/TacticsModal'
 import { IndicatorsModal } from './components/modals/IndicatorsModal'
 import { ExitReflectionModal } from './components/modals/ExitReflectionModal'
+import { UpdateToast } from './components/UpdateToast'
 import { useIndicatorStore } from './stores/indicatorStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import { WatchlistPanel } from './panels/WatchlistPanel'
@@ -311,6 +312,10 @@ export default function App() {
       <TacticsModal    open={modal === 'tactics'}    onClose={() => setModal(null)} />
       <IndicatorsModal open={modal === 'indicators'} onClose={() => setModal(null)} />
       <ExitReflectionModal />
+
+      {/* S1-9: auto-update notification. Renders only after AutoUpdateService
+          pushes an UPDATE_AVAILABLE event. Self-contained — no props. */}
+      <UpdateToast />
 
       {/* S1-5: arm-hold progress overlay. Renders only while the user is
           holding the ⌘⇧K chord; auto-clears on release or after the 2s
