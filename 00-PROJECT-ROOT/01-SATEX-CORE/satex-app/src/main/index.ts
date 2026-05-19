@@ -726,13 +726,24 @@ function registerIpcHandlers(): void {
   register(IPC.INDICATORS_GET, validated(SymbolOnlyReq, (symbol)            => engine.getIndicators(symbol)))
   register(IPC.SUBSCRIBE,      validated(SubscribeReq,  (symbols) => {
     log.debug('renderer subscribed', { symbols })
-    // Push current snapshot immediately
-    const quotes = engine.getAllQuotes()
-    push(IPC.QUOTES_TICK, quotes.filter(q => symbols.includes(q.symbol)))
+    // v0.4.3 B10 — push the full initial-state snapshot through the same code
+    // path the visibility-restore handler uses (rebroadcastSnapshot). This
+    // replaces what used to be a 1500ms setTimeout block in app.whenReady(),
+    // which was racy: if the renderer wasn't subscribed by the 1.5s mark,
+    // the initial push went into the void. SUBSCRIBE is the canonical
+    // renderer-is-ready signal, so doing the full push here removes the
+    // race entirely. Pre-fix the SUBSCRIBE handler only pushed a *filtered*
+    // QUOTES_TICK which was effectively empty (renderer always calls
+    // subscribe([])), so it never carried any state.
+    rebroadcastSnapshot()
     // Fire one-time fixture seed (catalysts + historical candles) now that
     // the renderer has its IPC listeners attached. Idempotent — guarded by
     // engine.seedBroadcastDone so HMR remounts don't re-flood.
     engine.broadcastInitialSeed()
+    // `symbols` is preserved in the signature for backwards-compat with
+    // hypothetical future per-symbol-subscription semantics. Today the
+    // renderer always passes []; the rebroadcast covers everything.
+    void symbols
   }))
 
   // ── Watchlist ────────────────────────────────────────────────────────────────
@@ -980,22 +991,12 @@ app.whenReady().then(async () => {
     wireAutonomousEvents()
     wireBlackBoxEvents()
     log.info('trading engine online')
-    // Push initial state to renderer
-    setTimeout(() => {
-      push(IPC.QUOTES_TICK, engine.getAllQuotes())
-      push(IPC.ACCOUNT_UPDATE, engine.om.getAccount())
-      push(IPC.ORDERS_UPDATE, engine.om.getOrders())
-      push(IPC.OBSERVER_STATS, engine.getObserverStats())
-      push(IPC.LEARNER_STATS,  engine.getLearnerStats())
-      push(IPC.VAULT_STATS,    engine.getVaultStats())
-      // Phase 10 seed snapshots
-      push(IPC.REGIME_UPDATE,     engine.getRegime())
-      push(IPC.RISK_GATES_UPDATE, engine.getRiskGates())
-      push(IPC.MACRO_UPDATE,      engine.getMacro())
-      push(IPC.LOGS_TAIL,         engine.getLogsTail())
-      push(IPC.DEPTH_UPDATE,      engine.getDepth())
-      push(IPC.FEED_STATUS_UPDATE, engine.getFeedStatus())
-    }, 1500)
+    // v0.4.3 B10 — removed the previous setTimeout(1500ms) initial-push block.
+    // The renderer's `subscribe([])` call (from useIPC mount) now drives the
+    // full initial-state push via SUBSCRIBE → rebroadcastSnapshot(). That path
+    // is deterministic (fires on the renderer's actual readiness signal)
+    // instead of a hard-coded 1500ms guess, which was a documented race
+    // surface in the v0.4.2 audit.
   } catch (err) {
     log.error('engine initialization failed', { err: String(err) })
   }
