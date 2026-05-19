@@ -199,14 +199,23 @@ export class TickRecorder {
         log.info('tape flush recovered', { afterAttempts: this.failedFlushCount, recovered: n })
         this.failedFlushCount = 0
       }
-      if (this.buffer.length > MAX_BUFFER * 4) {
-        const overflow = this.buffer.length - MAX_BUFFER * 4
-        this.buffer.splice(0, overflow)
-        log.warn('tape buffer overflow; dropped oldest rows', { dropped: overflow })
-      }
     } catch (err) {
       // Best-effort persistence — buffer untouched, rows safe for next retry.
       this.failedFlushCount += 1
+      // 2026-05-19 (v0.4.3 B1) — bounded buffer growth during sustained outage.
+      // Pre-fix the overflow check sat after the success-path splice where it
+      // could never fire (the splice drained the full buffer). Moved into the
+      // catch block where it does what the comment originally promised: cap
+      // recorder memory at MAX_BUFFER*4 (~1.6 MB) by dropping the oldest rows
+      // first, preserving the freshest tail through a long DB outage.
+      if (this.buffer.length > MAX_BUFFER * 4) {
+        const overflow = this.buffer.length - MAX_BUFFER * 4
+        this.buffer.splice(0, overflow)
+        log.warn('tape buffer overflow during outage; dropped oldest rows', {
+          dropped: overflow,
+          bufferedAfter: this.buffer.length,
+        })
+      }
       log.warn('tape flush failed; will retry', {
         err: String(err),
         buffered: this.buffer.length,
