@@ -181,6 +181,13 @@ export const IPC = {
    *  path. Import path intentionally NOT exposed in this rev — restoring
    *  partial state safely requires a separate confirmation UX. */
   SNAPSHOT_EXPORT:    'satex:snapshot:export',
+
+  // ── B3 (2026-05-18) — Per-asset-class feed status ────────────────────────
+  /** Push: { equity: 'live'|'simulator'|'off', futures: 'live'|'synthetic',
+   *  crypto: 'live'|'off' }. Renderer's WatchlistPanel reads this to render a
+   *  SIM badge on symbols whose quotes are synthetic-seed rather than from a
+   *  live broker feed. Diff-gated — only fires when a class transitions. */
+  FEED_STATUS_UPDATE: 'satex:feed:statusUpdate',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -206,6 +213,7 @@ export const PUSH_CHANNELS = [
   IPC.DEPTH_UPDATE,
   IPC.TRADE_CLOSED,
   IPC.TRADES_TICK,
+  IPC.FEED_STATUS_UPDATE,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

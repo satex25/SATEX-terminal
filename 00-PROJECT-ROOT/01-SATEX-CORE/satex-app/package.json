@@ -1,6 +1,6 @@
 {
   "name": "satex-app",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "SATEX — Smart Autonomous Trading EXperience. Institutional-grade autonomous trading terminal.",
   "author": "SATEX Engineering",
@@ -20,7 +20,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "pack:win": "npm run build && electron-builder --win --x64 --publish never",
+    "prepack:check": "node scripts/prepack-check.js",
+    "pack:win": "npm run prepack:check && npm run build && electron-builder --win --x64 --publish never",
     "pack:dir": "npm run build && electron-builder --dir",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-builder install-app-deps"

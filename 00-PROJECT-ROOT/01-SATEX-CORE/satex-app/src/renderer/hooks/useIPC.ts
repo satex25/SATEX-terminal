@@ -14,7 +14,8 @@ import { useDepthStore } from '../stores/depthStore'
 import { useReplayStore } from '../stores/replayStore'
 import { useJournalStore } from '../stores/journalStore'
 import { useFootprintStore } from '../stores/footprintStore'
-import type { NewsItem, ReplayMode, ClosedTrade, Trade } from '@shared/types'
+import { useFeedStore } from '../stores/feedStore'
+import type { NewsItem, ReplayMode, ClosedTrade, Trade, FeedStatus } from '@shared/types'
 
 export function useIPC(): void {
   const { updateQuotes, updateCandle, bulkReplaceCandles, appendNews, resetCandles } = useMarketStore()
@@ -78,6 +79,10 @@ export function useIPC(): void {
     const ingestTrades = useFootprintStore.getState().ingest
     const unsubTrades  = window.satex.onTradesTick?.((batch: Trade[]) => ingestTrades(batch)) ?? (() => {})
 
+    // ── B3: per-asset-class feed status → WatchlistPanel SIM badge ─────────
+    const setFeedStatus = useFeedStore.getState().setStatus
+    const unsubFeed = window.satex.onFeedStatusUpdate?.((s: FeedStatus) => setFeedStatus(s)) ?? (() => {})
+
     // ── Initial seed fetches (post-subscribe so we don't miss a push) ──────
     void window.satex.subscribe([])
     void window.satex.getAutonomousStatus?.().then(s => { if (s) setAutonomous(s) }).catch(() => {})
@@ -105,6 +110,7 @@ export function useIPC(): void {
       unsubDepth()
       unsubJournal()
       unsubTrades()
+      unsubFeed()
     }
   }, [])
 }

@@ -48,6 +48,10 @@ export class TickRecorder {
   private totalRecorded = 0
   private lastFlushSize = 0
   private lastFlushAt: number | null = null
+  /** 2026-05-18 — count of consecutive flush failures (B1). Resets to 0 on
+   *  successful flush. Surfaced via stats() so the SystemStatus pill can show
+   *  a TAPE: DEGRADED badge when retries accumulate. */
+  private failedFlushCount = 0
   /** Wall-clock millis of the last successful (rolling or final) manifest seal.
    *  Zero before any seal has fired. Drives the 5s periodic reseal cadence —
    *  see RESEAL_INTERVAL_MS for the rationale. */
@@ -177,16 +181,37 @@ export class TickRecorder {
       this.maybeResealManifest()
       return
     }
-    const drain = this.buffer
-    this.buffer = []
+    // 2026-05-18 (B1) — copy, don't move. Pre-fix this was `drain = this.buffer;
+    // this.buffer = []` which dropped the original buffer reference. On insert
+    // failure, the rows in `drain` were a dead local and lost forever. Now the
+    // buffer stays intact through the insert; we splice only on success. INSERT
+    // OR REPLACE is idempotent on (session_id, ts, symbol) so a retry won't
+    // double-write. Bounded overflow at MAX_BUFFER*4 caps memory at ~1.6MB
+    // during a sustained outage; drop-oldest preserves the freshest tail.
+    const drain = this.buffer.slice()
     try {
       const n = insertTickBatch(drain)
+      this.buffer.splice(0, drain.length)
       this.totalRecorded += n
       this.lastFlushSize = n
       this.lastFlushAt = Date.now()
+      if (this.failedFlushCount > 0) {
+        log.info('tape flush recovered', { afterAttempts: this.failedFlushCount, recovered: n })
+        this.failedFlushCount = 0
+      }
+      if (this.buffer.length > MAX_BUFFER * 4) {
+        const overflow = this.buffer.length - MAX_BUFFER * 4
+        this.buffer.splice(0, overflow)
+        log.warn('tape buffer overflow; dropped oldest rows', { dropped: overflow })
+      }
     } catch (err) {
-      // Best-effort persistence — never crash the engine over a flush error.
-      log.warn('tape flush failed; rows dropped', { err: String(err), dropped: drain.length })
+      // Best-effort persistence — buffer untouched, rows safe for next retry.
+      this.failedFlushCount += 1
+      log.warn('tape flush failed; will retry', {
+        err: String(err),
+        buffered: this.buffer.length,
+        attempt: this.failedFlushCount,
+      })
     }
     this.maybeResealManifest()
   }
@@ -206,6 +231,7 @@ export class TickRecorder {
     totalRecorded: number; buffered: number
     lastFlushAt: number | null; lastFlushSize: number
     lastSealedAt: number | null; totalSeals: number
+    failedFlushCount: number
   } {
     return {
       active: this.active,
@@ -217,6 +243,7 @@ export class TickRecorder {
       lastFlushSize: this.lastFlushSize,
       lastSealedAt: this.lastSealedAt > 0 ? this.lastSealedAt : null,
       totalSeals: this.totalSeals,
+      failedFlushCount: this.failedFlushCount,
     }
   }
 }

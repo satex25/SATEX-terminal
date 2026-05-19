@@ -146,6 +146,30 @@ export class AlpacaClient {
 
   constructor(cfg: AlpacaConfig) { this.cfg = cfg }
 
+  // ── D6 (2026-05-18) — WS boundary input validation ──────────────────────
+  // A compromised upstream proxy / MITM can deliver crafted JSON. The frame()
+  // parser only narrows the JSON Value; downstream Number(...) and
+  // new Date(...).getTime() return NaN on invalid input. NaN then poisons
+  // q.volume / q.vwapNumer permanently AND makes refPriceAge NaN — which
+  // causes order-manager Gate 0 to FAIL OPEN (NaN > MAX_QUOTE_AGE_MS is
+  // false). These helpers replace every Number() and Date.getTime() in the
+  // hot path so NaN cannot escape this boundary.
+  private num(v: unknown, dflt = 0): number {
+    const n = Number(v ?? dflt)
+    return Number.isFinite(n) ? n : dflt
+  }
+  private ts(v: unknown): number {
+    if (!v) return Date.now()
+    const t = new Date(String(v)).getTime()
+    return Number.isFinite(t) ? t : Date.now()
+  }
+  /** Symbol length cap matches ipc-schemas SymbolS.max(16). A 100MB symbol
+   *  string in a hostile frame would otherwise become a Map key and balloon
+   *  process memory. */
+  private sym(v: unknown): string {
+    return String(v ?? '').slice(0, 16)
+  }
+
   get isPaperEndpoint():   boolean { return this.cfg.baseUrl.includes(ALPACA_PAPER_HOST) }
   get isConfigured():      boolean { return !!this.cfg.keyId && !!this.cfg.secretKey }
   get isMarketConnected(): boolean { return this.connected }
@@ -397,27 +421,37 @@ export class AlpacaClient {
       return
     }
     if (m['T'] === 'q') {
-      const bid = Number(m['bp'] ?? 0), ask = Number(m['ap'] ?? 0)
+      // D6 — all numeric coercions through this.num(); timestamp through
+      // this.ts(); symbol through this.sym() to length-cap.
+      const bid = this.num(m['bp']), ask = this.num(m['ap'])
       // size is bid_size + ask_size (top-of-book depth, NOT traded size).
       // Carried for any consumer that wants book depth; LiveMarket gates volume
       // on kind === 't' so this doesn't leak into traded-volume metrics.
       const tick: AlpacaTick = {
-        symbol: String(m['S'] ?? ''),
+        symbol: this.sym(m['S']),
         price: (bid + ask) / 2,
-        size: Number(m['bs'] ?? 0) + Number(m['as'] ?? 0),
+        size: this.num(m['bs']) + this.num(m['as']),
         bid, ask,
-        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        timestamp: this.ts(m['t']),
         kind: 'q',
       }
       for (const l of this.tickListeners) l(tick); return
     }
     if (m['T'] === 't') {
-      const price = Number(m['p'] ?? 0)
+      const price = this.num(m['p'])
+      // 2026-05-18 (B2) — bid/ask sentinel 0 on trade frames. Trade prints
+      // carry NO quote-book data; pre-fix we cloned price into bid+ask, which
+      // collapsed the LiveMarket spread to 0 on every trade and re-expanded it
+      // on the next quote frame (10×/sec flicker). LiveMarket's OR-fallback
+      // chain (`q.bid = tick.bid || q.bid || q.last * 0.9999`) preserves the
+      // prior quote when tick.bid is 0/falsy, eliminating the flicker.
+      // D6 — coerce through num()/ts()/sym() so NaN/Infinity/huge-string
+      // payloads can't poison downstream state.
       const tick: AlpacaTick = {
-        symbol: String(m['S'] ?? ''),
-        price, size: Number(m['s'] ?? 0),
-        bid: price, ask: price,
-        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        symbol: this.sym(m['S']),
+        price, size: this.num(m['s']),
+        bid: 0, ask: 0,
+        timestamp: this.ts(m['t']),
         kind: 't',
       }
       for (const l of this.tickListeners) l(tick); return
@@ -490,29 +524,34 @@ export class AlpacaClient {
       return
     }
     if (m['T'] === 'q') {
-      const symPair = String(m['S'] ?? '')
+      // D6 — sym() caps length; split() on a capped string is safe.
+      const symPair = this.sym(m['S'])
       const base = symPair.split('/')[0] ?? symPair
-      const bid = Number(m['bp'] ?? 0), ask = Number(m['ap'] ?? 0)
+      const bid = this.num(m['bp']), ask = this.num(m['ap'])
       const tick: AlpacaTick = {
         symbol: base,
         price: (bid + ask) / 2,
-        size: Number(m['bs'] ?? 0) + Number(m['as'] ?? 0),
+        size: this.num(m['bs']) + this.num(m['as']),
         bid, ask,
-        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        timestamp: this.ts(m['t']),
         kind: 'q',
       }
       for (const l of this.tickListeners) l(tick)
       return
     }
     if (m['T'] === 't') {
-      const symPair = String(m['S'] ?? '')
+      const symPair = this.sym(m['S'])
       const base = symPair.split('/')[0] ?? symPair
-      const price = Number(m['p'] ?? 0)
+      const price = this.num(m['p'])
+      // 2026-05-18 (B2) — bid/ask sentinel 0 on crypto trade frames. Same
+      // rationale as the equity-feed handler above: trade prints carry no
+      // quote-book data, and LiveMarket's OR-fallback preserves the prior
+      // quote when these are 0. D6 — every coercion through num()/ts()/sym().
       const tick: AlpacaTick = {
         symbol: base,
-        price, size: Number(m['s'] ?? 0),
-        bid: price, ask: price,
-        timestamp: m['t'] ? new Date(String(m['t'])).getTime() : Date.now(),
+        price, size: this.num(m['s']),
+        bid: 0, ask: 0,
+        timestamp: this.ts(m['t']),
         kind: 't',
       }
       for (const l of this.tickListeners) l(tick)

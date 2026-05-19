@@ -2328,8 +2328,24 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   border-left-color: var(--bb-accent);
 }
 .bb-watchlist-sym { min-width: 0; overflow: hidden; }
-.bb-watchlist-sym-tkr  { color: var(--bb-txt); font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; line-height: 1.15; }
+.bb-watchlist-sym-tkr  { color: var(--bb-txt); font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; line-height: 1.15; display: inline-flex; align-items: center; gap: 4px; }
 .bb-watchlist-sym-name { color: var(--bb-txt-mute); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.15; margin-top: 1px; }
+/* B3 (2026-05-18) — SIM badge for watchlist rows whose quote comes from a
+   synthetic seed rather than a live broker feed (futures today; equity/crypto
+   when their WS is down). 8px monospace pill that doesn't shift row height. */
+.bb-watchlist-feed-stale {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(154, 161, 173, 0.18);
+  color: var(--bb-txt-mute);
+  text-transform: uppercase;
+  line-height: 1.1;
+  cursor: help;
+}
 /* Constrain Sparkline SVG to the 34px sparkline column. The component sets
    width=56 as an HTML attribute; we override via CSS so the row layout holds. */
 .bb-watchlist-row > svg { width: 100%; max-width: 34px; height: 14px; display: block; }

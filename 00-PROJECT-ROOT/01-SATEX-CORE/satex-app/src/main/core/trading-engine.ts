@@ -63,6 +63,7 @@ import { DepthFeedService } from '../services/depth-feed'
 import { EdgarService } from '../services/edgar'
 import type {
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
+  FeedStatus,
 } from '@shared/types'
 
 const log = createLogger('engine')
@@ -86,6 +87,7 @@ export type LogsTailListener   = (s: SystemLogsTail) => void
 export type DepthListener      = (s: DepthSnapshot) => void
 export type TradeClosedListener = (t: ClosedTrade) => void
 export type TradesListener = (trades: Trade[]) => void
+export type FeedStatusListener = (s: FeedStatus) => void
 
 /** Captured at order entry; drives Brain.learn and vault narrative on close.
  *  The `symbol` field is load-bearing — it lets us pair server-side bracket
@@ -212,6 +214,10 @@ export class TradingEngine {
   private depthListeners:      Set<DepthListener>     = new Set()
   private tradeClosedListeners: Set<TradeClosedListener> = new Set()
   private tradesListeners:      Set<TradesListener>      = new Set()
+  /** B3 (2026-05-18) — per-asset-class feed status. Diff-gated in
+   *  broadcastStatus so we only push when a class transitions. */
+  private feedStatusListeners:  Set<FeedStatusListener>  = new Set()
+  private lastFeedStatus: FeedStatus | null = null
   /** Most-recent closed-trade history kept in memory for the JournalPanel.
    *  Pushed to renderer on each close; capped so a long session doesn't
    *  grow unbounded. Persists across replay swap (it's session-scoped). */
@@ -560,6 +566,28 @@ export class TradingEngine {
   onReplayStatus(fn: ReplayStatusListener):   () => void { this.replayStatusListeners.add(fn);  return () => this.replayStatusListeners.delete(fn) }
   onTradeClosed(fn: TradeClosedListener):     () => void { this.tradeClosedListeners.add(fn);   return () => this.tradeClosedListeners.delete(fn) }
   onTrades(fn: TradesListener):               () => void { this.tradesListeners.add(fn);        return () => this.tradesListeners.delete(fn) }
+  onFeedStatus(fn: FeedStatusListener):       () => void { this.feedStatusListeners.add(fn);    return () => this.feedStatusListeners.delete(fn) }
+
+  /** Current per-asset-class feed status — used by main/index.ts to emit
+   *  an initial-state push when the renderer subscribes. */
+  getFeedStatus(): FeedStatus {
+    return this.computeFeedStatus()
+  }
+
+  private computeFeedStatus(): FeedStatus {
+    const cryptoClient = this.cryptoAlpaca ?? this.alpaca
+    // Equity feed: live = Alpaca client present AND WS authenticated.
+    // simulator = no Alpaca client (engine fell back to MarketSimulator).
+    // off = Alpaca client built but WS down (creds saved, network bad, etc.).
+    const equity: FeedStatus['equity'] = this.alpaca
+      ? (this.alpaca.isMarketConnected ? 'live' : 'off')
+      : 'simulator'
+    // Futures: IEX has no futures coverage; values for ES/NQ/CL/GC come from
+    // seedHistoricalCandles' synthetic GBM walk. Always 'synthetic' today.
+    const futures: FeedStatus['futures'] = 'synthetic'
+    const crypto: FeedStatus['crypto'] = (cryptoClient?.isCryptoConnected ?? false) ? 'live' : 'off'
+    return { equity, futures, crypto }
+  }
   /** Snapshot of recent closed-trades. Used by IPC initial-fetch so the
    *  renderer can hydrate the JournalPanel without waiting for new closes. */
   getClosedTrades(limit = 500): ClosedTrade[] { return this.closedTrades.slice(-limit) }
@@ -1365,6 +1393,20 @@ export class TradingEngine {
       },
     }
     for (const l of this.statusListeners) l(status)
+
+    // B3 (2026-05-18) — diff-gated feed-status broadcast. Computed every status
+    // tick (2s); listeners fire only on class transition so the renderer's
+    // WatchlistPanel doesn't re-render on every heartbeat.
+    const feed = this.computeFeedStatus()
+    if (
+      this.lastFeedStatus === null
+      || this.lastFeedStatus.equity  !== feed.equity
+      || this.lastFeedStatus.futures !== feed.futures
+      || this.lastFeedStatus.crypto  !== feed.crypto
+    ) {
+      this.lastFeedStatus = feed
+      for (const l of this.feedStatusListeners) l(feed)
+    }
   }
 
   private async syncMarketClock(): Promise<void> {

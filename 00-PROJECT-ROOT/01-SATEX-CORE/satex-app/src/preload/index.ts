@@ -22,7 +22,7 @@ import type {
   HistoricalImportRequest, HistoricalImportResult,
   AutonomousStatus, AutonomousDecision,
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
-  ClosedTrade, JournalTag, Trade,
+  ClosedTrade, JournalTag, Trade, FeedStatus,
 } from '@shared/types'
 import type { IndicatorSettings } from '@shared/chart-indicators'
 import type { WorkspaceState } from '@shared/types'
@@ -170,6 +170,12 @@ const satexApi = {
   /** Subscribe to raw Trade events. Batched per market tick. Forwarder for
    *  the renderer's footprintStore + DeltaStrip / FootprintOverlay. */
   onTradesTick: (cb: (trades: Trade[]) => void) => on<Trade[]>(IPC.TRADES_TICK, cb),
+
+  // ── Per-asset-class feed status (B3, 2026-05-18) ───────────────────────────
+  /** Subscribe to feed-status transitions. The renderer uses this to render a
+   *  SIM badge on quotes that come from synthetic seeds rather than a live
+   *  broker feed. Diff-gated in the engine — only fires on class transition. */
+  onFeedStatusUpdate: (cb: (s: FeedStatus) => void) => on<FeedStatus>(IPC.FEED_STATUS_UPDATE, cb),
 
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {

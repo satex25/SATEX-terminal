@@ -103,6 +103,10 @@ export class ReplaySource implements MarketDataSource {
   private tickTimer: NodeJS.Timeout | null = null
   private currentCandleStart = 0
   private emittedTicks = 0
+  /** B4 (2026-05-18) — wall-clock at last tick(). Drives anomaly detection so
+   *  NTP step-backward / laptop-suspend doesn't silently advance the cursor.
+   *  Zero before the first tick after start() / resume() / setSpeed(). */
+  private lastTickWallTs = 0
   /** 2026-05-18 — count tape rows for symbols not present in the current
    *  UNIVERSE. Pre-fix these were silently dropped in applyTape; if the user
    *  changed their watchlist between recording and replay, history simply
@@ -302,6 +306,9 @@ export class ReplaySource implements MarketDataSource {
     if (!this.paused) return
     this.autoPausedReason = null
     this.anchor(this.cursorTs)
+    // B4 — reset the anomaly baseline. Otherwise an N-minute manual pause
+    // would trip the suspend detector on the first tick after resume.
+    this.lastTickWallTs = 0
     const tickMs = Math.max(1, Math.floor(1000 / REPLAY_TICK_HZ))
     this.tickTimer = setInterval(() => this.tick(), tickMs)
     this.paused = false
@@ -320,7 +327,12 @@ export class ReplaySource implements MarketDataSource {
     // Re-anchor so the cursor doesn't jump. Skip the anchor when paused —
     // the next resume will set the anchor itself and an interim anchor here
     // would just be overwritten.
-    if (!this.paused) this.anchor(this.cursorTs)
+    if (!this.paused) {
+      this.anchor(this.cursorTs)
+      // B4 — also reset the anomaly baseline so a speed flip during a long
+      // tick interval doesn't trip the detector.
+      this.lastTickWallTs = 0
+    }
     this.speed = next
     log.info('replay speed changed', { speed: next })
     return next
@@ -505,6 +517,30 @@ export class ReplaySource implements MarketDataSource {
 
   private tick(): void {
     if (this.paused) return
+    const now = Date.now()
+    // B4 (2026-05-18) — wall-clock anomaly detection. The replay clock is
+    //   replayTime = anchorReplayTs + (now - anchorWallTs) * speed
+    // which is purely a function of Date.now(). An NTP step-backward
+    // regresses the cursor (re-reads already-drained rows). A laptop suspend
+    // jumps the cursor forward by suspend×speed, which can exceed
+    // MAX_ROLLS_PER_CALL and silently snap past hundreds of buckets without
+    // emitting them. ANOMALY_THRESHOLD_MS = 5s covers GC pauses + brief
+    // throttling but is below any legitimate NTP correction or suspend.
+    // Response: pause and surface autoPausedReason so the user resumes
+    // explicitly. The replay tape has absolute timestamps so a manual
+    // resume picks up exactly where the cursor left off.
+    const ANOMALY_THRESHOLD_MS = 5_000
+    if (this.lastTickWallTs > 0) {
+      const wallDelta = now - this.lastTickWallTs
+      if (wallDelta < 0 || wallDelta > ANOMALY_THRESHOLD_MS) {
+        log.warn('replay clock anomaly — pausing', { wallDelta, cursor: this.cursorTs })
+        this.autoPausedReason = wallDelta < 0 ? 'wall-clock-backjump' : 'suspend-detected'
+        this.pause()
+        this.onTickEmitted?.(this.snapshot())
+        return
+      }
+    }
+    this.lastTickWallTs = now
     const target = Math.min(this.tapeEndTs, this.currentReplayTime())
     if (target >= this.tapeEndTs) {
       // End-of-tape; snap cursor and auto-pause so listeners notice.

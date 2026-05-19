@@ -298,6 +298,22 @@ export interface SystemStatus {
   crypto: { connected: boolean; subscribedSymbols: number }
 }
 
+/** Per-asset-class feed status (B3, 2026-05-18). Drives the WatchlistPanel
+ *  SIM badge so users can tell when a quote is from a live broker feed vs a
+ *  synthetic seed walk. Pushed via FEED_STATUS_UPDATE whenever connection
+ *  state changes; the renderer treats stale-feed symbols as not-live. */
+export interface FeedStatus {
+  /** Equity + index ETFs. 'live' = Alpaca IEX/SIP WS authenticated;
+   *  'simulator' = MarketSimulator engine; 'off' = WS down with creds. */
+  equity: 'live' | 'simulator' | 'off'
+  /** Futures (ES/NQ/CL/GC). IEX does not carry futures — these are always
+   *  synthetic GBM seeds in current build. 'live' will become valid once a
+   *  CME-bridged feed lands; today it's always 'synthetic'. */
+  futures: 'live' | 'synthetic'
+  /** Crypto (BTC/ETH). Independent Alpaca v1beta3/crypto/us WS. */
+  crypto: 'live' | 'off'
+}
+
 export interface AutonomousStatus {
   enabled: boolean
   lastDecisionAt: number | null

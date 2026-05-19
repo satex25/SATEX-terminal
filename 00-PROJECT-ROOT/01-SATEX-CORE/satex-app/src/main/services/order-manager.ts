@@ -166,12 +166,19 @@ export class OrderManager {
    *  be unsettable from any IPC payload. */
   validate(req: OrderRequest, ctx?: OrderValidationContext): OrderValidationResult {
     // Gate 0: quote freshness (live mode only — paper mode tolerates simulator gaps).
+    // D6 (2026-05-18) — defense-in-depth against NaN refPriceAge. WS-boundary
+    // input guards prevent NaN at ingest, but Gate 0 is the LAST place a stale
+    // or invalid quote can be caught before a live order is sent. A non-finite
+    // refPriceAge is treated identically to "exceeded threshold" — refuse.
+    // Pre-fix: `NaN > MAX_QUOTE_AGE_MS` evaluates to false, so the gate failed
+    // open and let stale-feed orders through.
     if (ctx?.liveMode
         && ctx.refPriceAge !== undefined
-        && ctx.refPriceAge > MAX_QUOTE_AGE_MS) {
+        && (!Number.isFinite(ctx.refPriceAge) || ctx.refPriceAge > MAX_QUOTE_AGE_MS)) {
+      const ageDesc = Number.isFinite(ctx.refPriceAge) ? `${ctx.refPriceAge}ms` : 'non-finite'
       return {
         ok: false,
-        reason: `Quote stale (${ctx.refPriceAge}ms > ${MAX_QUOTE_AGE_MS}ms) — refusing live order`,
+        reason: `Quote stale (${ageDesc} vs ${MAX_QUOTE_AGE_MS}ms cap) — refusing live order`,
         gate: 'stale-quote',
       }
     }

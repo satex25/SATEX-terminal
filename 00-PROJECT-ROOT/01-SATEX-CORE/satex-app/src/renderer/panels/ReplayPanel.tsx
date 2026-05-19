@@ -459,8 +459,21 @@ export function ReplayPanel() {
       {/* ── Footer + messages ─────────────────────────────────────── */}
       <footer className="replay-footer">
         {status?.autoPausedReason && (
-          <span className="replay-foot-msg warn">
-            Auto-paused: {status.autoPausedReason}
+          <span
+            className="replay-foot-msg warn"
+            title={
+              status.autoPausedReason === 'wall-clock-backjump'
+                ? 'System clock jumped backward (NTP correction). Replay paused so the cursor does not re-read drained rows. Click ▶ Resume above to continue.'
+                : status.autoPausedReason === 'suspend-detected'
+                  ? 'Wall clock jumped forward more than 5 seconds (laptop suspend or scheduler stall). Replay paused so the cursor does not silently skip past tape rows. Click ▶ Resume above to continue.'
+                  : `Replay paused: ${status.autoPausedReason}`
+            }
+          >
+            Auto-paused: {
+              status.autoPausedReason === 'wall-clock-backjump' ? 'wall-clock backjump'
+              : status.autoPausedReason === 'suspend-detected' ? 'suspend detected'
+              : status.autoPausedReason
+            } · use ▶ Resume to continue
           </span>
         )}
         {error  && <span className="replay-foot-msg err">{error}</span>}

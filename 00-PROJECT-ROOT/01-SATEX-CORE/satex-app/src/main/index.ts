@@ -371,6 +371,7 @@ function rebroadcastSnapshot(): void {
     push(IPC.MACRO_UPDATE,      engine.getMacro())
     push(IPC.LOGS_TAIL,         engine.getLogsTail())
     push(IPC.DEPTH_UPDATE,      engine.getDepth())
+    push(IPC.FEED_STATUS_UPDATE, engine.getFeedStatus())
   } catch (e) {
     log.warn('rebroadcastSnapshot failed', { err: String(e) })
   }
@@ -492,6 +493,7 @@ function wireEngineEvents(): void {
     lastSeenOrderIds = new Set(orders.map(o => `${o.id}:${o.status}`))
   })
   engine.onStatus((status)            => push(IPC.SYSTEM_STATUS,  status))
+  engine.onFeedStatus((feed)          => push(IPC.FEED_STATUS_UPDATE, feed))
   engine.onObserverStats((s)          => push(IPC.OBSERVER_STATS, s))
   engine.onLearnerStats((s)           => push(IPC.LEARNER_STATS,  s))
   engine.onVaultStats((s)             => push(IPC.VAULT_STATS,    s))
@@ -826,7 +828,11 @@ function registerIpcHandlers(): void {
       const snapshot = {
         schemaVersion: 1,
         generatedAt: new Date().toISOString(),
-        app: { name: 'satex', version: '0.3.0' },
+        // 2026-05-18 — pulled from packaged package.json via Electron's
+        // app.getVersion(). Pre-fix this was a hardcoded '0.3.0' string that
+        // had drifted 3 releases behind package.json; snapshots written from
+        // the running app lied about which build produced them.
+        app: { name: 'satex', version: app.getVersion() },
         indicatorSettings: indicatorSettings.get(),
         workspaceState: workspaceState.get(),
         watchlist: engine.getWatchlist(),
@@ -932,6 +938,7 @@ app.whenReady().then(async () => {
       push(IPC.MACRO_UPDATE,      engine.getMacro())
       push(IPC.LOGS_TAIL,         engine.getLogsTail())
       push(IPC.DEPTH_UPDATE,      engine.getDepth())
+      push(IPC.FEED_STATUS_UPDATE, engine.getFeedStatus())
     }, 1500)
   } catch (err) {
     log.error('engine initialization failed', { err: String(err) })
