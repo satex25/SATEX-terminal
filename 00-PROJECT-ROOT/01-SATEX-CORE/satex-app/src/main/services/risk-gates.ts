@@ -64,7 +64,7 @@ interface RiskGatesDeps {
    *  so the DAILY_LOSS_LIMIT gate is computed against the same value Gate 3
    *  enforces in OrderManager.validate (adversarial finding C2 rebases this
    *  to broker-reported equity on the first Alpaca sync). Pre-2026-05-18 this
-   *  service used the imported STARTING_EQUITY constant, which silently
+   *  service used the imported DEFAULT_EQUITY constant, which silently
    *  diverged from OM enforcement by up to 10× once C2 rebased OM. */
   getSessionStartEquity: () => number
 }

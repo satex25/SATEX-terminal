@@ -10,7 +10,7 @@
 import { useAccountStore } from '../stores/accountStore'
 import { useRiskGatesStore } from '../stores/riskGatesStore'
 import { useMarketStore } from '../stores/marketStore'
-import { STARTING_EQUITY } from '@shared/constants'
+import { DEFAULT_EQUITY } from '@shared/constants'
 import { fmt } from '../lib/format'
 import type { ReactNode } from 'react'
 
@@ -35,7 +35,7 @@ export function BottomBar() {
   const bp = account.buyingPower
   const exposure = account.openPositions.reduce((a, p) => a + Math.abs(p.quantity * p.avgPrice), 0)
   const exposurePct = equity > 0 ? (exposure / equity) * 100 : 0
-  const grossPct = (exposure / Math.max(1, STARTING_EQUITY)) * 100
+  const grossPct = (exposure / Math.max(1, DEFAULT_EQUITY)) * 100
   const varRow   = gates?.gates.find(g => g.key === 'SESSION_VAR')
 
   return (

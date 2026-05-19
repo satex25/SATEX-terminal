@@ -3,7 +3,7 @@
  * Account summary tiles · open positions · recent orders.
  */
 import { useAccountStore } from '../stores/accountStore'
-import { STARTING_EQUITY, DAILY_LOSS_LIMIT_PCT } from '@shared/constants'
+import { DEFAULT_EQUITY, DAILY_LOSS_LIMIT_PCT } from '@shared/constants'
 import { fmt } from '../lib/format'
 
 export function PortfolioPanel() {
@@ -12,7 +12,7 @@ export function PortfolioPanel() {
 
   const dailyPnl = account.dailyPnl
   const pnlUp    = dailyPnl >= 0
-  const lossPct  = Math.max(0, -dailyPnl) / STARTING_EQUITY * 100
+  const lossPct  = Math.max(0, -dailyPnl) / DEFAULT_EQUITY * 100
   const lossPctFraction = Math.min(100, (lossPct / (DAILY_LOSS_LIMIT_PCT * 100)) * 100)
 
   return (

@@ -4,7 +4,22 @@
  */
 import type { AssetClass } from './types'
 
-export const STARTING_EQUITY = 100_000
+/**
+ * Default equity baseline. Used for:
+ *   • OrderManager constructor default (overridden by `setSessionStartEquity`
+ *     on the first Alpaca account sync — never trust this value at runtime
+ *     once the engine is past initialize()).
+ *   • Renderer-side display fallbacks (account store initial state,
+ *     PortfolioPanel/PortfolioMiniPanel/OrderBar before the first
+ *     ACCOUNT_UPDATE push arrives).
+ *
+ * 2026-05-19 (v0.4.3 B6): renamed from the prior "starting equity" symbol
+ * to make the "default, not live" semantic explicit. The previous name
+ * implied this was the active session-start equity, which it never is once
+ * Alpaca sync fires — the v0.4 audit C2 finding rebases OrderManager's
+ * baseline from this constant to the broker-reported value on first sync.
+ */
+export const DEFAULT_EQUITY = 100_000
 export const DAILY_LOSS_LIMIT_PCT = 0.02
 export const MAX_OPEN_POSITIONS = 3
 export const MAX_POSITION_CONCENTRATION = 0.25

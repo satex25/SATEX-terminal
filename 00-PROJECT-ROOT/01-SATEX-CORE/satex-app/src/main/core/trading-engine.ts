@@ -24,7 +24,7 @@ import { TickRecorder } from '../services/tick-recorder'
 import { ReplaySource } from '../services/replay-source'
 import { HistoricalImporter } from '../services/historical-importer'
 import { computeSnapshot } from '@shared/indicators'
-import { STARTING_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
+import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
   Account, AiDecision, AlpacaModeSetRequest, AlpacaModeStatus,
   AlpacaTradeUpdate, Candle,
@@ -274,8 +274,8 @@ export class TradingEngine {
     // Session record
     db.insertSession({
       id: this.currentSessionId, startedAt: this.startedAt, endedAt: null,
-      startingEquity: STARTING_EQUITY, endingEquity: null,
-      peakEquity: STARTING_EQUITY, troughEquity: STARTING_EQUITY,
+      startingEquity: DEFAULT_EQUITY, endingEquity: null,
+      peakEquity: DEFAULT_EQUITY, troughEquity: DEFAULT_EQUITY,
       realizedPnl: 0, tradeCount: 0,
     })
 
@@ -284,7 +284,7 @@ export class TradingEngine {
     if (storedWatchlist.length === 0) db.setWatchlist([...AUTONOMOUS_WATCHLIST])
 
     // Order manager
-    this.om = new OrderManager(STARTING_EQUITY)
+    this.om = new OrderManager(DEFAULT_EQUITY)
     this.om.onOrderFill((order, position) => {
       db.insertOrder(order, this.currentSessionId)
       this.broadcastOrders()
@@ -390,8 +390,8 @@ export class TradingEngine {
     this.fireAndForget('vault.writeSessionStart', () => this.vault.writeSessionStart(
       {
         id: this.currentSessionId, startedAt: this.startedAt, endedAt: null,
-        startingEquity: STARTING_EQUITY, endingEquity: null,
-        peakEquity: STARTING_EQUITY, troughEquity: STARTING_EQUITY,
+        startingEquity: DEFAULT_EQUITY, endingEquity: null,
+        peakEquity: DEFAULT_EQUITY, troughEquity: DEFAULT_EQUITY,
         realizedPnl: 0, tradeCount: 0,
       },
       this.alpaca ? 'paper' : 'simulator',
@@ -538,7 +538,7 @@ export class TradingEngine {
     this.alpaca?.disconnectAccountStream()
     this.alpaca?.disconnectCryptoStream()
     this.cryptoAlpaca?.disconnectCryptoStream()
-    const endingEquity = this.om?.getAccount().equity ?? STARTING_EQUITY
+    const endingEquity = this.om?.getAccount().equity ?? DEFAULT_EQUITY
     db.updateSession(this.currentSessionId, { endedAt: Date.now(), endingEquity })
     // Final vault checkpoint
     try {
@@ -1629,7 +1629,7 @@ export class TradingEngine {
       // Adversarial finding C2 (2026-05-16) — on the first sync of the session,
       // realign `sessionStartEquity` to the broker-reported equity AND persist
       // it to the session row. Before this fix, `sessionStartEquity` stayed at
-      // the STARTING_EQUITY constant for the entire session, so Gate 3
+      // the DEFAULT_EQUITY constant for the entire session, so Gate 3
       // (daily-loss limit) and the auto-arm kill switch worked off a baseline
       // that had no relationship to the user's real Alpaca equity.
       //

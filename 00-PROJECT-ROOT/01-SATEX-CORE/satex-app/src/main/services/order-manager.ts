@@ -20,7 +20,7 @@ import type {
 } from '@shared/types'
 import {
   BUYING_POWER_MULT, DAILY_LOSS_LIMIT_PCT, MAX_OPEN_POSITIONS,
-  MAX_POSITION_CONCENTRATION, STARTING_EQUITY
+  MAX_POSITION_CONCENTRATION, DEFAULT_EQUITY
 } from '@shared/constants'
 import { randomUUID } from 'node:crypto'
 
@@ -64,7 +64,7 @@ export class OrderManager {
   private sessionStartEquity: number
   private isMarketOpen = false
 
-  constructor(startingEquity = STARTING_EQUITY) {
+  constructor(startingEquity = DEFAULT_EQUITY) {
     this.sessionStartEquity = startingEquity
     this.account = {
       equity:           startingEquity,
@@ -92,7 +92,7 @@ export class OrderManager {
    *
    *  Called by the trading-engine on the FIRST Alpaca account sync of the
    *  session. Before this exists the OM is constructed with the local
-   *  STARTING_EQUITY constant, which has no relationship to the user's
+   *  DEFAULT_EQUITY constant, which has no relationship to the user's
    *  actual Alpaca equity. The daily-loss gate (`Gate 3`), the auto-arm
    *  kill switch in applyFill, and the dailyPnl rebuild all use
    *  `sessionStartEquity` as the baseline — leaving it as a stale constant

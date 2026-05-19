@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAccountStore } from '../stores/accountStore'
 import { PanelHead } from '../components/PanelHead'
 import { fmt } from '../lib/format'
-import { STARTING_EQUITY } from '@shared/constants'
+import { DEFAULT_EQUITY } from '@shared/constants'
 
 function MiniKV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -74,8 +74,8 @@ export function PortfolioMiniPanel() {
           <svg width="100%" height="100%" viewBox="0 0 232 100" preserveAspectRatio="none">
             <line x1="0" x2="232" y1="50" y2="50" stroke="rgba(255,255,255,0.05)" strokeDasharray="2 3" />
             <line x1="0" x2="232"
-              y1={50 - ((STARTING_EQUITY - Math.min(...snapshots)) / Math.max(1, Math.max(...snapshots) - Math.min(...snapshots))) * 88 + 6}
-              y2={50 - ((STARTING_EQUITY - Math.min(...snapshots)) / Math.max(1, Math.max(...snapshots) - Math.min(...snapshots))) * 88 + 6}
+              y1={50 - ((DEFAULT_EQUITY - Math.min(...snapshots)) / Math.max(1, Math.max(...snapshots) - Math.min(...snapshots))) * 88 + 6}
+              y2={50 - ((DEFAULT_EQUITY - Math.min(...snapshots)) / Math.max(1, Math.max(...snapshots) - Math.min(...snapshots))) * 88 + 6}
               stroke="var(--bb-txt-mute)" strokeDasharray="2 2" strokeOpacity="0.3" />
             <polyline points={path} fill="none" stroke={stroke} strokeWidth="1.4" />
           </svg>

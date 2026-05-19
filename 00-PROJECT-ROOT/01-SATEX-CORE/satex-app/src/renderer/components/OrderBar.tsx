@@ -6,7 +6,7 @@
 import { useState, useMemo } from 'react'
 import { useMarketStore } from '../stores/marketStore'
 import { useAccountStore } from '../stores/accountStore'
-import { findUniverseEntry, STARTING_EQUITY } from '@shared/constants'
+import { findUniverseEntry, DEFAULT_EQUITY } from '@shared/constants'
 import { fmt } from '../lib/format'
 import type { OrderType } from '@shared/types'
 
@@ -111,7 +111,7 @@ export function OrderBar() {
         type="button"
         className="btn-kill"
         onClick={toggleKill}
-        title={armed ? `Disarm kill switch (PnL ${fmt.pct((account.dailyPnl / STARTING_EQUITY) * 100)})` : 'Arm kill switch'}
+        title={armed ? `Disarm kill switch (PnL ${fmt.pct((account.dailyPnl / DEFAULT_EQUITY) * 100)})` : 'Arm kill switch'}
         style={armed ? { background: 'var(--bear)', color: 'var(--bg-0)', borderColor: 'var(--bear)' } : undefined}
       >
         ⏻ {armed ? 'KILL ON' : 'KILL'}

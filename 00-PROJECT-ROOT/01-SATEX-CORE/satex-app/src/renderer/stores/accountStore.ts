@@ -3,7 +3,7 @@
  */
 import { create } from 'zustand'
 import type { Account, Order, SystemStatus, IndicatorSnapshot, AutonomousStatus } from '@shared/types'
-import { STARTING_EQUITY } from '@shared/constants'
+import { DEFAULT_EQUITY } from '@shared/constants'
 
 interface AccountState {
   account: Account
@@ -20,8 +20,8 @@ interface AccountState {
 }
 
 const defaultAccount: Account = {
-  equity: STARTING_EQUITY, cash: STARTING_EQUITY,
-  buyingPower: STARTING_EQUITY * 2, openPositions: [],
+  equity: DEFAULT_EQUITY, cash: DEFAULT_EQUITY,
+  buyingPower: DEFAULT_EQUITY * 2, openPositions: [],
   dailyPnl: 0, dailyLossLimitPct: 0.02, mode: 'paper',
   killSwitchArmed: false, sessionStartedAt: Date.now(),
 }
