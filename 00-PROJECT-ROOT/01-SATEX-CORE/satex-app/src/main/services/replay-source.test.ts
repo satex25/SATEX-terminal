@@ -8,16 +8,18 @@
  *
  * Tests mock `./persistence` so we don't need a real SQLite handle.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { TickTapeRow } from '../../shared/types'
 
-const mockReadTapeRange = vi.fn()
-const mockGetTapeBounds = vi.fn()
+const mockReadTapeRange  = vi.fn()
+const mockGetTapeBounds  = vi.fn()
+const mockGetTapeManifest = vi.fn()
 
 vi.mock('./persistence', () => ({
   readTapeRange: (sid: string, from: number, to: number, lim: number) =>
     mockReadTapeRange(sid, from, to, lim),
   getTapeBounds: (sid: string) => mockGetTapeBounds(sid),
+  getTapeManifest: (sid: string) => mockGetTapeManifest(sid),
 }))
 
 // Imported after mock so the vi.mock hoisting applies.
@@ -26,6 +28,7 @@ import { ReplaySource } from './replay-source'
 beforeEach(() => {
   mockReadTapeRange.mockReset()
   mockGetTapeBounds.mockReset()
+  mockGetTapeManifest.mockReset().mockReturnValue(null)
 })
 
 describe('ReplaySource.warmup — sparse-tape regression', () => {
@@ -114,5 +117,109 @@ describe('ReplaySource.warmup — sparse-tape regression', () => {
     // We don't care about the exact count — just that warmup completed
     // without hitting the safety bound and produced a bulk snapshot.
     expect(bulkCalls).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('ReplaySource.tick — wall-clock anomaly detection (B4, v0.4.3)', () => {
+  // Minimal tape: 1 hour of 1Hz rows for NVDA. Cursor will sit at tapeStart;
+  // the anomaly check fires before any tape read, so we don't need many rows.
+  const T0 = 1_700_000_000_000
+  const TAPE_LEN_MS = 60 * 60 * 1000
+  const SYM = 'NVDA'
+
+  function setupTape(): void {
+    const allRows: TickTapeRow[] = []
+    for (let t = T0; t < T0 + TAPE_LEN_MS; t += 1_000) {
+      allRows.push({
+        sessionId: 'test', ts: t, symbol: SYM,
+        last: 100, bid: 99.99, ask: 100.01, vwap: 100, volume: 1,
+      })
+    }
+    mockGetTapeBounds.mockReturnValue({
+      firstTs: T0, lastTs: T0 + TAPE_LEN_MS - 1_000, count: allRows.length,
+    })
+    mockReadTapeRange.mockImplementation(
+      (_sid: string, from: number, to: number, limit: number) =>
+        allRows.filter(r => r.ts >= from && r.ts <= to).slice(0, limit),
+    )
+  }
+
+  beforeEach(() => {
+    setupTape()
+    vi.useFakeTimers({ now: T0 })
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('pauses with autoPausedReason="wall-clock-backjump" when Date.now() regresses > 5s', () => {
+    const replay = new ReplaySource('test', { speed: 1 })
+    replay.start()
+    // start() → unpause() → tick() once synchronously → lastTickWallTs = T0
+    expect(replay.snapshot().paused).toBe(false)
+    expect(replay.snapshot().autoPausedReason).toBeNull()
+
+    // Backjump the wall clock 30 seconds, then trigger the next interval tick.
+    vi.setSystemTime(T0 - 30_000)
+    vi.advanceTimersByTime(20)
+
+    const snap = replay.snapshot()
+    expect(snap.paused).toBe(true)
+    expect(snap.autoPausedReason).toBe('wall-clock-backjump')
+  })
+
+  it('pauses with autoPausedReason="suspend-detected" when Date.now() jumps forward > 5s', () => {
+    const replay = new ReplaySource('test', { speed: 1 })
+    replay.start()
+    expect(replay.snapshot().paused).toBe(false)
+
+    // Simulate laptop suspend: wall clock leaps forward 30 seconds.
+    vi.setSystemTime(T0 + 30_000)
+    vi.advanceTimersByTime(20)
+
+    const snap = replay.snapshot()
+    expect(snap.paused).toBe(true)
+    expect(snap.autoPausedReason).toBe('suspend-detected')
+  })
+
+  it('does NOT pause for normal sub-5s tick intervals', () => {
+    const replay = new ReplaySource('test', { speed: 1 })
+    replay.start()
+    // Advance several hundred ms — each tick has wallDelta well under threshold.
+    for (let i = 0; i < 20; i++) vi.advanceTimersByTime(20)
+    const snap = replay.snapshot()
+    expect(snap.paused).toBe(false)
+    expect(snap.autoPausedReason).toBeNull()
+  })
+
+  it('manual long pause + resume does NOT trip the anomaly detector', () => {
+    const replay = new ReplaySource('test', { speed: 1 })
+    replay.start()
+    // Tick a few times normally.
+    vi.advanceTimersByTime(100)
+    // User manually pauses, walks away for an hour.
+    replay.pause()
+    vi.setSystemTime(T0 + 60 * 60 * 1000)
+    // User comes back and resumes. unpause() must reset lastTickWallTs so the
+    // first post-resume tick doesn't see a 1-hour wallDelta and flag it.
+    replay.resume()
+    vi.advanceTimersByTime(20)
+    const snap = replay.snapshot()
+    expect(snap.paused).toBe(false)
+    expect(snap.autoPausedReason).toBeNull()
+  })
+
+  it('speed change during play does NOT trip the anomaly detector', () => {
+    const replay = new ReplaySource('test', { speed: 1 })
+    replay.start()
+    vi.advanceTimersByTime(100)
+    // Speed change re-anchors AND resets lastTickWallTs. The next tick after
+    // a long-ish gap (which can happen if the test runner pauses) must still
+    // produce a clean wallDelta=0 baseline.
+    vi.setSystemTime(T0 + 10_000)  // 10s gap before setSpeed
+    replay.setSpeed(5)
+    vi.advanceTimersByTime(20)
+    const snap = replay.snapshot()
+    expect(snap.paused).toBe(false)
+    expect(snap.autoPausedReason).toBeNull()
+    expect(snap.speed).toBe(5)
   })
 })
