@@ -5,6 +5,155 @@ All notable changes to SATEX (satex-app) are recorded here. Format roughly follo
 semver because the app is still pre-1.0 — minor bumps may introduce behavior
 changes alongside fixes during the v0.x stabilization series.
 
+## 0.4.4 (2026-05-XX)
+
+Sub-second crypto candles ship end-to-end. The A1 design doc
+(`docs/design/A1-subsecond-candles.md`) called for a three-sprint plan; this
+release lands Sprints 1 + 2 (data layer + per-symbol preference UI + chart
+legend marker). Sprint 3 (perf canary, retention worker, replay sub-second)
+and MAY-TACTICS integration on the sub-second feed (design doc §6 Q2) are
+explicitly deferred to v0.5 / v0.6 respectively. The S1-9 auto-update toast
+also lands. Installer remains **unsigned** pending the CA-issued Authenticode
+certificate (tracked at issue #2).
+
+### Added
+
+- **A1 Sprint 1 — sub-second crypto candle aggregator.** New 250 ms and 500 ms
+  timeframe buttons on the chart for crypto symbols (BTC, ETH today; the
+  filter is `UNIVERSE.assetClass === 'crypto'` so the set auto-extends if the
+  universe grows). New `SubSecondCandleAggregator` service consumes the
+  existing `alpaca.onTick` crypto WS stream and rolls per-trade frames into
+  both bucket sizes in parallel. New SQLite table `crypto_subsecond_candles`
+  (idempotent-additive migration) with 1 000-bucket retention per
+  `(symbol, bucketMs)`. New IPC channels `SUBSECOND_CANDLES_UPDATE` (push,
+  diff-gated) and `SUBSECOND_CANDLES_GET` (invoke, capped at 4 000 rows). New
+  `subsecondStore` Zustand ring keyed by `${symbol}:${bucketMs}`. Equity and
+  futures 250 ms / 500 ms buttons render but are disabled with a tooltip
+  explaining the SIP entitlement constraint — sub-second is crypto-only by
+  design (IEX caps snapshots at 1 s; paid SIP would unlock sub-second
+  equities but is out of v0.4 scope). 17 new vitest cases pin the OHLC math,
+  the seal-on-roll contract, retention, out-of-order tick drop, multi-symbol
+  isolation, and failure resilience.
+
+- **A1 Sprint 2 — per-symbol bucket preference.** New **Settings →
+  Sub-second Candles · Crypto only** section lets the user pick 250 ms or
+  500 ms as the default bucket per crypto symbol. Preference persists to
+  `Vault/Settings/subsecond-prefs.md` (markdown + JSON fence, hand-editable;
+  sanitizer drops non-crypto symbols and out-of-range values defensively).
+  When a crypto symbol gets focus, the chart auto-snaps to the user's
+  preferred bucket — symbol-change-driven via `prevSymbolRef` so a mid-session
+  manual timeframe click is never clobbered, but app-open with a crypto
+  symbol pre-focused also fires the snap. New IPC channels
+  `SUBSECOND_PREFS_GET` + `SUBSECOND_PREFS_SET` (Zod `.strict()` with the
+  `{250, 500}` literal-union — a hostile renderer cannot bypass the bucket
+  guard or smuggle in extra fields). 26 new vitest cases — 11 on the engine
+  prefs API (default fallback, listener fire on accept, silent reject for
+  non-crypto, hydrate REPLACES not merges, `getCandleResolutionMs` returns
+  1000 for non-crypto, throwing listener does not break the in-memory
+  update); 15 on the file-store round-trip (empty initial state,
+  fresh-instance read-back, corruption recovery, hand-edit sanitizer).
+
+- **A1 — chart legend SUB badge** (design doc §4.3). Whenever the chart is
+  reading from the SubSecondAggregator ring (`showSub === true`), a cyan
+  `SUB · 250 ms` / `SUB · 500 ms` marker renders next to the symbol —
+  visually distinct from the warn-yellow `SIM` badge so the analyst reads it
+  as informational rather than degraded-mode. Gated on the canonical
+  `showSub` flag, mirroring the SIM badge's `isSyntheticFeed()` pattern so
+  the rendering decision has a single source of truth.
+
+- **S1-9 — Auto-update toast.** New `UpdateToast` component + `electron-updater`
+  service. Both `autoDownload` and `autoInstallOnAppQuit` are set to **false**
+  on purpose — the toast is the load-bearing consent surface, and a silent
+  auto-download against an unsigned build would burn the user's bandwidth on
+  a binary the OS would then reject. `update-available` triggers the
+  download; `update-downloaded` enables the `[Restart Now]` button. 30 s
+  auto-dismiss; 24 h check cadence. New IPC `UPDATE_AVAILABLE` (push) +
+  `UPDATE_INSTALL` (invoke). Added `electron-updater@6.3.9`. 8 vitest cases
+  on the new update-store.
+
+### Improved
+
+- **SIM badge propagation.** `MarketsOverviewPanel` and `ChartPanel` header
+  now render the SIM badge via the canonical `isSyntheticFeed()` helper in
+  `src/renderer/lib/feed-status.ts`. The visual decision stays consistent
+  across every surface that displays a synthetic-feed quote — the
+  `WatchlistPanel` had this already; now the rest of the terminal does too.
+
+### Fixed
+
+- **Kill-switch atomic write.** `kill-switch-store.ts` now writes via a
+  tmp-and-rename pattern (`writeJsonAtomic`) instead of `writeFileSync`'s
+  truncate-before-write. A crash between the truncate and the write
+  previously left a 0-byte file, which `loadKillSwitchState` parsed as
+  JSON-fail and returned `{armed: false}` — silently disarming an armed
+  kill switch across the crash. The atomic-rename contract closes that gap.
+  7 vitest cases pin happy path, overwrite, no-orphan-tmp, rapid-loop,
+  failure-path, and crash-simulation.
+
+### Tooling / quality
+
+- **Code health restored to 10/10.** 12 lint warnings cleared (5 stale
+  `eslint-disable` directives for a rule that was not in the config; one
+  catastrophic 14-missing-dep `useEffect` in `useIPC.ts:127` refactored to
+  the `useXStore.getState()` pattern; 3 perf-critical `exhaustive-deps`
+  disables in `ChartPanel` documented with the 20 Hz frame-stall rationale).
+  66 dead-code items removed (10 placeholder panel files superseded by the
+  Black Box panels; 2 unused dependencies — `@electron-toolkit/preload`,
+  `echarts`; 38 unused exports downgraded to module-local; 13 truly-dead
+  symbols deleted; the `chart-indicators/index.ts` barrel pruned to only
+  the actually-consumed re-exports).
+- **CI on master.** GitHub Actions `ci.yml` runs `typecheck` + `vitest` on
+  Ubuntu Node 20.19 for every push and PR. The latest run for `fa68c55`
+  completed green in 59 s.
+
+### Tests
+
+- Total: **222 / 222 passing** across **17** vitest files (up from
+  179 / 179 in v0.4.3; +43 across A1 Sprint 1 aggregator, A1 Sprint 2
+  engine + prefs service, S1-9 update store, B11 kill-switch atomic write).
+
+### Known limitations / caveats
+
+- **Installer is unsigned.** Windows SmartScreen will display
+  "Windows protected your PC" on first install until either (a) the
+  Authenticode cert (S1-8) lands and a signed installer is published, or
+  (b) SmartScreen reputation accumulates post-cert. Tracked at issue #2.
+- **Sub-second is crypto-only.** Equity feeds (IEX) cap snapshots at 1 s;
+  paid Alpaca SIP entitlement is required for sub-second equity ticks —
+  out of scope for v0.4. The disabled-button + tooltip in the chart
+  toolbar makes the constraint discoverable.
+- **MAY-TACTICS sub-second integration deferred to v0.6** per design doc
+  §6 Q2 — the data layer ships first; tactic graduation follows once the
+  renderer has been proven to hold under sustained live sub-second load.
+- **Replay tapes do not include sub-second candles in v0.4.4.** Sub-second
+  is live-only; replay still shows 1-second candles for crypto. Adding
+  sub-second to the replay path is A1 Sprint 3 scope.
+- **GPG-signed tags not in use.** The `v0.4.4` tag will ship as an
+  annotated (not GPG-signed) tag. The Authenticode signature on the `.exe`
+  is what end-users verify; the git tag conveys authorship via commit
+  metadata.
+
+### Upgrade notes
+
+- Schema migrations are idempotent-additive — the new
+  `crypto_subsecond_candles` table is created on first boot of v0.4.4;
+  existing tables and rows untouched.
+- Existing indicator settings, workspace state, watchlist, kill-switch
+  state, and replay tapes carry over unchanged.
+- No end-user environment-variable changes required. Build-time vars
+  (`CSC_LINK`, `CSC_KEY_PASSWORD`) become relevant only once the cert is
+  in hand on the build machine.
+
+### What's next
+
+- **v0.4.5 (or re-cut as v0.4.4-signed)**: signed installer once issue #2
+  resolves.
+- **v0.5**: A1 Sprint 3 — perf canary (P95 chart-frame < 16 ms under
+  sustained 20-trade/sec BTC), 60-second retention eviction worker,
+  telemetry on sub-second emit rate per minute, replay-tape sub-second
+  support.
+- **v0.6**: MAY-TACTICS scalp-tactic integration on the sub-second feed.
+
 ## 0.4.3 (2026-05-19)
 
 Technical-debt close-out + signing infrastructure. All seven v0.4.2-deferred
