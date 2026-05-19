@@ -13,9 +13,11 @@
 import { useMemo, useState } from 'react'
 import { useMarketStore, useAllQuotes } from '../stores/marketStore'
 import { useAccountStore } from '../stores/accountStore'
+import { useFeedStore } from '../stores/feedStore'
 import { Sparkline } from '../components/Sparkline'
 import { findUniverseEntry } from '@shared/constants'
 import { fmt } from '../lib/format'
+import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
 import type { Quote, AssetClass } from '@shared/types'
 
 type SortKey = 'symbol' | 'price' | 'changePct' | 'volume' | 'notional'
@@ -39,6 +41,10 @@ export function MarketsOverviewPanel() {
   const symbol    = useMarketStore(s => s.symbol)
   const setSymbol = useMarketStore(s => s.setSymbol)
   const armed     = useAccountStore(s => s.account.killSwitchArmed)
+  // v0.4.3 SIM-badge propagation — same per-asset-class feed-status the
+  // WatchlistPanel renders against, surfaced on the row symbol pills so
+  // hero stats and the price table tell the same SIM-vs-LIVE story.
+  const feed      = useFeedStore(s => s.status)
 
   const [filter,   setFilter]   = useState('')
   const [klass,    setKlass]    = useState<AssetClass | 'all'>('all')
@@ -170,6 +176,9 @@ export function MarketsOverviewPanel() {
                 >
                   <td className="mkts-td symbol">
                     <span className={`sym-tag cls-${q.assetClass}`}>${q.symbol}</span>
+                    {isSyntheticFeed(q.symbol, feed) && (
+                      <span className="bb-sim-badge" title={SIM_BADGE_TOOLTIP}>SIM</span>
+                    )}
                   </td>
                   <td className="mkts-td name">{q.name}</td>
                   <td className="mkts-td price num">{fmt.px(q.last, dp)}</td>

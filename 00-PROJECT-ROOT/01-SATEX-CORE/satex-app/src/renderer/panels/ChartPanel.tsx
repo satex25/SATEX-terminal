@@ -16,6 +16,8 @@ import { useAccountStore } from '../stores/accountStore'
 import { useIndicatorStore } from '../stores/indicatorStore'
 import { useRegimeStore } from '../stores/regimeStore'
 import { useDepthStore } from '../stores/depthStore'
+import { useFeedStore } from '../stores/feedStore'
+import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
 import { DeltaStrip } from '../components/DeltaStrip'
 import {
   emaSeries as computeEmaSeries,
@@ -149,6 +151,11 @@ export function ChartPanel() {
   // vpin crosses the threshold so the chart isn't constantly tinted.
   const depthSnap   = useDepthStore(s => s.snapshot)
   const vpinValue   = depthSnap && depthSnap.symbol === symbol ? depthSnap.vpin : null
+  // v0.4.3 SIM-badge propagation — chart header tells the same SIM-vs-LIVE
+  // story as the WatchlistPanel row. isSyntheticFeed() is the canonical
+  // per-asset-class decision (futures→futures feed, crypto→crypto, equity/index→equity).
+  const feed        = useFeedStore(s => s.status)
+  const isSynthetic = isSyntheticFeed(symbol, feed)
   // VPIN threshold. 0.85 (was 0.8) — the simulator's depth EMA can drift
   // into the 0.8-0.85 range during sustained book imbalance without
   // representing real toxic flow, so the higher floor cuts false positives
@@ -955,6 +962,9 @@ export function ChartPanel() {
       <div className="chart-toolbar">
         <div className="chart-symbol">
           <span className="sym">{symbol}</span>
+          {isSynthetic && (
+            <span className="bb-sim-badge" title={SIM_BADGE_TOOLTIP}>SIM</span>
+          )}
           {entry && <span className="name">{entry.name}</span>}
         </div>
         {quote && (
