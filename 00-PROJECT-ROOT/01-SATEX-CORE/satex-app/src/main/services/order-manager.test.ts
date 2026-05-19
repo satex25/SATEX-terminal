@@ -82,6 +82,53 @@ describe('OrderManager — C1: triggeredBy bypass closed', () => {
     }
     expect(om.validate(baseBuy({ quantity: 1 }), ctx).ok).toBe(true)
   })
+
+  // ── D6 v0.4.3 — Non-finite refPriceAge defense-in-depth ───────────────────
+  // Pre-fix `NaN > MAX_QUOTE_AGE_MS` evaluated to false → Gate 0 silently
+  // passed orders through when a hostile WS frame had corrupted timestamp
+  // upstream. v0.4.2 added the WS-boundary num()/ts() guards; this case
+  // tightens Gate 0 itself so even if a future code path leaks a non-finite
+  // value past the boundary, the order gets rejected here.
+
+  it('Gate 0 rejects NaN refPriceAge in live mode (D6 defense-in-depth)', () => {
+    const om = new OrderManager(100_000)
+    om.setMarketOpen(true)
+    const ctx = liveCtx({ refPriceAge: NaN })
+    const res = om.validate(baseBuy({ quantity: 1 }), ctx)
+    expect(res.ok).toBe(false)
+    expect(res.gate).toBe('stale-quote')
+    expect(res.reason).toContain('non-finite')
+  })
+
+  it('Gate 0 rejects Infinity refPriceAge in live mode', () => {
+    const om = new OrderManager(100_000)
+    om.setMarketOpen(true)
+    const ctx = liveCtx({ refPriceAge: Infinity })
+    const res = om.validate(baseBuy({ quantity: 1 }), ctx)
+    expect(res.ok).toBe(false)
+    expect(res.gate).toBe('stale-quote')
+  })
+
+  it('Gate 0 rejects -Infinity refPriceAge in live mode', () => {
+    const om = new OrderManager(100_000)
+    om.setMarketOpen(true)
+    const ctx = liveCtx({ refPriceAge: -Infinity })
+    const res = om.validate(baseBuy({ quantity: 1 }), ctx)
+    expect(res.ok).toBe(false)
+    expect(res.gate).toBe('stale-quote')
+  })
+
+  it('Gate 0 tolerates non-finite refPriceAge in paper mode (no live capital at risk)', () => {
+    // Symmetric with the existing "Gate 0 bypassed in paper mode" case: in
+    // paper/simulator we tolerate flaky timestamps so dev loops aren't
+    // friction-laden. The risk surface is zero (no broker call).
+    const om = new OrderManager(100_000)
+    om.setMarketOpen(true)
+    const ctx: OrderValidationContext = {
+      refPrice: 100, refPriceAge: NaN, liveMode: false, notionalCap: 0,
+    }
+    expect(om.validate(baseBuy({ quantity: 1 }), ctx).ok).toBe(true)
+  })
 })
 
 describe('OrderManager — C2: session equity baseline rebase', () => {
