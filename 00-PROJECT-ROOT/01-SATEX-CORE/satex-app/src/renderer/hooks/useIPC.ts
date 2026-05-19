@@ -2,6 +2,14 @@
  * SATEX — IPC Bridge Hook
  * Registers all push channel listeners on mount, tears them down on unmount.
  * Feeds directly into Zustand stores. Called once from App root.
+ *
+ * Deps strategy (2026-05-19): the effect intentionally runs ONCE per mount.
+ * All store setters are pulled via `useXStore.getState()` rather than via
+ * selector hooks, so they're stable function references that don't need to
+ * appear in the dep array. Re-subscribing IPC channels on every render would
+ * lose ticks during the gap between unsubscribe and re-subscribe — a hard
+ * no-go for a 20Hz quote feed. With getState(), the effect's deps are
+ * honestly empty and the lint rule is satisfied without disable comments.
  */
 import { useEffect, useRef } from 'react'
 import { useMarketStore } from '../stores/marketStore'
@@ -20,20 +28,22 @@ import { useSubsecondStore } from '../stores/subsecondStore'
 import type { NewsItem, ReplayMode, ClosedTrade, Trade, FeedStatus, UpdateAvailable, SubSecondCandle } from '@shared/types'
 
 export function useIPC(): void {
-  const { updateQuotes, updateCandle, bulkReplaceCandles, appendNews, resetCandles } = useMarketStore()
-  const { setAccount, setOrders, setStatus, setAutonomous } = useAccountStore()
-  const setRegime    = useRegimeStore(s => s.setSnapshot)
-  const setRiskGates = useRiskGatesStore(s => s.setSnapshot)
-  const setMacro     = useMacroStore(s => s.setSnapshot)
-  const setLogsTail  = useLogsStore(s => s.setTail)
-  const setDepth     = useDepthStore(s => s.setSnapshot)
-  const setReplay    = useReplayStore(s => s.setStatus)
-
   // Track previous replay mode so we can detect transitions and wipe stale candles.
   const prevReplayMode = useRef<ReplayMode | null>(null)
 
   useEffect(() => {
     if (!window.satex) { console.error('[SATEX] window.satex not found — preload failed'); return }
+
+    // Pull every setter via getState() — stable references across renders, so
+    // the dep array stays honestly empty.
+    const { updateQuotes, updateCandle, bulkReplaceCandles, appendNews, resetCandles } = useMarketStore.getState()
+    const { setAccount, setOrders, setStatus, setAutonomous } = useAccountStore.getState()
+    const setRegime    = useRegimeStore.getState().setSnapshot
+    const setRiskGates = useRiskGatesStore.getState().setSnapshot
+    const setMacro     = useMacroStore.getState().setSnapshot
+    const setLogsTail  = useLogsStore.getState().setTail
+    const setDepth     = useDepthStore.getState().setSnapshot
+    const setReplay    = useReplayStore.getState().setStatus
 
     // ── Legacy push subscriptions ──────────────────────────────────────────
     const unsubQuotes  = window.satex.onQuotesTick((quotes) => updateQuotes(quotes))

@@ -12,5 +12,8 @@
   "project": [
     "src/**/*.{ts,tsx}",
     "!**/*.d.ts"
+  ],
+  "ignoreDependencies": [
+    "playwright"
   ]
 }

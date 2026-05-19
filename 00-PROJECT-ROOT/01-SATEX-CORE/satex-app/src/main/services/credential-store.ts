@@ -37,7 +37,7 @@ interface StoredBaidu { key: string }
 
 function file(name: string): string { return path.join(app.getPath('userData'), name) }
 
-export class SecureStorageUnavailableError extends Error {
+class SecureStorageUnavailableError extends Error {
   constructor() {
     super('OS secure-storage (safeStorage) is unavailable on this system — credentials cannot be stored or read securely.')
     this.name = 'SecureStorageUnavailableError'

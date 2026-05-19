@@ -438,17 +438,6 @@ export function listObservations(symbol: string, sinceTs: number, limit = 1000):
     .map(rowToObservation)
 }
 
-export function countObservations(): number {
-  const r = openDB().prepare('SELECT COUNT(*) AS n FROM observations').get() as { n: number } | undefined
-  return r?.n ?? 0
-}
-
-/** Prune observations older than `cutoffTs`. Returns rows deleted. */
-export function pruneObservations(cutoffTs: number): number {
-  const r = openDB().prepare('DELETE FROM observations WHERE ts<?').run(cutoffTs)
-  return Number(r.changes)
-}
-
 function rowToObservation(r: Record<string, unknown>): Observation {
   return {
     ts: Number(r['ts']),
@@ -497,19 +486,6 @@ export function insertLearningCycle(c: LearningCycle): void {
     INSERT OR REPLACE INTO learning_log (ts, observations_seen, weights_updated, avg_error, note)
     VALUES (?,?,?,?,?)
   `).run(c.ts, c.observationsSeen, c.weightsUpdated, c.avgError, c.note)
-}
-
-export function listLearningCycles(limit = 50): LearningCycle[] {
-  return (openDB()
-    .prepare('SELECT * FROM learning_log ORDER BY ts DESC LIMIT ?')
-    .all(limit) as Array<Record<string, unknown>>)
-    .map(r => ({
-      ts: Number(r['ts']),
-      observationsSeen: Number(r['observations_seen']),
-      weightsUpdated: Number(r['weights_updated']),
-      avgError: Number(r['avg_error']),
-      note: String(r['note'] ?? ''),
-    }))
 }
 
 // ─── Phase 9: Replay tape (ticks) ────────────────────────────────────────────
@@ -796,13 +772,13 @@ export function deleteSessionRow(sessionId: string): number {
  * Path on disk for the SATEX database, or null if the no-op fallback is active
  * (no Electron app available — typically test contexts).
  */
-export function dbPath(): string | null {
+function dbPath(): string | null {
   try { return path.join(app.getPath('userData'), 'satex.db') }
   catch { return null }
 }
 
 /** Current on-disk size of the database file in bytes. 0 when missing. */
-export function dbSizeBytes(): number {
+function dbSizeBytes(): number {
   const p = dbPath()
   if (!p) return 0
   try { return fs.statSync(p).size }
@@ -834,7 +810,7 @@ export function dbSizeBytes(): number {
  * Sessions metadata stays intact (cheap rows in `sessions`) so historical
  * PnL and trade counts survive the prune. Returns how much was deleted.
  */
-export async function pruneOldSessionTicks(
+async function pruneOldSessionTicks(
   cutoffMs: number,
   chunkSize = 10_000,
 ): Promise<{ sessionsAffected: number; rowsDeleted: number }> {
@@ -933,46 +909,6 @@ export function scheduleBackgroundMaintenance(opts: {
     (t as { unref: () => void }).unref()
   }
   log.info('background db maintenance scheduled', { delayMs, pruneOlderThanMs, chunkSize })
-}
-
-/**
- * One-shot maintenance: if the DB file exceeds `thresholdBytes`, run VACUUM
- * to physically reclaim space freed by prior DELETEs. Synchronous and blocking
- * — on a 1 GB DB this can take 10-30s. Call BEFORE the window shows so the
- * user doesn't see a UI hang.
- *
- * Returns { ran: true, beforeBytes, afterBytes } when VACUUM ran, otherwise
- * { ran: false, beforeBytes, afterBytes: beforeBytes }.
- *
- * @deprecated since 2026-05-16: blocks the main process and is no longer
- * called from engine init. Kept exported for explicit user-initiated
- * maintenance (e.g., a "Compact database" button in Settings). New callers
- * should prefer `scheduleBackgroundMaintenance` for routine cleanup.
- */
-export function compactIfLarge(thresholdBytes: number): {
-  ran: boolean; beforeBytes: number; afterBytes: number
-} {
-  const before = dbSizeBytes()
-  if (before <= thresholdBytes) return { ran: false, beforeBytes: before, afterBytes: before }
-  try {
-    log.warn('db over threshold — running VACUUM (this may take a while)', {
-      beforeMb: Math.round(before / 1024 / 1024),
-      thresholdMb: Math.round(thresholdBytes / 1024 / 1024),
-    })
-    const t0 = Date.now()
-    openDB().exec('VACUUM')
-    const after = dbSizeBytes()
-    log.info('VACUUM complete', {
-      durationMs: Date.now() - t0,
-      beforeMb: Math.round(before  / 1024 / 1024),
-      afterMb:  Math.round(after   / 1024 / 1024),
-      reclaimedMb: Math.round((before - after) / 1024 / 1024),
-    })
-    return { ran: true, beforeBytes: before, afterBytes: after }
-  } catch (err) {
-    log.error('VACUUM failed', { err: String(err) })
-    return { ran: false, beforeBytes: before, afterBytes: before }
-  }
 }
 
 /**

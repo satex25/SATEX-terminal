@@ -23,7 +23,7 @@
  * inside the 40 px row.
  */
 
-export type DragonflyVariant = 'crimson' | 'ember' | 'vault'
+type DragonflyVariant = 'crimson' | 'ember' | 'vault'
 
 interface Props {
   size?: number

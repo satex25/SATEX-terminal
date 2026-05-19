@@ -16,7 +16,7 @@ export function ema(closes: number[], period: number): number {
 }
 
 /** Simple Moving Average. */
-export function sma(closes: number[], period: number): number {
+function sma(closes: number[], period: number): number {
   if (closes.length === 0) return 0
   const slice = closes.slice(-period)
   return slice.reduce((a, b) => a + b, 0) / slice.length
@@ -68,7 +68,7 @@ export function vwap(
 }
 
 /** Directional trend strength 0..1 based on EMA slope. */
-export function trendStrength(closes: number[], period = 20): number {
+function trendStrength(closes: number[], period = 20): number {
   if (closes.length < period + 1) return 0
   const recent = ema(closes, period)
   const older = ema(closes.slice(0, -5), period)
@@ -77,7 +77,7 @@ export function trendStrength(closes: number[], period = 20): number {
 }
 
 /** Rolling volatility as a percentage of current price. */
-export function rollingVolatility(closes: number[], period = 20): number {
+function rollingVolatility(closes: number[], period = 20): number {
   if (closes.length < 2) return 0
   const slice = closes.slice(-period)
   const mean = slice.reduce((a, b) => a + b, 0) / slice.length

@@ -36,13 +36,10 @@ import { AutoUpdateService } from './services/auto-update'
 {
   const result = migratePlaintextEnvLocalCreds()
   if (result.status === 'migrated') {
-    // eslint-disable-next-line no-console
     console.warn('[satex] plaintext Alpaca keys migrated from userData/.env.local → OS keychain')
   } else if (result.status === 'skipped-no-encryption') {
-    // eslint-disable-next-line no-console
     console.error('[satex] WARNING: plaintext Alpaca keys present in userData/.env.local but OS keychain is unavailable. Keys remain on disk in cleartext — fix DPAPI/Keychain/libsecret and reboot to migrate.')
   } else if (result.status === 'error') {
-    // eslint-disable-next-line no-console
     console.error('[satex] env.local migration error:', result.detail)
   }
 }
@@ -99,7 +96,6 @@ app.on('child-process-gone', (_e, details) => {
         // Logger may not be wired yet during the very early crash path; use
         // a plain console.warn so the message at least lands in the file
         // sink once it's online.
-        // eslint-disable-next-line no-console
         console.warn('[satex] GPU process crashed — removed enable-gpu flag; next boot will use software rendering')
       }
     } catch { /* best-effort */ }
@@ -128,7 +124,6 @@ try {
 } catch (e) {
   // Don't take down the app if crashReporter fails to initialize — file
   // logs (S1-7) are still the primary forensic channel.
-  // eslint-disable-next-line no-console
   console.error('[satex] crashReporter.start failed:', e)
 }
 

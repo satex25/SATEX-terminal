@@ -16,8 +16,8 @@ const log = createLogger('alpaca-mode')
 
 export type AlpacaMode = 'paper' | 'live'
 
-export const PAPER_BASE_URL = 'https://paper-api.alpaca.markets'
-export const LIVE_BASE_URL  = 'https://api.alpaca.markets'
+const PAPER_BASE_URL = 'https://paper-api.alpaca.markets'
+const LIVE_BASE_URL  = 'https://api.alpaca.markets'
 
 interface Stored { mode: AlpacaMode; updatedAt: number }
 

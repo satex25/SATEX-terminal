@@ -26,7 +26,7 @@ export function AIInsightsPanel() {
     pull()
     const id = setInterval(pull, 2000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [symbol])
+  }, [symbol, setInds])
 
   useEffect(() => {
     if (!window.satex?.getAiDecision) return

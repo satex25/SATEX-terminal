@@ -20,7 +20,7 @@ export interface ChartOpts {
   tickRate:    TickRate
 }
 
-export const DEFAULT_CHART_OPTS: ChartOpts = {
+const DEFAULT_CHART_OPTS: ChartOpts = {
   candleStyle: 'classic',
   showEMA9:    true,
   showEMA21:   true,

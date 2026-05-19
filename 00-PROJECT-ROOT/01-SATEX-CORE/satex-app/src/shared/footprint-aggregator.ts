@@ -24,7 +24,7 @@
  */
 import type { Trade } from './types'
 
-export interface FootprintBucket {
+interface FootprintBucket {
   /** Price level (discretized to tickSize). */
   priceLevel: number
   /** Volume traded at the BID (aggressor was 'sell'). */

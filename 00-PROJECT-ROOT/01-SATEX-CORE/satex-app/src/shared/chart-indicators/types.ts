@@ -43,7 +43,7 @@ export interface SeriesOutput {
 }
 
 /** ───── Pattern outputs ────────────────────────────────────────────────── */
-export interface PatternPoint {
+interface PatternPoint {
   /** Index into the input candles array. */
   index: number
   /** Price at the pattern point (the peak for top, trough for bottom). */
@@ -82,13 +82,6 @@ export interface LevelsOutput {
   /** Anchor metadata so the consumer can decide when to recompute. */
   computedFromIndex: number
   levels: PriceLevel[]
-}
-
-/** ───── Pure helpers ──────────────────────────────────────────────────── */
-
-/** Returns true if a value is finite (rejects NaN, ±Infinity). */
-export function isFiniteNum(x: number): boolean {
-  return Number.isFinite(x)
 }
 
 /** Re-export Candle for downstream convenience so consumers only depend on

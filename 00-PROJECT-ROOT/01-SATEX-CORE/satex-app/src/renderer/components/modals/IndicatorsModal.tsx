@@ -11,7 +11,7 @@
 import { Modal } from '../Modal'
 import { useIndicatorStore } from '../../stores/indicatorStore'
 import {
-  EMA_PERIODS, INDICATOR_IDS,
+  EMA_PERIODS,
   type EmaPeriod, type IndicatorId,
 } from '@shared/chart-indicators'
 
@@ -151,7 +151,3 @@ export function IndicatorsModal({ open, onClose }: Props) {
   )
 }
 
-/** Convenience type guard so other modules can list IDs without re-importing. */
-export const INDICATOR_DESCRIPTORS = DESCRIPTORS
-export type { IndicatorId, EmaPeriod }
-export { INDICATOR_IDS }

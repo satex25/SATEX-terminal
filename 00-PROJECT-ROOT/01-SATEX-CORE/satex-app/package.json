@@ -27,11 +27,9 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
-    "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/utils": "^4.0.0",
     "better-sqlite3": "^11.5.0",
     "dotenv": "^16.4.5",
-    "echarts": "^5.5.1",
     "electron-updater": "^6.3.9",
     "lightweight-charts": "^5.0.0",
     "react": "^18.3.1",

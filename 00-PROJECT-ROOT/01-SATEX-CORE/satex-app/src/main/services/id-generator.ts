@@ -13,5 +13,3 @@ export function shortId(prefix: string): string {
 
 export function orderId(): string  { return shortId('ord') }
 export function sessionId(): string { return shortId('ses') }
-export function newsId(): string    { return shortId('nws') }
-export function tradeId(): string   { return shortId('trd') }

@@ -200,7 +200,7 @@ export default function App() {
       window.removeEventListener('keyup',   onKeyUp)
       cancelArmHold()
     }
-  }, [account.killSwitchArmed])
+  }, [account.killSwitchArmed, setWorkspace])
 
   return (
     <div className="bb-app">

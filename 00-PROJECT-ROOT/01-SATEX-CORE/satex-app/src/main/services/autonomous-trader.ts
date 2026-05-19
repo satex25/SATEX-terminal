@@ -48,7 +48,7 @@ export interface AutonomousConfig {
   takeProfitAtrMult: number
 }
 
-export const DEFAULT_AUTONOMOUS_CONFIG: AutonomousConfig = {
+const DEFAULT_AUTONOMOUS_CONFIG: AutonomousConfig = {
   intervalMs: 30_000,
   confidenceThreshold: AUTONOMOUS_DEFAULTS.confidenceThreshold,
   notionalPct: AUTONOMOUS_DEFAULTS.maxPositionSizePct,

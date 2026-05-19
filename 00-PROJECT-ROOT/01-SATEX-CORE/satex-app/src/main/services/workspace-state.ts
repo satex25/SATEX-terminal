@@ -27,7 +27,7 @@ const SETTINGS_SUBDIR = 'Settings'
 const SETTINGS_FILE   = 'workspace-state.md'
 
 export type { WorkspaceState }
-export const DEFAULT_STATE = DEFAULT_WORKSPACE_STATE
+const DEFAULT_STATE = DEFAULT_WORKSPACE_STATE
 
 export class WorkspaceStateService {
   private projectRoot: string

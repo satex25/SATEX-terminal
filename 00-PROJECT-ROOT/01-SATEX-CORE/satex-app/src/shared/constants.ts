@@ -26,9 +26,7 @@ export const MAX_POSITION_CONCENTRATION = 0.25
 export const BUYING_POWER_MULT = 2
 
 export const TICK_HZ = 20
-export const BATCH_MS = 50
 
-export const DEFAULT_SYMBOL = 'NVDA'
 export const SPARKLINE_LENGTH = 30
 export const MAX_CANDLES_PER_SYMBOL = 3600
 export const SIMULATOR_CANDLE_INTERVAL_SEC = 1
@@ -51,10 +49,6 @@ export const CHART_TIMEFRAME_MS: Record<ChartTimeframe, number> = {
   '250ms': 250, '500ms': 500, '1s': 1_000, '5s': 5_000, '15s': 15_000,
   '1m': 60_000, '5m': 300_000, '15m': 900_000,
 }
-/** Sub-second timeframes — only valid for crypto symbols. ChartPanel disables
- *  these buttons on non-crypto assets and the engine simply never emits on
- *  the SUBSECOND_CANDLES_UPDATE channel for them. */
-export const SUBSECOND_TIMEFRAMES: readonly ChartTimeframe[] = ['250ms', '500ms']
 export function isSubsecondTimeframe(tf: ChartTimeframe): boolean {
   return tf === '250ms' || tf === '500ms'
 }
@@ -106,19 +100,8 @@ export const AUTONOMOUS_DEFAULTS = {
   minRiskRewardFloor: 1.5
 } as const
 
-export const APRIL_TACTICS_DEFAULTS = {
-  intervalMs: 30_000,
-  notionalCapMin: 1_500,
-  notionalCapMax: 3_000,
-  // 300 × 1s candles = 5 minutes of warm-up; preserves prior semantics
-  // when SIMULATOR_CANDLE_INTERVAL_SEC dropped from 5 to 1.
-  minCandles: 300,
-  cooldownMs: 300_000
-} as const
-
 export const DEFAULT_STOP_VOLATILITY_MULT = 2.0
 export const DEFAULT_TAKE_PROFIT_VOLATILITY_MULT = 6.0
-export const LEARNED_STOP_TP_FLOOR_RR = 2.5
 
 export const REPLAY_DEFAULT_SPEED = 5
 export const REPLAY_MIN_SPEED = 0.5

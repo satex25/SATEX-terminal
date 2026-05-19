@@ -108,7 +108,6 @@ export interface NewsItem {
 export type OrderSide = 'buy' | 'sell'
 export type OrderType = 'market' | 'limit' | 'stop'
 export type OrderStatus = 'pending' | 'filled' | 'canceled' | 'rejected'
-export type TriggeredBy = 'stop-loss' | 'take-profit'
 
 export interface OrderRequest {
   id?: string
@@ -174,8 +173,10 @@ export interface ClosedTrade {
   /** Wall-clock epoch-ms when the close fill landed. */
   closedAt: number
   /** Which auto-exit rail closed the trade (stop-loss / take-profit), or
-   *  null for manual / autonomous-flat closes. */
-  triggeredBy: TriggeredBy | null
+   *  null for manual / autonomous-flat closes. Inline literal — there was a
+   *  named TriggeredBy alias here that was removed 2026-05-19 after the
+   *  dead-code audit found zero external consumers. */
+  triggeredBy: 'stop-loss' | 'take-profit' | null
   /** Free-form source string from the entry order — 'ticket', 'autonomous',
    *  'alpaca-bracket', etc. */
   source: string
@@ -250,16 +251,6 @@ export interface IndicatorSnapshot {
   atr14: number
   trendStrength: number
   volatility: number
-}
-
-export interface Insight {
-  id: string
-  createdAt: number
-  symbol: string
-  text: string
-  bias: 'bullish' | 'bearish' | 'neutral'
-  confidence: number
-  risk: number
 }
 
 export interface SessionRecord {
@@ -542,28 +533,6 @@ export interface VaultCheckpointRequest {
   reason: string
   scope: 'session' | 'trade' | 'tactics' | 'brain' | 'observer' | 'manual'
   detail?: string
-}
-
-// CalendarImpact previously declared as `interface CalendarImpact extends Number {}` —
-// an empty interface equivalent to its supertype, never used. Deleted 2026-05-16
-// alongside the C1 OrderRequest cleanup.
-export interface ForexEvent {
-  id: string
-  title: string
-  currency: string
-  impact: 1 | 2 | 3
-  datetime: string
-  forecast: string | null
-  previous: string | null
-  actual: string | null
-}
-
-export interface CalendarContext {
-  imminentEvent: ForexEvent | null
-  upcomingEvents: ForexEvent[]
-  tradeRecommendation: 'TRADE' | 'CAUTION' | 'PAUSE'
-  volatilityMultiplier: number
-  timeUntilNextEvent: number | null
 }
 
 // ─── Replay engine (Phase 9) ─────────────────────────────────────────────────

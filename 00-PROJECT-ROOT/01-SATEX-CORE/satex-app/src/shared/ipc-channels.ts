@@ -218,9 +218,11 @@ export const IPC = {
   SUBSECOND_CANDLES_GET: 'satex:a1:subsecondCandlesGet',
 } as const
 
-export type IpcChannel = (typeof IPC)[keyof typeof IPC]
-
-export const PUSH_CHANNELS = [
+// Runtime array kept solely for the PushChannel type derivation below — the
+// literal-union approach via `(typeof X)[number]` is the standard TypeScript
+// idiom for keeping the type in sync with a single source of truth.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const PUSH_CHANNELS = [
   IPC.QUOTES_TICK,
   IPC.CANDLES_UPDATE,
   IPC.CANDLES_BULK_REPLACE,

@@ -97,9 +97,6 @@ export const useMarketStore = create<MarketState>((set) => ({
   resetCandles: () => set({ candles: new Map() }),
 }))
 
-// Selector helpers
-export const selectQuote = (sym: string) => (s: MarketState) => s.quotes.get(sym)
-
 // useSyncExternalStore (Zustand v5) requires selectors to return stable references for
 // the same state — `?? []` and `Array.from(...)` create a new value on every call and
 // break the snapshot-cache invariant, causing infinite render loops.
@@ -108,7 +105,7 @@ export const selectQuote = (sym: string) => (s: MarketState) => s.quotes.get(sym
 // via useMemo, OR wrap a derived selector in useShallow so React sees structurally-equal
 // results as identical.
 
-export const EMPTY_CANDLES: readonly Candle[] = Object.freeze([])
+const EMPTY_CANDLES: readonly Candle[] = Object.freeze([])
 export const selectCandles = (sym: string) => (s: MarketState): readonly Candle[] =>
   s.candles.get(sym) ?? EMPTY_CANDLES
 

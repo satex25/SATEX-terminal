@@ -34,7 +34,7 @@ export interface RegimeDeps {
 }
 
 /** UTC hour → liquidity session (matches satex-terminal.jsx SX.sessionFor). */
-export function sessionForUtcHour(utcHour: number): SessionId {
+function sessionForUtcHour(utcHour: number): SessionId {
   if (utcHour >= 0 && utcHour < 7)  return 'TOKYO'
   if (utcHour >= 7 && utcHour < 13) return 'LONDON'
   return 'NY'

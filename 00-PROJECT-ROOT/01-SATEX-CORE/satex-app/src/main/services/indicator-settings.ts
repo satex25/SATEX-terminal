@@ -8,7 +8,7 @@
  * file the service returns DEFAULT_SETTINGS so the app always has a valid
  * shape to render against.
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   DEFAULT_INDICATOR_SETTINGS,
@@ -24,7 +24,7 @@ const SETTINGS_SUBDIR = 'Settings'
 const SETTINGS_FILE   = 'indicator-toggles.md'
 
 export type { IndicatorSettings }
-export const DEFAULT_SETTINGS = DEFAULT_INDICATOR_SETTINGS
+const DEFAULT_SETTINGS = DEFAULT_INDICATOR_SETTINGS
 
 export class IndicatorSettingsService {
   private projectRoot: string
@@ -158,8 +158,3 @@ function clampInt(v: unknown, fallback: number, lo: number, hi: number): number 
   return Math.max(lo, Math.min(hi, Math.round(v)))
 }
 
-/** True if the settings file currently exists on disk. */
-export function indicatorSettingsExists(projectRoot: string): boolean {
-  const path = join(resolve(projectRoot), VAULT_SUBDIR, SETTINGS_SUBDIR, SETTINGS_FILE)
-  return existsSync(path) && statSync(path).isFile()
-}

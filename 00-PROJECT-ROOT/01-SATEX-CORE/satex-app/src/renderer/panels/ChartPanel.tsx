@@ -475,6 +475,9 @@ export function ChartPanel() {
   useEffect(() => {
     if (!containerRef.current) return
     let cancelled = false
+    // Capture the ref'd Map at effect entry so cleanup operates on the same
+    // instance even if some future code path reassigns emaSeriesMap.current.
+    const emaMapAtMount = emaSeriesMap.current
 
     void (async () => {
       try {
@@ -541,7 +544,7 @@ export function ChartPanel() {
         chartRef.current     = null
         seriesRef.current    = null
         lwcModRef.current    = null
-        emaSeriesMap.current.clear()
+        emaMapAtMount.clear()
         rsiSeriesRef.current     = null
         rsiOverboughtRef.current = null
         rsiOversoldRef.current   = null
@@ -552,7 +555,14 @@ export function ChartPanel() {
     }
   }, [])
 
-  // Bulk reset when symbol, timeframe, or aggregated length changes
+  // Bulk reset when symbol, timeframe, or aggregated length changes.
+  // Deliberately depends on `view.length` rather than full `view` — the
+  // live-update effect below ratchets the in-flight bar via `view`/`quote.last`
+  // on every tick, so this bulk-reset path only needs to fire on actual
+  // bar-count changes (symbol switch, timeframe change, new bar appended).
+  // Re-firing on every view reference change would redundantly replace data
+  // already covered by the live-update path. Full-view re-set on every
+  // emit also breaks lightweight-charts' setData/update separation contract.
   useEffect(() => {
     if (!seriesRef.current || view.length === 0) return
     try {
@@ -562,6 +572,7 @@ export function ChartPanel() {
         open: c.open, high: c.high, low: c.low, close: c.close,
       })))
     } catch { /* stale ref */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, tf, view.length])
 
   // Live update — in-flight candle. S1-1: dep is `quote?.last` + `view` only.
@@ -569,6 +580,12 @@ export function ChartPanel() {
   // price is flat — that caused this effect to re-fire on every quote regardless
   // of whether the chart needed to repaint, driving boot-time frame stalls
   // up to 125ms.
+  //
+  // Deps subset deliberately excludes the full `quote` object: lint wants
+  // `quote` so that any field change re-fires, but the effect ONLY reads
+  // `quote.last`. Including full `quote` would re-fire on every 20Hz tick
+  // of any other field (timestamp, bid, ask, volume, sparkline) — the exact
+  // perf regression the S1-1 fix targeted.
   //
   // 2026-05-16 fix: paint the in-flight bar using `quote.last` (the live
   // simulator/Alpaca price) instead of `last.close` (which is the bucket's
@@ -599,6 +616,7 @@ export function ChartPanel() {
         close: liveClose,
       })
     } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quote?.last, view, showSub])
 
   // ── Prior-day H/L/C fetch for Pivot Points ──────────────────────────────────
@@ -655,6 +673,9 @@ export function ChartPanel() {
   //   5. Dep array on `view.length` (not `view`) — intra-bar mutations from
   //      CANDLES_UPDATE isNew=false bump the view memo's ref but not its
   //      length; indicators only care about closed-candle boundaries.
+  //      The deliberate `view.length` dep is a documented perf invariant.
+  //      Full `view` would re-fire this reconciliation every tick (~20Hz),
+  //      the exact stall the 5-layer perf rewrite targeted.
   useEffect(() => {
     let cancelled = false
     let pendingHandle: number | null = null
@@ -1008,6 +1029,7 @@ export function ChartPanel() {
       cancelled = true
       if (pendingHandle != null) window.cancelIdleCallback(pendingHandle)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.length, indSettings, dominantRegime, emaColor, priorHlc])
 
   const up = (quote?.changePct ?? 0) >= 0
