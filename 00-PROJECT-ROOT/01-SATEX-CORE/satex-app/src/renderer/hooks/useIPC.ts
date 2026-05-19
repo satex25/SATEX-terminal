@@ -16,7 +16,8 @@ import { useJournalStore } from '../stores/journalStore'
 import { useFootprintStore } from '../stores/footprintStore'
 import { useFeedStore } from '../stores/feedStore'
 import { useUpdateStore } from '../stores/update-store'
-import type { NewsItem, ReplayMode, ClosedTrade, Trade, FeedStatus, UpdateAvailable } from '@shared/types'
+import { useSubsecondStore } from '../stores/subsecondStore'
+import type { NewsItem, ReplayMode, ClosedTrade, Trade, FeedStatus, UpdateAvailable, SubSecondCandle } from '@shared/types'
 
 export function useIPC(): void {
   const { updateQuotes, updateCandle, bulkReplaceCandles, appendNews, resetCandles } = useMarketStore()
@@ -88,6 +89,10 @@ export function useIPC(): void {
     const setUpdateAvailable = useUpdateStore.getState().setAvailable
     const unsubUpdate = window.satex.onUpdateAvailable?.((u: UpdateAvailable) => setUpdateAvailable(u)) ?? (() => {})
 
+    // ── A1 (v0.4.4): sub-second crypto candle seals → subsecondStore ───────
+    const appendSubsecond = useSubsecondStore.getState().appendBar
+    const unsubSubsecond = window.satex.onSubsecondCandlesUpdate?.((c: SubSecondCandle) => appendSubsecond(c)) ?? (() => {})
+
     // ── Initial seed fetches (post-subscribe so we don't miss a push) ──────
     void window.satex.subscribe([])
     void window.satex.getAutonomousStatus?.().then(s => { if (s) setAutonomous(s) }).catch(() => {})
@@ -117,6 +122,7 @@ export function useIPC(): void {
       unsubTrades()
       unsubFeed()
       unsubUpdate()
+      unsubSubsecond()
     }
   }, [])
 }

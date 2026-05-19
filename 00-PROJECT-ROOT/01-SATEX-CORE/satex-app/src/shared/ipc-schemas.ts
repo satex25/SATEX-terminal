@@ -243,3 +243,16 @@ export const CspViolationReportReq = z.object({
   documentURI:       z.string().max(2048).optional(),
 }).strict()
 export type CspViolationReportReq = z.infer<typeof CspViolationReportReq>
+
+// ── A1 (v0.4.4, 2026-05-19) — sub-second crypto candle fetch ────────────────
+// `bucketMs` is restricted to the known modes so a hostile renderer can't
+// trigger an unbounded LIMIT scan against an arbitrary value. `limit` is
+// capped at 4 000 — far above the design doc's 1 000-row retention so any
+// future retention bump still works without a schema change, but small
+// enough that a runaway loop can't OOM the renderer with row buffers.
+export const SubsecondCandlesGetReq = z.object({
+  symbol:   SymbolS,
+  bucketMs: z.union([z.literal(250), z.literal(500)]),
+  limit:    z.number().int().positive().max(4_000),
+}).strict()
+export type SubsecondCandlesGetReq = z.infer<typeof SubsecondCandlesGetReq>

@@ -23,6 +23,7 @@ import type {
   AutonomousStatus, AutonomousDecision,
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
   ClosedTrade, JournalTag, Trade, FeedStatus, UpdateAvailable,
+  SubSecondCandle,
 } from '@shared/types'
 import type { IndicatorSettings } from '@shared/chart-indicators'
 import type { WorkspaceState } from '@shared/types'
@@ -198,6 +199,20 @@ const satexApi = {
    *  been observed; the main-side handler delegates to electron-updater which
    *  no-ops if the binary hasn't actually landed yet. */
   installUpdate:     () => ipcRenderer.invoke(IPC.UPDATE_INSTALL) as Promise<void>,
+
+  // ── A1 sub-second crypto candles (v0.4.4, 2026-05-19) ──────────────────────
+  /** Subscribe to bucket-seal events. Crypto-only — equity / index / future
+   *  symbols never fire on this channel. The renderer's subsecondStore
+   *  appends the bar to its (symbol, bucketMs) ring; ChartPanel reads from
+   *  there when the user picks a 250ms / 500ms timeframe. */
+  onSubsecondCandlesUpdate: (cb: (c: SubSecondCandle) => void) =>
+    on<SubSecondCandle>(IPC.SUBSECOND_CANDLES_UPDATE, cb),
+  /** Hydration fetch — called on chart mount / timeframe switch to populate
+   *  the series before live seals start arriving. Returns ascending-time
+   *  order. Empty array means either no ticks have ever arrived for that
+   *  (symbol, bucketMs) pair, or the symbol isn't a crypto asset. */
+  getSubsecondCandles: (symbol: string, bucketMs: number, limit: number) =>
+    ipcRenderer.invoke(IPC.SUBSECOND_CANDLES_GET, { symbol, bucketMs, limit }) as Promise<SubSecondCandle[]>,
 
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {

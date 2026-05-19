@@ -19,7 +19,7 @@ import {
   AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
-  WindowZoomReq, CspViolationReportReq,
+  WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq,
 } from '@shared/ipc-schemas'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
@@ -549,6 +549,10 @@ function wireEngineEvents(): void {
   engine.onReplayStatus((s)           => push(IPC.REPLAY_STATUS,  s))
   engine.onTradeClosed((t)            => push(IPC.TRADE_CLOSED,   t))
   engine.onTrades((trades)            => push(IPC.TRADES_TICK,    trades))
+  // A1 (v0.4.4) — sub-second crypto bar push. One event per bucket seal.
+  // Diff-gating is naturally satisfied by the aggregator's roll-on-tick
+  // semantics (a seal only fires when a new bucket actually opens).
+  engine.onSubsecondCandle((c)        => push(IPC.SUBSECOND_CANDLES_UPDATE, c))
 }
 
 /** Wire Phase 10 Black Box pushes — called after engine.initialize() because
@@ -728,6 +732,11 @@ function registerIpcHandlers(): void {
 
   // ── Market data ──────────────────────────────────────────────────────────────
   register(IPC.CANDLES_GET,    validated(CandlesGetReq, ({ symbol, limit }) => engine.getCandles(symbol, limit)))
+  // A1 (v0.4.4) — hydrate the sub-second crypto chart series before live
+  // SUBSECOND_CANDLES_UPDATE pushes start flowing. Returns ascending-time order.
+  register(IPC.SUBSECOND_CANDLES_GET, validated(SubsecondCandlesGetReq, ({ symbol, bucketMs, limit }) =>
+    engine.getSubsecondCandles(symbol, bucketMs, limit)
+  ))
   register(IPC.INDICATORS_GET, validated(SymbolOnlyReq, (symbol)            => engine.getIndicators(symbol)))
   register(IPC.SUBSCRIBE,      validated(SubscribeReq,  (symbols) => {
     log.debug('renderer subscribed', { symbols })

@@ -205,6 +205,17 @@ export const IPC = {
   /** Invoke (renderer → main): trigger quit-and-install when user clicks
    *  the update prompt. Only works after update-downloaded event. */
   UPDATE_INSTALL: 'satex:update:install',
+
+  // ── A1 (v0.4.4, 2026-05-19) — sub-second crypto candles ───────────────────
+  /** Push: SubSecondCandle. Emitted on every bucket seal from the engine's
+   *  SubSecondAggregator. Renderer's subsecondStore appends to the in-memory
+   *  ring keyed by (symbol, bucketMs). Crypto-only — equities never fire
+   *  on this channel. */
+  SUBSECOND_CANDLES_UPDATE: 'satex:a1:subsecondCandlesUpdate',
+  /** Invoke (renderer → main, { symbol, bucketMs, limit }): hydrate the
+   *  series on chart mount / timeframe switch before live seals start
+   *  flowing. Returns SubSecondCandle[] in ascending time order. */
+  SUBSECOND_CANDLES_GET: 'satex:a1:subsecondCandlesGet',
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -232,6 +243,7 @@ export const PUSH_CHANNELS = [
   IPC.TRADES_TICK,
   IPC.FEED_STATUS_UPDATE,
   IPC.UPDATE_AVAILABLE,
+  IPC.SUBSECOND_CANDLES_UPDATE,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

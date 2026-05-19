@@ -17,6 +17,7 @@ import type {
   Order, SessionRecord, PnlSnapshot, BrainParameter,
   Observation, PatternWeight, LearningCycle, MarketRegime,
   TickTapeRow, ReplayBookmark, ReplayableSession, TapeManifest,
+  SubSecondCandle,
 } from '@shared/types'
 import { createLogger } from './logger'
 
@@ -216,6 +217,30 @@ function migrate(db: DB): void {
       last_ts        INTEGER NOT NULL,
       sealed_at      INTEGER NOT NULL
     );
+
+    -- A1 (v0.4.4): sub-second crypto candles. One row per sealed bucket.
+    -- bucket_ms is 250 or 500 (no other values stored today; column kept open
+    -- in case 100ms or 1000ms-but-tighter modes get enabled later). open_ms is
+    -- the bucket-start in epoch ms; the close-time = open_ms + bucket_ms.
+    -- Live-only — replay tapes do NOT include sub-second candles in v0.4.4.
+    -- Retention is enforced application-side via trimSubSecondCandles (NOT a
+    -- TRIGGER) so the trim batch can be coalesced with the rolling insert and
+    -- a future maintenance VACUUM can reclaim the rows. UNIQUE on
+    -- (symbol, bucket_ms, open_ms) lets us INSERT OR REPLACE idempotently on
+    -- a re-seal of the same bucket without surfacing constraint errors.
+    CREATE TABLE IF NOT EXISTS crypto_subsecond_candles (
+      symbol     TEXT    NOT NULL,
+      bucket_ms  INTEGER NOT NULL,
+      open_ms    INTEGER NOT NULL,
+      open       REAL    NOT NULL,
+      high       REAL    NOT NULL,
+      low        REAL    NOT NULL,
+      close      REAL    NOT NULL,
+      volume     REAL    NOT NULL DEFAULT 0,
+      PRIMARY KEY (symbol, bucket_ms, open_ms)
+    );
+    CREATE INDEX IF NOT EXISTS idx_subsec_sym_bucket_ts
+      ON crypto_subsecond_candles(symbol, bucket_ms, open_ms DESC);
   `)
 
   // A4 — idempotent additive migration for orders.trace_id. The CREATE TABLE
@@ -640,6 +665,66 @@ export function deleteTapeForSession(sessionId: string): number {
   // integrity-pass row pointing at a fully-empty tape.
   db.prepare('DELETE FROM tape_manifest WHERE session_id=?').run(sessionId)
   const r = db.prepare('DELETE FROM ticks WHERE session_id=?').run(sessionId)
+  return Number(r.changes)
+}
+
+// ─── A1 (v0.4.4) — sub-second crypto candles ────────────────────────────────
+//
+// One row per sealed bucket. INSERT OR REPLACE on (symbol, bucket_ms, open_ms)
+// makes the seal idempotent — the aggregator can re-emit a corrected bucket
+// on a late-arriving tick without surfacing a constraint error. Retention is
+// application-side via trimSubSecondCandles, called from the aggregator after
+// each insert to keep the per-(symbol, bucket_ms) row count bounded.
+
+export function insertSubSecondCandle(c: SubSecondCandle): void {
+  openDB().prepare(`
+    INSERT OR REPLACE INTO crypto_subsecond_candles
+      (symbol, bucket_ms, open_ms, open, high, low, close, volume)
+    VALUES (?,?,?,?,?,?,?,?)
+  `).run(c.symbol, c.bucketMs, c.openMs, c.open, c.high, c.low, c.close, c.volume)
+}
+
+/** Returns the most-recent `limit` candles for a (symbol, bucketMs) pair in
+ *  ascending time order (oldest → newest). Renderer's lightweight-charts
+ *  setData expects ascending time so we do the reverse here, not at the call
+ *  site. */
+export function getSubSecondCandles(symbol: string, bucketMs: number, limit: number): SubSecondCandle[] {
+  const rows = openDB().prepare(`
+    SELECT symbol, bucket_ms, open_ms, open, high, low, close, volume
+    FROM crypto_subsecond_candles
+    WHERE symbol = ? AND bucket_ms = ?
+    ORDER BY open_ms DESC
+    LIMIT ?
+  `).all(symbol, bucketMs, limit) as Array<Record<string, unknown>>
+  return rows.map(r => ({
+    symbol:   String(r['symbol']),
+    bucketMs: Number(r['bucket_ms']),
+    openMs:   Number(r['open_ms']),
+    open:     Number(r['open']),
+    high:     Number(r['high']),
+    low:      Number(r['low']),
+    close:    Number(r['close']),
+    volume:   Number(r['volume']),
+  })).reverse()
+}
+
+/** Trim the (symbol, bucketMs) series to the most-recent `keep` rows, dropping
+ *  any older. Called from the aggregator after each insert when the row count
+ *  exceeds the retention cap. Idempotent. Returns the number of rows deleted. */
+export function trimSubSecondCandles(symbol: string, bucketMs: number, keep: number): number {
+  // Subquery picks the (keep+1)th most-recent open_ms; everything older
+  // than that gets dropped. Faster than COUNT-then-DELETE because SQLite
+  // only walks the (symbol, bucket_ms) slice once via the existing index.
+  const r = openDB().prepare(`
+    DELETE FROM crypto_subsecond_candles
+    WHERE symbol = ? AND bucket_ms = ?
+      AND open_ms < (
+        SELECT open_ms FROM crypto_subsecond_candles
+        WHERE symbol = ? AND bucket_ms = ?
+        ORDER BY open_ms DESC
+        LIMIT 1 OFFSET ?
+      )
+  `).run(symbol, bucketMs, symbol, bucketMs, keep)
   return Number(r.changes)
 }
 

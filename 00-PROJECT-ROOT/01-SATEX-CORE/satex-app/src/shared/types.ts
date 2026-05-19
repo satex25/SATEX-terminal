@@ -788,3 +788,20 @@ export interface UpdateAvailable {
    *  The renderer's [Restart Now] button stays disabled until this flips. */
   downloaded: boolean
 }
+
+/** A1 (v0.4.4) — sub-second crypto candle row. Identical shape to the
+ *  persisted SubSecondCandleRow in persistence.ts; lives here too so the
+ *  preload + renderer can import without crossing the main/renderer boundary
+ *  on a service-layer type. openMs is the bucket-start in epoch ms;
+ *  close-time = openMs + bucketMs. */
+export interface SubSecondCandle {
+  symbol:   string
+  /** 250 or 500 today. Other values reserved for future bucket modes. */
+  bucketMs: number
+  openMs:   number
+  open:     number
+  high:     number
+  low:      number
+  close:    number
+  volume:   number
+}

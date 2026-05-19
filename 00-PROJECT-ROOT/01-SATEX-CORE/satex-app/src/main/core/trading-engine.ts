@@ -23,6 +23,7 @@ import { OrderManager, type OrderValidationContext } from '../services/order-man
 import { TickRecorder } from '../services/tick-recorder'
 import { ReplaySource } from '../services/replay-source'
 import { HistoricalImporter } from '../services/historical-importer'
+import { SubSecondAggregator, type SubSecondCandle } from '../services/subsecond-aggregator'
 import { computeSnapshot } from '@shared/indicators'
 import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
@@ -88,6 +89,9 @@ export type DepthListener      = (s: DepthSnapshot) => void
 export type TradeClosedListener = (t: ClosedTrade) => void
 export type TradesListener = (trades: Trade[]) => void
 export type FeedStatusListener = (s: FeedStatus) => void
+/** A1 (v0.4.4) — fires on every sub-second crypto bar seal. main/index.ts
+ *  forwards via IPC.SUBSECOND_CANDLES_UPDATE to the renderer. */
+export type SubSecondCandleListener = (c: SubSecondCandle) => void
 
 /** Captured at order entry; drives Brain.learn and vault narrative on close.
  *  The `symbol` field is load-bearing — it lets us pair server-side bracket
@@ -218,6 +222,11 @@ export class TradingEngine {
    *  broadcastStatus so we only push when a class transitions. */
   private feedStatusListeners:  Set<FeedStatusListener>  = new Set()
   private lastFeedStatus: FeedStatus | null = null
+  /** A1 (v0.4.4) — sub-second crypto candle aggregator. Lazily constructed in
+   *  initialize() after `db` is open. The crypto WS tick path feeds it via
+   *  `onCryptoTick`; renderer subscribes via the listener set below. */
+  private subsecond: SubSecondAggregator | null = null
+  private subsecondListeners: Set<SubSecondCandleListener> = new Set()
   /** Most-recent closed-trade history kept in memory for the JournalPanel.
    *  Pushed to renderer on each close; capped so a long session doesn't
    *  grow unbounded. Persists across replay swap (it's session-scoped). */
@@ -226,10 +235,16 @@ export class TradingEngine {
 
   /** v0.4.3 B11 — powerMonitor 'suspend' handler. Pauses the recorder so its
    *  flush timer isn't queued for the entire suspend duration. Arrow field so
-   *  `powerMonitor.off(...)` in shutdown() can pass the same reference. */
+   *  `powerMonitor.off(...)` in shutdown() can pass the same reference.
+   *
+   *  v0.4.4 A1 — also seals every in-flight sub-second bucket so the close
+   *  before the suspend is persisted, not lost. On resume, fresh ticks open
+   *  fresh buckets (no half-bucket carryover across the suspend gap). */
   private onSystemSuspend = (): void => {
-    log.warn('system suspend — pausing tick recorder')
+    log.warn('system suspend — pausing tick recorder + sealing sub-second buckets')
     this.recorder?.pause()
+    try { this.subsecond?.forceSealAll() }
+    catch (e) { log.warn('subsecond forceSealAll on suspend failed', { err: String(e) }) }
   }
 
   /** v0.4.3 B11 — powerMonitor 'resume' handler. Wakes the recorder and
@@ -321,6 +336,22 @@ export class TradingEngine {
     this.om.setOnKillSwitchChange(saveKillSwitchState)
     const restoredKill = loadKillSwitchState()
     if (restoredKill.armed) this.om.restoreKillSwitch(restoredKill.reason)
+
+    // A1 (v0.4.4) — sub-second crypto candle aggregator. Constructed eagerly
+    // even when no Alpaca credentials are present; without crypto WS ticks the
+    // aggregator simply sits idle. onEmit fans the seal-event out to whoever
+    // subscribed via onSubsecondCandle — main/index.ts wires that to the
+    // SUBSECOND_CANDLES_UPDATE push channel. Persistence is the module-scope
+    // db helpers added alongside this commit. forceSealAll runs at shutdown
+    // and on powerMonitor 'suspend' so the most-recent partial bucket is
+    // captured before state is dropped.
+    this.subsecond = new SubSecondAggregator({
+      persistence: {
+        insert: (c) => db.insertSubSecondCandle(c),
+        trim:   (s, b, k) => db.trimSubSecondCandles(s, b, k),
+      },
+      onEmit: (c) => { for (const l of this.subsecondListeners) l(c) },
+    })
 
     // Brain — load weights from db
     this.brain.initialize()
@@ -560,6 +591,12 @@ export class TradingEngine {
     try { powerMonitor.off('resume',  this.onSystemResume)  } catch { /* not registered */ }
     this.recorder?.stop()
     this.replay?.stop()
+    // A1 (v0.4.4) — flush every in-flight sub-second bucket before db.closeDB
+    // below truncates the WAL. forceSealAll runs synchronous prepare+run; safe
+    // to call here. Subsequent operations on a closed DB would throw, hence
+    // the order: seal → existing services stop → closeDB at the very end.
+    try { this.subsecond?.forceSealAll() }
+    catch (e) { log.warn('subsecond forceSealAll on shutdown failed', { err: String(e) }) }
     this.observer?.stop()
     this.learner?.stop()
     this.autonomous?.stop()
@@ -602,6 +639,18 @@ export class TradingEngine {
   onTradeClosed(fn: TradeClosedListener):     () => void { this.tradeClosedListeners.add(fn);   return () => this.tradeClosedListeners.delete(fn) }
   onTrades(fn: TradesListener):               () => void { this.tradesListeners.add(fn);        return () => this.tradesListeners.delete(fn) }
   onFeedStatus(fn: FeedStatusListener):       () => void { this.feedStatusListeners.add(fn);    return () => this.feedStatusListeners.delete(fn) }
+  /** A1 (v0.4.4) — subscribe to sub-second crypto bar seals. main/index.ts
+   *  wires this to IPC.SUBSECOND_CANDLES_UPDATE so the renderer chart can
+   *  append the freshly-sealed bar instead of polling. */
+  onSubsecondCandle(fn: SubSecondCandleListener): () => void { this.subsecondListeners.add(fn); return () => this.subsecondListeners.delete(fn) }
+
+  /** A1 (v0.4.4) — initial-state fetch path. Renderer calls this on chart
+   *  mount / timeframe switch to hydrate the series before live ticks start
+   *  appending. Delegates to the persistence helper that scans the
+   *  crypto_subsecond_candles table (most-recent `limit` rows, ascending). */
+  getSubsecondCandles(symbol: string, bucketMs: number, limit: number): SubSecondCandle[] {
+    return db.getSubSecondCandles(symbol, bucketMs, limit)
+  }
 
   /** Current per-asset-class feed status — used by main/index.ts to emit
    *  an initial-state push when the renderer subscribes. */
@@ -1215,6 +1264,12 @@ export class TradingEngine {
   private onCryptoTick(tick: AlpacaTick): void {
     const entry = findUniverseEntry(tick.symbol)
     if (!entry || entry.assetClass !== 'crypto') return
+    // A1 (v0.4.4) — feed the sub-second aggregator before the quote build so a
+    // throw in the aggregator's seal path (caught internally) can't shadow the
+    // visible quote update. ingestTick filters kind !== 't' and non-crypto
+    // symbols itself, but we've already verified the symbol so the second
+    // check is cheap defense-in-depth.
+    this.subsecond?.ingestTick(tick)
     const quote: Quote = {
       symbol:     tick.symbol,
       name:       entry.name,

@@ -29,11 +29,12 @@ import {
   type Candle as IndCandle,
 } from '@shared/chart-indicators'
 import {
-  findUniverseEntry, CHART_TIMEFRAMES, CHART_TIMEFRAME_SECONDS,
-  HISTORICAL_BARS_FALLBACK_SYMBOLS, UNIVERSE,
+  findUniverseEntry, CHART_TIMEFRAMES, CHART_TIMEFRAME_SECONDS, CHART_TIMEFRAME_MS,
+  HISTORICAL_BARS_FALLBACK_SYMBOLS, UNIVERSE, isSubsecondTimeframe,
   type ChartTimeframe,
 } from '@shared/constants'
-import type { Candle, ReplayStatus } from '@shared/types'
+import type { Candle, ReplayStatus, SubSecondCandle } from '@shared/types'
+import { useSubsecondStore } from '../stores/subsecondStore'
 import {
   isUsEquityMarketOpen,
   mostRecentClosedSessionDate,
@@ -188,6 +189,41 @@ export function ChartPanel() {
 
   const [tf, setTf] = useState<ChartTimeframe>('5s')
   const bucketSec = CHART_TIMEFRAME_SECONDS[tf]
+  // A1 (v0.4.4) — sub-second mode is crypto-only. `showSub` gates every
+  // sub-second-specific branch: hydration fetch, view builder, in-flight
+  // disable. If the user picks 250ms then swaps to a non-crypto symbol the
+  // auto-fallback effect below resets tf to '1s' so the chart never sits in
+  // an invalid state.
+  const isCryptoSymbol = entry?.assetClass === 'crypto'
+  const showSub = isSubsecondTimeframe(tf) && isCryptoSymbol
+  const subBucketMs = (CHART_TIMEFRAME_MS[tf] ?? 0) as 250 | 500
+  // Subscribe to the per-(symbol, bucketMs) ring; selector returns the same
+  // array reference until appendBar mutates the slot so the view useMemo
+  // below doesn't churn on unrelated symbols.
+  const subBars = useSubsecondStore(s =>
+    showSub ? (s.series.get(`${symbol}:${subBucketMs}`) ?? null) : null
+  )
+
+  // Auto-fallback when the focused symbol becomes non-crypto with a
+  // sub-second timeframe selected — keeps the chart in a coherent mode.
+  useEffect(() => {
+    if (isSubsecondTimeframe(tf) && !isCryptoSymbol) setTf('1s')
+  }, [tf, isCryptoSymbol])
+
+  // Hydrate the sub-second store from persistence on (symbol, tf) entry into
+  // sub-second mode. 600 bars ≈ 2.5 min @ 250ms / 5 min @ 500ms — enough for
+  // the chart to render a full timeline immediately while live SUBSECOND_CANDLES_
+  // UPDATE pushes catch up. Cancelled flag protects against late resolution
+  // landing after the user already switched away.
+  useEffect(() => {
+    if (!showSub) return
+    let cancelled = false
+    void window.satex?.getSubsecondCandles?.(symbol, subBucketMs, 600).then((bars: SubSecondCandle[]) => {
+      if (cancelled || !bars || bars.length === 0) return
+      useSubsecondStore.getState().hydrate(symbol, subBucketMs, bars)
+    }).catch(() => { /* hydration is best-effort — live pushes will fill in */ })
+    return () => { cancelled = true }
+  }, [showSub, symbol, subBucketMs])
 
   // ── Historical-day replay state ────────────────────────────────────────────
   const [histDate,  setHistDate]  = useState<string>(defaultHistoricalDate())
@@ -369,8 +405,25 @@ export function ChartPanel() {
     try { await window.satex?.replay?.stop() } catch (e) { setHistErr(String(e)) }
   }
 
-  // Aggregate raw 1s candles into the user's selected timeframe.
-  const view = useMemo(() => aggregate(candles, bucketSec), [candles, bucketSec])
+  // Aggregate raw 1s candles into the user's selected timeframe. Sub-second
+  // mode bypasses the renderer aggregator — bars come fully-sealed from the
+  // engine's SubSecondAggregator via the store, so we just map the
+  // SubSecondCandle (openMs in ms) onto the Candle shape lightweight-charts
+  // expects (time as a fractional unix-seconds UTCTimestamp).
+  const view = useMemo<Candle[]>(() => {
+    if (showSub) {
+      const bars = subBars ?? []
+      return bars.map(b => ({
+        time:   b.openMs / 1000,
+        open:   b.open,
+        high:   b.high,
+        low:    b.low,
+        close:  b.close,
+        volume: b.volume,
+      }))
+    }
+    return aggregate(candles, bucketSec)
+  }, [showSub, subBars, candles, bucketSec])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef     = useRef<unknown>(null)
@@ -526,6 +579,12 @@ export function ChartPanel() {
   // "flat lines" to the user.
   useEffect(() => {
     if (!seriesRef.current || view.length === 0 || !quote) return
+    // A1 (v0.4.4) — sub-second mode skips the in-flight ratchet. The engine's
+    // SubSecondAggregator emits fully-sealed bars on each bucket roll, so
+    // ratcheting the last bar from quote.last (which is the LiveMarket-fused
+    // mid, not the trade-only price the aggregator uses) would corrupt the
+    // sealed OHLC values the moment a new bar lands.
+    if (showSub) return
     try {
       const last = view[view.length - 1]!
       const liveClose = quote.last
@@ -540,7 +599,7 @@ export function ChartPanel() {
         close: liveClose,
       })
     } catch { /* ignore */ }
-  }, [quote?.last, view])
+  }, [quote?.last, view, showSub])
 
   // ── Prior-day H/L/C fetch for Pivot Points ──────────────────────────────────
   // Refetches whenever the symbol changes or the user toggles pivots on, since
@@ -998,9 +1057,25 @@ export function ChartPanel() {
         </div>
         <div className="chart-tools">
           <div className="seg accent">
-            {CHART_TIMEFRAMES.map(t => (
-              <button key={t} type="button" className={tf === t ? 'on' : ''} onClick={() => setTf(t)}>{t}</button>
-            ))}
+            {CHART_TIMEFRAMES.map(t => {
+              // A1 — sub-second is crypto-only because IEX equities are capped at
+              // 1-second snapshots (paid Alpaca SIP would unlock; out of scope
+              // for v0.4.4). Buttons render but are disabled with a tooltip on
+              // non-crypto symbols so the constraint is discoverable.
+              const subDisabled = isSubsecondTimeframe(t) && !isCryptoSymbol
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  className={tf === t ? 'on' : ''}
+                  disabled={subDisabled}
+                  title={subDisabled ? 'Sub-second timeframes are crypto-only (BTC/ETH). Equity feeds (IEX) cap at 1-second snapshots.' : undefined}
+                  onClick={() => { if (!subDisabled) setTf(t) }}
+                >
+                  {t}
+                </button>
+              )
+            })}
           </div>
 
           <div className="chart-histday" role="group" aria-label="Historical day replay">
