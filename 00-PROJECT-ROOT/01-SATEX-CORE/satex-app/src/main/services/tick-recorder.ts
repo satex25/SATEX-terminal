@@ -135,6 +135,17 @@ export class TickRecorder {
     this.paused = false
   }
 
+  /** v0.4.3 B11 — force an immediate flush, bypassing the 1s timer cadence.
+   *  Called by the powerMonitor 'resume' wiring in trading-engine.ts so a
+   *  recorder that was suspended mid-flight pushes its in-memory buffer to
+   *  SQLite as soon as the wake handler fires, instead of waiting up to a
+   *  full second for the next timer tick. Also handy for graceful-shutdown
+   *  paths that want to drain without calling stop() (which would tear down
+   *  the entire recorder). Safe to call when paused or not-yet-started. */
+  forceFlush(): void {
+    this.flush()
+  }
+
   /** Hook target — register with `engine.market.onQuotes(...)`.
    *
    *  2026-05-18 — per-symbol throttle now compares against the QUOTE's

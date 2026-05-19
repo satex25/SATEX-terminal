@@ -11,7 +11,7 @@
  *   5. Start data feed
  *   6. Register IPC → engine method wiring (done in main/index.ts)
  */
-import { app } from 'electron'
+import { app, powerMonitor } from 'electron'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { getEnv } from '../services/env'
@@ -224,6 +224,23 @@ export class TradingEngine {
   private closedTrades: ClosedTrade[] = []
   private static CLOSED_TRADES_CAP = 500
 
+  /** v0.4.3 B11 — powerMonitor 'suspend' handler. Pauses the recorder so its
+   *  flush timer isn't queued for the entire suspend duration. Arrow field so
+   *  `powerMonitor.off(...)` in shutdown() can pass the same reference. */
+  private onSystemSuspend = (): void => {
+    log.warn('system suspend — pausing tick recorder')
+    this.recorder?.pause()
+  }
+
+  /** v0.4.3 B11 — powerMonitor 'resume' handler. Wakes the recorder and
+   *  force-flushes anything that was in the buffer when suspend hit. */
+  private onSystemResume = (): void => {
+    log.warn('system resume — resuming tick recorder + force-flushing')
+    this.recorder?.resume()
+    try { this.recorder?.forceFlush() }
+    catch (e) { log.warn('post-resume forceFlush failed', { err: String(e) }) }
+  }
+
   /** Run an async op fire-and-forget WITHOUT losing failures to the void.
    *  Replaces ad-hoc `void this.X()` patterns. Failures inside `op` (vault
    *  writes, Alpaca syncs, etc.) become log.error entries instead of silent
@@ -354,6 +371,19 @@ export class TradingEngine {
     this.recorder = new TickRecorder(this.currentSessionId)
     this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
     this.recorder.start()
+
+    // ── v0.4.3 B11: powerMonitor lifecycle for laptop suspend/resume ────────
+    // Without these, a laptop suspend during recording leaves the flush timer
+    // queued for the entire suspend duration. On wake, the timer fires
+    // immediately with a buffer that may have grown unbounded if quotes were
+    // still arriving (they aren't, because the WS is also suspended — but the
+    // ingest path runs in the same thread and depends on cooperative Node
+    // scheduling that's brittle across suspend). Cleaner: pause on suspend,
+    // resume + force-flush on wake. powerMonitor is only valid after
+    // app.whenReady(), which has already fired by the time engine.initialize
+    // runs.
+    powerMonitor.on('suspend', this.onSystemSuspend)
+    powerMonitor.on('resume',  this.onSystemResume)
 
     // Periodic account sync from Alpaca
     if (this.alpaca) {
@@ -523,6 +553,11 @@ export class TradingEngine {
     if (this.replayStatusTimer)      { clearInterval(this.replayStatusTimer);      this.replayStatusTimer = null }
     if (this.batchTimer)             { clearTimeout(this.batchTimer);              this.batchTimer = null }
     if (this.tradeBatchTimer)        { clearTimeout(this.tradeBatchTimer);         this.tradeBatchTimer = null }
+    // v0.4.3 B11 — release powerMonitor listeners so a re-initialize (HMR /
+    // engine restart) doesn't pile up handlers. Bound arrow-class-fields
+    // mean `off` finds the same reference as `on`.
+    try { powerMonitor.off('suspend', this.onSystemSuspend) } catch { /* not registered */ }
+    try { powerMonitor.off('resume',  this.onSystemResume)  } catch { /* not registered */ }
     this.recorder?.stop()
     this.replay?.stop()
     this.observer?.stop()
