@@ -210,6 +210,23 @@ export function ChartPanel() {
     if (isSubsecondTimeframe(tf) && !isCryptoSymbol) setTf('1s')
   }, [tf, isCryptoSymbol])
 
+  // A1 Sprint 2 — auto-snap to the user's preferred bucket when a crypto
+  // symbol gets focus. Symbol-change-driven (via prevSymbolRef): re-renders
+  // with the same symbol don't re-fire, so a manual tf click during the
+  // session is never clobbered. Initial mount counts as a "change" from the
+  // ref's null sentinel, so the snap also fires on app open with a crypto
+  // symbol pre-focused. Non-crypto and no-pref are both no-ops — we never
+  // surprise the user with a tf they didn't explicitly request via Settings.
+  const prevSymbolRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (symbol === prevSymbolRef.current) return
+    prevSymbolRef.current = symbol
+    if (!isCryptoSymbol) return
+    const pref = useSubsecondStore.getState().getPref(symbol)
+    if (pref === 250) setTf('250ms')
+    else if (pref === 500) setTf('500ms')
+  }, [symbol, isCryptoSymbol])
+
   // Hydrate the sub-second store from persistence on (symbol, tf) entry into
   // sub-second mode. 600 bars ≈ 2.5 min @ 250ms / 5 min @ 500ms — enough for
   // the chart to render a full timeline immediately while live SUBSECOND_CANDLES_
@@ -1045,6 +1062,19 @@ export function ChartPanel() {
           <span className="sym">{symbol}</span>
           {isSynthetic && (
             <span className="bb-sim-badge" title={SIM_BADGE_TOOLTIP}>SIM</span>
+          )}
+          {showSub && (
+            // A1 Sprint 2 — sub-second mode marker (design doc §4.3). Renders
+            // exactly when the active timeframe is sub-second AND the symbol is
+            // crypto (both conditions baked into showSub). Tells the analyst at
+            // a glance that this chart is reading from the SubSecondAggregator
+            // ring, not the rolled-up 1-second pipeline. Tooltip explains why.
+            <span
+              className="bb-sub-badge"
+              title={`Sub-second mode — bars seal every ${subBucketMs} ms. Crypto-only feed; the aggregator maintains 250 ms and 500 ms buckets in parallel so switching between them is free.`}
+            >
+              SUB · {subBucketMs} ms
+            </span>
           )}
           {entry && <span className="name">{entry.name}</span>}
         </div>

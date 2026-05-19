@@ -214,6 +214,19 @@ const satexApi = {
   getSubsecondCandles: (symbol: string, bucketMs: number, limit: number) =>
     ipcRenderer.invoke(IPC.SUBSECOND_CANDLES_GET, { symbol, bucketMs, limit }) as Promise<SubSecondCandle[]>,
 
+  /** Sprint 2 — Per-symbol preferred default bucket for sub-second crypto
+   *  candles. Read on Settings modal open + chart mount so the UI reflects
+   *  the user's persisted choice. Empty `{}` when nothing has been configured
+   *  (engine uses 250ms internal default). */
+  getSubsecondPrefs: () =>
+    ipcRenderer.invoke(IPC.SUBSECOND_PREFS_GET) as Promise<Record<string, 250 | 500>>,
+  /** Sprint 2 — set the preferred default bucket for one crypto symbol. The
+   *  engine fans out to disk write-through internally; the renderer should
+   *  treat the resolved value (a fresh full-prefs map) as the new source of
+   *  truth and refresh its local mirror from it. */
+  setSubsecondPref: (symbol: string, bucketMs: 250 | 500) =>
+    ipcRenderer.invoke(IPC.SUBSECOND_PREFS_SET, { symbol, bucketMs }) as Promise<Record<string, 250 | 500>>,
+
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {
     /** Stream of closed-trade records — one event per position close. */

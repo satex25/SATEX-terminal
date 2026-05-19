@@ -19,12 +19,13 @@ import {
   AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
-  WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq,
+  WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
 } from '@shared/ipc-schemas'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
 import { IndicatorSettingsService } from './services/indicator-settings'
 import { WorkspaceStateService } from './services/workspace-state'
+import { SubsecondPrefsService } from './services/subsecond-prefs'
 import { migratePlaintextEnvLocalCreds } from './services/credential-store'
 import { isLive } from './services/live-mode'
 import { AutoUpdateService } from './services/auto-update'
@@ -146,6 +147,10 @@ const engine = new TradingEngine()
 // vault writer uses); we resolve from app.getAppPath() upward to find it.
 const indicatorSettings = new IndicatorSettingsService(resolveVaultProjectRoot())
 const workspaceState    = new WorkspaceStateService(resolveVaultProjectRoot())
+// A1 Sprint 2 — per-symbol preferred default sub-second bucket. Crypto-only;
+// the service sanitizer drops non-crypto symbols defensively. Lives in the
+// same Vault/Settings tree as indicator-toggles.md / workspace-state.md.
+const subsecondPrefs    = new SubsecondPrefsService(resolveVaultProjectRoot())
 const autoUpdate        = new AutoUpdateService()
 let mainWindow: BrowserWindow | null = null
 
@@ -729,6 +734,13 @@ function registerIpcHandlers(): void {
   register(IPC.CANDLES_GET,    validated(CandlesGetReq, ({ symbol, limit }) => engine.getCandles(symbol, limit)))
   // A1 (v0.4.4) — hydrate the sub-second crypto chart series before live
   // SUBSECOND_CANDLES_UPDATE pushes start flowing. Returns ascending-time order.
+  // A1 Sprint 2 — per-symbol bucket prefs. GET takes no payload; SET goes
+  // through the validated() wrapper so a hostile renderer can't bypass the
+  // {250|500} literal-union guard. The engine writes through to disk via the
+  // onSubsecondPrefChanged listener registered in app.whenReady — handler
+  // itself is fire-and-return.
+  register(IPC.SUBSECOND_PREFS_GET, ()                                                       => engine.getSubsecondPrefs())
+  register(IPC.SUBSECOND_PREFS_SET, validated(SubsecondPrefsSetReq, ({ symbol, bucketMs })   => engine.setSubsecondPref(symbol, bucketMs)))
   register(IPC.SUBSECOND_CANDLES_GET, validated(SubsecondCandlesGetReq, ({ symbol, bucketMs, limit }) =>
     engine.getSubsecondCandles(symbol, bucketMs, limit)
   ))
@@ -1005,6 +1017,19 @@ app.whenReady().then(async () => {
     await engine.initialize()
     wireAutonomousEvents()
     wireBlackBoxEvents()
+    // A1 Sprint 2 — hydrate aggregator prefs from disk + wire write-through.
+    // hydrate must run AFTER initialize() (aggregator is constructed there).
+    // Listener registration is idempotent — re-init paths (live↔replay) keep
+    // the same TradingEngine instance so the listener stays attached.
+    try {
+      engine.hydrateSubsecondPrefs(subsecondPrefs.get().prefs)
+      engine.onSubsecondPrefChanged((symbol, ms) => {
+        try { subsecondPrefs.setOne(symbol, ms) }
+        catch (e) { log.warn('subsecond pref disk write failed', { symbol, ms, err: String(e) }) }
+      })
+    } catch (e) {
+      log.warn('subsecond prefs hydration failed', { err: String(e) })
+    }
     log.info('trading engine online')
     // v0.4.3 B10 — removed the previous setTimeout(1500ms) initial-push block.
     // The renderer's `subscribe([])` call (from useIPC mount) now drives the

@@ -65,23 +65,102 @@ export interface AggregatorDeps {
    *  at 500ms ~8 min. Older rows are trimmed application-side after each
    *  insert. */
   maxCandles?: number
+  /** Sprint 2 — fired AFTER a successful setPreferredBucket. trading-engine
+   *  wires this to SubsecondPrefsService.setOne() so the pref is persisted to
+   *  disk. The aggregator does not depend on persistence success — if the
+   *  callback throws the in-memory pref is still updated (the next renderer
+   *  read sees the new value; only the disk durability is lost). */
+  onPreferenceChanged?: (symbol: string, ms: PreferredBucket) => void
 }
 
 const DEFAULT_BUCKETS  = [250, 500] as const
 const DEFAULT_MAX_CANDLES = 1000
 
+/** Sprint 2 — buckets a user can pick as the per-symbol default. Tighter than
+ *  the maintained set (which could grow to include 100ms later) so the
+ *  preference can't drift out-of-bounds via an old persisted value. */
+export type PreferredBucket = 250 | 500
+const DEFAULT_PREFERRED_BUCKET: PreferredBucket = 250
+
 export class SubSecondCandleAggregator {
   private state = new Map<string, Map<number, BucketState>>()
+  /** A1 Sprint 2 — per-symbol preferred display bucket. Does NOT affect which
+   *  buckets the aggregator MAINTAINS (both 250 + 500 stay live for every
+   *  crypto symbol). The renderer reads this to pick the initial chart
+   *  timeframe when a crypto symbol gets focus. Living on the engine side
+   *  (not in renderer state) so the preference survives a renderer reload. */
+  private preferredBucketBySymbol = new Map<string, PreferredBucket>()
   private readonly buckets:     readonly number[]
   private readonly maxCandles:  number
   private readonly persistence: PersistenceShim
   private readonly onEmit?:     (c: SubSecondCandle) => void
+  private readonly onPreferenceChanged?: (symbol: string, ms: PreferredBucket) => void
 
   constructor(deps: AggregatorDeps) {
     this.persistence = deps.persistence
     this.onEmit      = deps.onEmit
     this.buckets     = deps.buckets    ?? DEFAULT_BUCKETS
     this.maxCandles  = deps.maxCandles ?? DEFAULT_MAX_CANDLES
+    this.onPreferenceChanged = deps.onPreferenceChanged
+  }
+
+  /** Sprint 2 — set the user's preferred default bucket for `symbol`. Pure
+   *  preference; the aggregator still maintains both 250ms and 500ms buckets
+   *  internally so a tf-switch costs nothing. Rejects non-crypto symbols
+   *  (returns current pref unchanged — equity/index/future have no sub-second
+   *  feed so the pref would never be consulted). Fires onPreferenceChanged
+   *  on accept so the trading-engine can persist write-through. */
+  setPreferredBucket(symbol: string, ms: PreferredBucket): PreferredBucket {
+    const entry = findUniverseEntry(symbol)
+    if (entry?.assetClass !== 'crypto') {
+      // Idempotent for the caller — return what's currently stored (which is
+      // the default, since non-crypto symbols never get an entry).
+      return this.getPreferredBucket(symbol)
+    }
+    this.preferredBucketBySymbol.set(symbol, ms)
+    try { this.onPreferenceChanged?.(symbol, ms) }
+    catch { /* persistence failure must not break the in-memory update */ }
+    return ms
+  }
+
+  /** Sprint 2 — read the user's preferred default bucket for `symbol`. Returns
+   *  the default (250) when no preference has been set. */
+  getPreferredBucket(symbol: string): PreferredBucket {
+    return this.preferredBucketBySymbol.get(symbol) ?? DEFAULT_PREFERRED_BUCKET
+  }
+
+  /** Sprint 2 — bulk hydrate prefs at engine boot from disk-loaded state.
+   *  Drops non-crypto entries defensively in case the on-disk file was
+   *  hand-edited with stale symbols. Idempotent — overwrites whatever was
+   *  in memory. Does NOT fire onPreferenceChanged (the source of truth is
+   *  already disk, no write-back needed). */
+  hydratePreferredBuckets(prefs: Readonly<Record<string, PreferredBucket>>): void {
+    this.preferredBucketBySymbol.clear()
+    for (const [symbol, ms] of Object.entries(prefs)) {
+      const entry = findUniverseEntry(symbol)
+      if (entry?.assetClass !== 'crypto') continue
+      if (ms !== 250 && ms !== 500) continue
+      this.preferredBucketBySymbol.set(symbol, ms)
+    }
+  }
+
+  /** Sprint 2 — snapshot of all current prefs as a plain object. Used by the
+   *  trading-engine to answer SUBSECOND_PREFS_GET. Returns a fresh object so
+   *  the caller can JSON-stringify without worrying about internal mutation. */
+  getAllPreferredBuckets(): Record<string, PreferredBucket> {
+    const out: Record<string, PreferredBucket> = {}
+    for (const [symbol, ms] of this.preferredBucketBySymbol) out[symbol] = ms
+    return out
+  }
+
+  /** Sprint 2 — preferred resolution in milliseconds for downstream consumers
+   *  (tactics, pattern-learner, replay) that want to know "what's the user's
+   *  active candle stride for this symbol". Returns 1000 (1s) for any non-
+   *  crypto symbol so the existing 1-second consumers keep their contract. */
+  getCandleResolutionMs(symbol: string): number {
+    const entry = findUniverseEntry(symbol)
+    if (entry?.assetClass !== 'crypto') return 1000
+    return this.getPreferredBucket(symbol)
   }
 
   /** Ingests one tick from the AlpacaClient stream. Filters trade-only crypto

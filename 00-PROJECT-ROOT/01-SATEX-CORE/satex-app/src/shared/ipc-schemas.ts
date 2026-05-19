@@ -256,3 +256,17 @@ export const SubsecondCandlesGetReq = z.object({
   limit:    z.number().int().positive().max(4_000),
 }).strict()
 export type SubsecondCandlesGetReq = z.infer<typeof SubsecondCandlesGetReq>
+
+// ── A1 Sprint 2 — per-symbol bucket-mode preference ────────────────────────
+// Same {250, 500} literal-union as the fetch schema — the aggregator only
+// supports those two buckets and the file-store sanitizer drops anything else
+// defensively. .strict() rejects unknown fields so a stale renderer trying to
+// tack on e.g. `sessionId` or `mode` gets an explicit error. The engine
+// additionally drops non-crypto symbols (no sub-second feed for equities), but
+// we don't gate that at the Zod layer because the universe membership check is
+// data-dependent and `findUniverseEntry` belongs in the engine layer.
+export const SubsecondPrefsSetReq = z.object({
+  symbol:   SymbolS,
+  bucketMs: z.union([z.literal(250), z.literal(500)]),
+}).strict()
+export type SubsecondPrefsSetReq = z.infer<typeof SubsecondPrefsSetReq>

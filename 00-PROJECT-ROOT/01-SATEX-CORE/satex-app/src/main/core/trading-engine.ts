@@ -23,7 +23,7 @@ import { OrderManager, type OrderValidationContext } from '../services/order-man
 import { TickRecorder } from '../services/tick-recorder'
 import { ReplaySource } from '../services/replay-source'
 import { HistoricalImporter } from '../services/historical-importer'
-import { SubSecondCandleAggregator, type SubSecondCandle } from '../services/subsecond-aggregator'
+import { SubSecondCandleAggregator, type SubSecondCandle, type PreferredBucket } from '../services/subsecond-aggregator'
 import { computeSnapshot } from '@shared/indicators'
 import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
@@ -92,6 +92,9 @@ export type FeedStatusListener = (s: FeedStatus) => void
 /** A1 (v0.4.4) — fires on every sub-second crypto bar seal. main/index.ts
  *  forwards via IPC.SUBSECOND_CANDLES_UPDATE to the renderer. */
 export type SubSecondCandleListener = (c: SubSecondCandle) => void
+/** A1 Sprint 2 — fires AFTER a successful setSubsecondPref. main/index.ts
+ *  wires this to SubsecondPrefsService.setOne for disk write-through. */
+export type SubSecondPrefChangedListener = (symbol: string, ms: PreferredBucket) => void
 
 /** Captured at order entry; drives Brain.learn and vault narrative on close.
  *  The `symbol` field is load-bearing — it lets us pair server-side bracket
@@ -227,6 +230,10 @@ export class TradingEngine {
    *  `onCryptoTick`; renderer subscribes via the listener set below. */
   private subsecond: SubSecondCandleAggregator | null = null
   private subsecondListeners: Set<SubSecondCandleListener> = new Set()
+  /** A1 Sprint 2 — write-through listeners for per-symbol bucket prefs. main
+   *  wires SubsecondPrefsService.setOne here so a renderer setSubsecondPref
+   *  IPC call persists to disk. */
+  private subsecondPrefListeners: Set<SubSecondPrefChangedListener> = new Set()
   /** Most-recent closed-trade history kept in memory for the JournalPanel.
    *  Pushed to renderer on each close; capped so a long session doesn't
    *  grow unbounded. Persists across replay swap (it's session-scoped). */
@@ -351,6 +358,16 @@ export class TradingEngine {
         trim:   (s, b, k) => db.trimSubSecondCandles(s, b, k),
       },
       onEmit: (c) => { for (const l of this.subsecondListeners) l(c) },
+      // A1 Sprint 2 — write-through fan-out. main/index.ts subscribes via
+      // engine.onSubsecondPrefChanged() and calls SubsecondPrefsService.setOne
+      // so the renderer's setSubsecondPref invoke persists to disk before the
+      // promise resolves (handler awaits both engine update + disk write).
+      onPreferenceChanged: (sym, ms) => {
+        for (const l of this.subsecondPrefListeners) {
+          try { l(sym, ms) }
+          catch (e) { log.warn('subsecond pref listener threw', { err: String(e) }) }
+        }
+      },
     })
 
     // Brain — load weights from db
@@ -650,6 +667,37 @@ export class TradingEngine {
    *  crypto_subsecond_candles table (most-recent `limit` rows, ascending). */
   getSubsecondCandles(symbol: string, bucketMs: number, limit: number): SubSecondCandle[] {
     return db.getSubSecondCandles(symbol, bucketMs, limit)
+  }
+
+  /** A1 Sprint 2 — subscribe to per-symbol bucket-pref changes. main/index.ts
+   *  wires SubsecondPrefsService.setOne here so an IPC setSubsecondPref call
+   *  is persisted to disk write-through. Returns an unsubscribe handle. */
+  onSubsecondPrefChanged(fn: SubSecondPrefChangedListener): () => void {
+    this.subsecondPrefListeners.add(fn)
+    return () => this.subsecondPrefListeners.delete(fn)
+  }
+
+  /** A1 Sprint 2 — bulk hydrate the aggregator's per-symbol bucket prefs at
+   *  app boot from disk-loaded state. Idempotent. No-op if the aggregator
+   *  hasn't been constructed (engine not yet initialized) — main calls this
+   *  AFTER engine.initialize() so that path is the standard. */
+  hydrateSubsecondPrefs(prefs: Readonly<Record<string, PreferredBucket>>): void {
+    this.subsecond?.hydratePreferredBuckets(prefs)
+  }
+
+  /** A1 Sprint 2 — snapshot of all per-symbol bucket prefs. Used by the
+   *  SUBSECOND_PREFS_GET handler. Empty object when nothing has been set. */
+  getSubsecondPrefs(): Record<string, PreferredBucket> {
+    return this.subsecond?.getAllPreferredBuckets() ?? {}
+  }
+
+  /** A1 Sprint 2 — set the preferred default bucket for one crypto symbol.
+   *  Aggregator rejects non-crypto symbols (returns current pref). Fires
+   *  onPreferenceChanged → persistence write-through. Returns the post-update
+   *  full prefs map so the IPC handler can echo it back to the renderer. */
+  setSubsecondPref(symbol: string, ms: PreferredBucket): Record<string, PreferredBucket> {
+    this.subsecond?.setPreferredBucket(symbol, ms)
+    return this.getSubsecondPrefs()
   }
 
   /** Current per-asset-class feed status — used by main/index.ts to emit

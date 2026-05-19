@@ -20,9 +20,19 @@ import type { SubSecondCandle } from '@shared/types'
 
 const MAX_BARS_PER_SERIES = 1_200
 
+/** Sprint 2 — the same {250, 500} literal-union as the engine + Zod schema.
+ *  Kept tight in the store so a future addition of e.g. 100ms requires a
+ *  matched bump on all three surfaces (engine, schema, store) instead of
+ *  silently widening the renderer contract. */
+export type PreferredBucketMs = 250 | 500
+
 interface SubsecondState {
   /** Map<`${symbol}:${bucketMs}`, SubSecondCandle[]> — bars in ascending time order. */
   series: Map<string, SubSecondCandle[]>
+  /** Sprint 2 — per-symbol preferred default bucket mirror. Hydrated from
+   *  main on mount via useIPC; updated optimistically by Settings UI clicks
+   *  then reconciled with the engine's authoritative full-prefs map echo. */
+  prefs: Record<string, PreferredBucketMs>
   /** Replace the entire ring for one (symbol, bucketMs) — used by the
    *  hydration path. Bars must already be in ascending time order. */
   hydrate: (symbol: string, bucketMs: number, bars: SubSecondCandle[]) => void
@@ -32,6 +42,14 @@ interface SubsecondState {
   /** Read a slice for a (symbol, bucketMs). Returns a stable reference per
    *  store update so React selectors don't churn. */
   getBars: (symbol: string, bucketMs: number) => readonly SubSecondCandle[]
+  /** Sprint 2 — wholesale replace the prefs mirror. Called by useIPC on mount
+   *  with the engine snapshot, and on every setSubsecondPref echo. */
+  hydratePrefs: (prefs: Record<string, PreferredBucketMs>) => void
+  /** Sprint 2 — convenience getter that defaults non-configured symbols to
+   *  null instead of an arbitrary fallback. Lets the chart distinguish
+   *  "user has explicitly chosen 250ms" from "user has never picked", which
+   *  matters for the auto-snap heuristic (don't snap if no preference). */
+  getPref: (symbol: string) => PreferredBucketMs | null
 }
 
 function keyFor(symbol: string, bucketMs: number): string {
@@ -40,6 +58,7 @@ function keyFor(symbol: string, bucketMs: number): string {
 
 export const useSubsecondStore = create<SubsecondState>((set, get) => ({
   series: new Map(),
+  prefs: {},
   hydrate: (symbol, bucketMs, bars) => {
     set((prev) => {
       const next = new Map(prev.series)
@@ -75,4 +94,16 @@ export const useSubsecondStore = create<SubsecondState>((set, get) => ({
     })
   },
   getBars: (symbol, bucketMs) => get().series.get(keyFor(symbol, bucketMs)) ?? [],
+  hydratePrefs: (prefs) => {
+    // Defensive: drop non-{250,500} values that could slip in from a hand-
+    // edited or stale prefs file. The engine sanitizer already runs, but a
+    // wider contract on the IPC envelope is one source of drift away — the
+    // store guards independently so we never poison the UI dropdown state.
+    const clean: Record<string, PreferredBucketMs> = {}
+    for (const [s, v] of Object.entries(prefs)) {
+      if (v === 250 || v === 500) clean[s] = v
+    }
+    set({ prefs: clean })
+  },
+  getPref: (symbol) => get().prefs[symbol] ?? null,
 }))

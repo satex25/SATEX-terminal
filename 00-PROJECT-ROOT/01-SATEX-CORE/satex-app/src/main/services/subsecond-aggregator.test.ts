@@ -12,7 +12,7 @@
  * isolation, and the dual-bucket (250 + 500) interleaving.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { SubSecondCandleAggregator, type SubSecondCandle, type PersistenceShim } from './subsecond-aggregator'
+import { SubSecondCandleAggregator, type SubSecondCandle, type PersistenceShim, type PreferredBucket } from './subsecond-aggregator'
 import type { AlpacaTick } from './alpaca'
 
 /** Fake persistence — captures every insert + trim call. Per-test reset. */
@@ -244,5 +244,111 @@ describe('SubSecondCandleAggregator — failure resilience', () => {
     })
     agg3.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
     expect(() => agg3.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 }))).not.toThrow()
+  })
+})
+
+// ─── A1 Sprint 2 — per-symbol preferred bucket API ─────────────────────────
+describe('SubSecondCandleAggregator — preferred bucket (Sprint 2)', () => {
+  it('defaults to 250ms when no pref has been set for a crypto symbol', () => {
+    expect(agg.getPreferredBucket('BTC')).toBe(250)
+    expect(agg.getPreferredBucket('ETH')).toBe(250)
+  })
+
+  it('setPreferredBucket on a crypto symbol persists in-memory and is read back', () => {
+    expect(agg.setPreferredBucket('BTC', 500)).toBe(500)
+    expect(agg.getPreferredBucket('BTC')).toBe(500)
+    // Other symbols untouched.
+    expect(agg.getPreferredBucket('ETH')).toBe(250)
+  })
+
+  it('setPreferredBucket fires onPreferenceChanged on accept', () => {
+    const changes: Array<{ symbol: string; ms: PreferredBucket }> = []
+    const agg2 = new SubSecondCandleAggregator({
+      persistence: fake,
+      onPreferenceChanged: (symbol, ms) => { changes.push({ symbol, ms }) },
+    })
+    agg2.setPreferredBucket('BTC', 500)
+    agg2.setPreferredBucket('ETH', 250)
+    expect(changes).toEqual([
+      { symbol: 'BTC', ms: 500 },
+      { symbol: 'ETH', ms: 250 },
+    ])
+  })
+
+  it('setPreferredBucket SILENTLY rejects non-crypto symbols (no fire, no mutate)', () => {
+    const changes: Array<{ symbol: string; ms: PreferredBucket }> = []
+    const agg2 = new SubSecondCandleAggregator({
+      persistence: fake,
+      onPreferenceChanged: (symbol, ms) => { changes.push({ symbol, ms }) },
+    })
+    // NVDA / ES / SPY are all non-crypto (NVDA = equity, ES = future, SPY = equity).
+    expect(agg2.setPreferredBucket('NVDA', 500)).toBe(250) // returns current (default)
+    expect(agg2.setPreferredBucket('ES',   500)).toBe(250)
+    expect(agg2.setPreferredBucket('SPY',  500)).toBe(250)
+    expect(changes).toHaveLength(0) // listener never fired
+    // Nothing in the internal map either — verified via getAllPreferredBuckets.
+    expect(agg2.getAllPreferredBuckets()).toEqual({})
+  })
+
+  it('a throwing onPreferenceChanged does NOT prevent the in-memory update', () => {
+    const agg2 = new SubSecondCandleAggregator({
+      persistence: fake,
+      onPreferenceChanged: () => { throw new Error('disk full (test)') },
+    })
+    expect(() => agg2.setPreferredBucket('BTC', 500)).not.toThrow()
+    // The setter swallows persistence failures — in-memory is the source of
+    // truth for the live aggregator; disk durability is best-effort.
+    expect(agg2.getPreferredBucket('BTC')).toBe(500)
+  })
+
+  it('hydratePreferredBuckets restores Map and drops non-crypto / out-of-range', () => {
+    agg.hydratePreferredBuckets({
+      BTC: 500,
+      ETH: 250,
+      NVDA: 250 as PreferredBucket, // non-crypto — must be dropped
+      ES:   500 as PreferredBucket, // non-crypto — must be dropped
+      // @ts-expect-error — testing runtime drop of an invalid value
+      DOGE: 100, // value not in {250, 500} — must be dropped
+    })
+    expect(agg.getAllPreferredBuckets()).toEqual({ BTC: 500, ETH: 250 })
+  })
+
+  it('hydratePreferredBuckets is idempotent — calling twice gives the same state', () => {
+    agg.hydratePreferredBuckets({ BTC: 500 })
+    agg.hydratePreferredBuckets({ BTC: 500 })
+    expect(agg.getAllPreferredBuckets()).toEqual({ BTC: 500 })
+  })
+
+  it('hydratePreferredBuckets REPLACES (not merges) — second call wins', () => {
+    agg.setPreferredBucket('BTC', 500)
+    agg.setPreferredBucket('ETH', 500)
+    agg.hydratePreferredBuckets({ BTC: 250 })
+    // ETH dropped — the new map didn't include it.
+    expect(agg.getAllPreferredBuckets()).toEqual({ BTC: 250 })
+  })
+
+  it('getCandleResolutionMs returns 1000 for any non-crypto symbol', () => {
+    // No pref set anywhere — non-crypto MUST be 1000 by contract so the
+    // existing 1-second pipeline consumers keep working.
+    expect(agg.getCandleResolutionMs('NVDA')).toBe(1000)
+    expect(agg.getCandleResolutionMs('ES')).toBe(1000)
+    expect(agg.getCandleResolutionMs('SPY')).toBe(1000)
+  })
+
+  it('getCandleResolutionMs returns the pref for crypto symbols (or 250 default)', () => {
+    expect(agg.getCandleResolutionMs('BTC')).toBe(250) // default
+    agg.setPreferredBucket('BTC', 500)
+    expect(agg.getCandleResolutionMs('BTC')).toBe(500)
+    // Pref doesn't leak into non-crypto resolution.
+    expect(agg.getCandleResolutionMs('NVDA')).toBe(1000)
+  })
+
+  it('getAllPreferredBuckets returns a fresh object — mutation does NOT poison internal state', () => {
+    agg.setPreferredBucket('BTC', 500)
+    const snap = agg.getAllPreferredBuckets()
+    snap['BTC'] = 250 // mutate snapshot
+    snap['EVIL'] = 999 as PreferredBucket // add bogus key
+    // Internal state unchanged — engine's setter is the only mutation path.
+    expect(agg.getAllPreferredBuckets()).toEqual({ BTC: 500 })
   })
 })

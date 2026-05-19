@@ -103,6 +103,15 @@ export function useIPC(): void {
     const appendSubsecond = useSubsecondStore.getState().appendBar
     const unsubSubsecond = window.satex.onSubsecondCandlesUpdate?.((c: SubSecondCandle) => appendSubsecond(c)) ?? (() => {})
 
+    // A1 Sprint 2 — boot hydration of per-symbol bucket prefs from disk.
+    // No push channel — prefs change only when the user clicks in Settings,
+    // and that path uses the setSubsecondPref echo to update the store. So
+    // a single mount-time fetch is enough. getState() pattern matches the
+    // rest of the file: no re-subscribe race, honestly-empty deps.
+    void window.satex.getSubsecondPrefs?.()
+      .then((p) => { if (p) useSubsecondStore.getState().hydratePrefs(p) })
+      .catch(() => { /* engine offline / not yet initialized — UI tolerates */ })
+
     // ── Initial seed fetches (post-subscribe so we don't miss a push) ──────
     void window.satex.subscribe([])
     void window.satex.getAutonomousStatus?.().then(s => { if (s) setAutonomous(s) }).catch(() => {})

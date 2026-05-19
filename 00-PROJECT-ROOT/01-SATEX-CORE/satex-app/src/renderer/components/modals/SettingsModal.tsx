@@ -8,6 +8,8 @@
  */
 import { useEffect, useState } from 'react'
 import { Modal } from '../Modal'
+import { UNIVERSE } from '@shared/constants'
+import { useSubsecondStore, type PreferredBucketMs } from '../../stores/subsecondStore'
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -36,6 +38,14 @@ export function SettingsModal({ open, onClose }: Props) {
   const [baiduBusy, setBaiduBusy] = useState(false)
 
   const [zoom, setZoom] = useState(1.0)
+
+  // A1 Sprint 2 — per-symbol sub-second bucket preference. The store mirror
+  // is refreshed on every modal-open (in case a hand-edit of subsecond-prefs.md
+  // happened between this open and the last one) and on every save echo.
+  // CRYPTO_UNIVERSE is computed once at module level via the immutable UNIVERSE
+  // array — no need to memoize per render.
+  const subsecondPrefs = useSubsecondStore((s) => s.prefs)
+  const [subsecondBusy, setSubsecondBusy] = useState<string | null>(null)
 
   // Data-source state (simulator vs Alpaca live) — surfaced so the user has
   // a single in-app place to swap from the env-forced simulator over to
@@ -76,9 +86,27 @@ export function SettingsModal({ open, onClose }: Props) {
         if (baidu) setBaiduHas(baidu.configured)
         const z = await window.satex?.getZoom()
         if (z) setZoom(z)
+        // A1 Sprint 2 — re-fetch sub-second prefs on open so a hand-edit
+        // between mounts is reflected. Engine sanitizer drops bad entries.
+        const p = await window.satex?.getSubsecondPrefs?.()
+        if (p) useSubsecondStore.getState().hydratePrefs(p)
       } catch { /* ignore */ }
     })()
   }, [open])
+
+  async function saveSubsecondPref(symbol: string, bucketMs: PreferredBucketMs): Promise<void> {
+    if (!window.satex?.setSubsecondPref) return
+    setSubsecondBusy(symbol)
+    try {
+      // Echo from main is the authoritative full-prefs map. Hydrating from it
+      // (instead of an optimistic single-key splice) keeps the renderer
+      // mirror byte-for-byte consistent with disk — important if the engine's
+      // sanitizer dropped a stale symbol the renderer still had in memory.
+      const next = await window.satex.setSubsecondPref(symbol, bucketMs)
+      if (next) useSubsecondStore.getState().hydratePrefs(next)
+    } catch { /* engine offline — leave pref unchanged */ }
+    setSubsecondBusy(null)
+  }
 
   async function connectAlpacaLive() {
     if (!window.satex) return
@@ -348,6 +376,41 @@ export function SettingsModal({ open, onClose }: Props) {
             {baiduBusy ? 'Saving…' : 'Save AI Studio Token'}
           </button>
         </div>
+      </div>
+
+      <div className="dialog-section">
+        <div className="dialog-section-title">Sub-second Candles · Crypto only</div>
+        <div className="form-hint">
+          Preferred default bucket per crypto symbol. The chart picks this when you focus the symbol; the timeframe buttons still let you flip at any time. The aggregator maintains both 250 ms and 500 ms internally — switching is free. Sub-second is unavailable for equities (IEX caps snapshots at 1 s; SIP entitlement required for sub-second equities).
+        </div>
+        {UNIVERSE
+          .filter((u) => u.assetClass === 'crypto')
+          .map((u) => {
+            const current: PreferredBucketMs = subsecondPrefs[u.symbol] ?? 250
+            const busy = subsecondBusy === u.symbol
+            return (
+              <div className="form-row" key={u.symbol}>
+                <label>
+                  {u.symbol}
+                  <span style={{ marginLeft: 8, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>{u.name}</span>
+                </label>
+                <div className="seg" style={{ width: 'fit-content', opacity: busy ? 0.5 : 1 }}>
+                  {([250, 500] as const).map((ms) => (
+                    <button
+                      key={ms}
+                      type="button"
+                      className={current === ms ? 'on' : ''}
+                      disabled={busy}
+                      onClick={() => { void saveSubsecondPref(u.symbol, ms) }}
+                      title={ms === 250 ? '~4 min history · finer scalping' : '~8 min history · smoother bars'}
+                    >
+                      {ms} ms
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
       </div>
 
       <div className="dialog-section">

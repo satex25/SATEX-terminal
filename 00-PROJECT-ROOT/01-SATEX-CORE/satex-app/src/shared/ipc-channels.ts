@@ -216,6 +216,19 @@ export const IPC = {
    *  series on chart mount / timeframe switch before live seals start
    *  flowing. Returns SubSecondCandle[] in ascending time order. */
   SUBSECOND_CANDLES_GET: 'satex:a1:subsecondCandlesGet',
+  /** Invoke (renderer → main): returns Record<symbol, 250|500> of the user's
+   *  per-symbol preferred default bucket. Crypto-only (sanitizer drops non-
+   *  crypto entries) — equity / index / future have no sub-second feed so a
+   *  pref for them would never be consulted. Empty object when nothing has
+   *  been configured (engine falls back to 250ms internal default). */
+  SUBSECOND_PREFS_GET: 'satex:a1:subsecondPrefsGet',
+  /** Invoke (renderer → main, { symbol, bucketMs }): set the preferred default
+   *  bucket for one crypto symbol. Validates payload via SubsecondPrefsSetReq
+   *  (literal-union {250,500}). Engine rejects non-crypto symbols silently.
+   *  Returns the full post-update prefs map so the renderer can refresh its
+   *  local mirror without a follow-up GET. Disk write-through happens via the
+   *  engine's onSubsecondPrefChanged listener wired in main. */
+  SUBSECOND_PREFS_SET: 'satex:a1:subsecondPrefsSet',
 } as const
 
 // Runtime array kept solely for the PushChannel type derivation below — the
