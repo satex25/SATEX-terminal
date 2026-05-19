@@ -14,3 +14,14 @@ Thumbs.db
 playwright-results/
 test-results/
 playwright-report/
+
+# S1-8 (2026-05-19) — Authenticode signing material. The .pfx and any password
+# file MUST stay out of git. The .inf template + .csr are safe to commit (they
+# only carry the public CSR; private key lives in the Windows cert store).
+certs/*.pfx
+certs/*.p12
+certs/*.key
+certs/*.password
+certs/*-PRIVATE*
+.env.production
+.env.signing

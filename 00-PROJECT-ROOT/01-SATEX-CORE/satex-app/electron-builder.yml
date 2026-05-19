@@ -21,8 +21,22 @@ win:
   # S0-6: was requireAdministrator with no documented justification — forced
   # UAC on every launch + expanded blast radius if the renderer ever gets
   # compromised. Default asInvoker is correct for an Electron app whose
-  # writes stay inside userData.
+  # writes stay inside userData. DO NOT change to highestAvailable — Authenticode
+  # signing does not require it and asInvoker is the principle-of-least-privilege
+  # default. The S0-6 audit specifically chose this.
   requestedExecutionLevel: asInvoker
+  # S1-8 (2026-05-19) — Authenticode code-signing wiring.
+  # electron-builder picks up these env vars automatically (no YAML config needed):
+  #   CSC_LINK          → absolute path to .pfx, base64 of the .pfx, or HTTPS URL
+  #   CSC_KEY_PASSWORD  → .pfx password
+  # When both are set at build time, the installer is signed with sha256. When
+  # unset, the build proceeds unsigned (current state until cert is procured).
+  # Procurement workflow: see certs/HANDOFF.md.
+  # Never hardcode the .pfx path or password here — they belong in environment
+  # variables only. The certs/ directory is .gitignored for .pfx specifically.
+  signtoolOptions:
+    signingHashAlgorithms:
+      - sha256
 
 nsis:
   oneClick: false

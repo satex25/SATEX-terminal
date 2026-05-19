@@ -1,6 +1,6 @@
 {
   "name": "satex-app",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "description": "SATEX — Smart Autonomous Trading EXperience. Institutional-grade autonomous trading terminal.",
   "author": "SATEX Engineering",

@@ -1,0 +1,30 @@
+; SATEX — Authenticode Code-Signing CSR template
+;
+; Submit the resulting .csr to your chosen CA (Sectigo, DigiCert, SSL.com).
+; Generated 2026-05-19. Keys live in CurrentUser cert store after `certreq -new`.
+;
+; Generate:  certreq -new satex-codesign.inf satex-codesign.csr
+; Submit:    upload satex-codesign.csr text to CA portal
+; Receive:   CA issues satex-codesign.cer + chain; combine with private key into .pfx
+;            certreq -accept <issued.cer>     (binds cert to private key in store)
+;            (then export to .pfx via certmgr.msc or PowerShell)
+
+[Version]
+Signature="$Windows NT$"
+
+[NewRequest]
+Subject = "CN=SATEX Trading Systems, O=SATEX Engineering, C=US"
+KeyLength = 2048
+KeyAlgorithm = RSA
+HashAlgorithm = SHA256
+ProviderName = "Microsoft Enhanced RSA and AES Cryptographic Provider"
+ProviderType = 24
+KeySpec = AT_KEYEXCHANGE
+KeyUsage = 0x80
+RequestType = PKCS10
+Exportable = TRUE
+MachineKeySet = FALSE
+FriendlyName = "SATEX Authenticode 2026-05-19"
+
+[EnhancedKeyUsageExtension]
+OID = 1.3.6.1.5.5.7.3.3

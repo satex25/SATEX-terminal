@@ -5,6 +5,94 @@ All notable changes to SATEX (satex-app) are recorded here. Format roughly follo
 semver because the app is still pre-1.0 — minor bumps may introduce behavior
 changes alongside fixes during the v0.x stabilization series.
 
+## 0.4.3 (2026-05-19)
+
+Technical-debt close-out + signing infrastructure. All seven v0.4.2-deferred
+items shipped behind regression tests. Authenticode signing wiring is in
+place but the installer remains **unsigned** pending CA-issued certificate
+(see `certs/HANDOFF.md`).
+
+### Tests
+- **B1 — tick-recorder flush retry.** 4 new vitest cases pin the
+  copy-don't-move semantics + bounded overflow + recovery + idempotency.
+  Also fixes a latent v0.4.2 bug: the overflow drop sat on the success
+  path where it could never fire; moved into the catch block where it
+  actually caps recorder memory at ~1.6 MB during a long DB outage.
+- **B2 — alpaca bid/ask sentinel.** 4 new cases pin the trade-frame
+  `bid: 0, ask: 0` sentinel + the LiveMarket OR-fallback that preserves
+  the prior quote spread. Volume/VWAP gating on `kind === 't'` also
+  covered.
+- **B3 — futures feed badge.** Extracted the `isSyntheticFeed` decision
+  into `src/renderer/lib/feed-status.ts` as a pure function; 12 vitest
+  cases over every (asset-class × feed-state) pair. WatchlistPanel
+  imports from the lib module. Avoided installing `@testing-library/react`
+  + `jsdom` by keeping the testable logic out of the React component.
+- **B4 — replay clock anomaly.** 5 cases use `vi.setSystemTime` to
+  simulate NTP step-backward and laptop suspend. Pin `autoPausedReason`
+  semantics and the unpause/setSpeed baseline reset so manual pause +
+  speed-flip don't trip the detector.
+- **B5 — alpaca NaN injection (critical).** 12 new cases — 8 cover the
+  WS-boundary `num()`/`ts()`/`sym()` guards directly; 4 cover the
+  OrderManager Gate 0 `Number.isFinite(ctx.refPriceAge)` hardening.
+  Hostile-frame payloads (object-shaped numerics, bad timestamps,
+  100-char symbol DoS) verified to produce finite values + length-capped
+  symbols across both equity and crypto handlers.
+
+### Fixed / refactored
+- **B6 — `STARTING_EQUITY` → `DEFAULT_EQUITY`.** Eight call sites
+  renamed. Old name implied the live session-start equity; the value is
+  in practice a constructor/display default that the OrderManager
+  rebases on first Alpaca sync. Grep for `STARTING_EQUITY` in `src/`
+  returns 0.
+- **B7 — opt-in HW acceleration.** Default behavior preserved (HW accel
+  DISABLED — safe for flaky Win11 GPUs) but now opt-in via
+  `SATEX_HW_ACCEL=1` env var or `userData/enable-gpu.flag` file. On
+  `child-process-gone` (GPU crash) the flag auto-deletes for the next
+  boot, so one GPU crash heals itself.
+- **B8 — `SATEX_VAULT_ROOT` env override.** Vault root resolution now
+  honors the env var first; final fallback changed from `process.cwd()`
+  to `userData/Vault` (cwd() in packaged installs lands on Program Files
+  where writes either fail or pollute system paths).
+- **B10 — initial-state push race removed.** The previous `setTimeout(
+  1500ms)` in `app.whenReady()` pushed 12 channels at a hard-coded
+  delay. Moved into the `SUBSCRIBE` IPC handler via `rebroadcastSnapshot()`
+  so initial state ships on the renderer's actual readiness signal.
+  Bonus: previous SUBSCRIBE pushed a `symbols.includes`-filtered
+  `QUOTES_TICK` that was always empty (renderer passes `[]`) — now
+  pushes the full snapshot.
+- **B11 — `powerMonitor` lifecycle for TickRecorder.** Laptop
+  suspend → recorder pauses. Resume → recorder resumes + force-flushes
+  the in-memory buffer rather than waiting for the next 1s timer tick.
+  Listeners off()'d in shutdown to prevent HMR leak.
+
+### Security
+- **B9 — CSP violation reporting.** New `CSP_VIOLATION_REPORT` IPC
+  channel + Zod schema + preload bridge. Renderer's
+  `securitypolicyviolation` event listener forwards each violation to
+  main, where the rotating S1-7 file sink captures it at WARN level.
+  Any future XSS-via-CSP-block attempt now leaves a forensic trail.
+
+### Infrastructure
+- **S1-8 (Authenticode signing).** Build wiring is cert-ready:
+  - `electron-builder.yml` documents the `CSC_LINK` / `CSC_KEY_PASSWORD`
+    env-var pair; sets `signingHashAlgorithms: [sha256]`.
+  - `scripts/prepack-check.js` now warns (not fails) when those env
+    vars are unset, so dev/smoke builds still produce an unsigned .exe
+    without ceremony.
+  - `certs/satex-codesign.inf` + `certs/satex-codesign.csr` generated
+    on the build machine (private key in CurrentUser cert store, pending
+    issued cert).
+  - `certs/HANDOFF.md` documents the full CA-engagement workflow
+    (Sectigo/DigiCert/SSL.com options + price + EV vs OV trade-offs;
+    `certreq -accept` flow; PFX export; env-var-set + verify-signature
+    commands). The actual procurement is unavoidably user-action (CA
+    identity verification, payment, multi-day issuance) and remains the
+    single v1.0 ship blocker.
+
+### Tests
+- Total: **164 / 164 passing** (up from 127 in v0.4.2; +37 across B1, B2,
+  B3, B4, B5).
+
 ## 0.4.2 (2026-05-18)
 
 ### Fixed

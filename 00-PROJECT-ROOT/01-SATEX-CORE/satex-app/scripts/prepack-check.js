@@ -34,3 +34,17 @@ if (m) {
 }
 
 console.log('[prepack:check] OK — no hardcoded version drift surface in src/main/index.ts');
+
+// S1-8 (2026-05-19) — surface the signing-env-var state. Doesn't block the
+// build (unsigned builds are still useful for dev / smoke testing); just
+// reminds the operator what's about to happen.
+if (process.env.CSC_LINK && process.env.CSC_KEY_PASSWORD) {
+  const masked = process.env.CSC_LINK.length > 40
+    ? process.env.CSC_LINK.slice(0, 20) + '…(base64 or URL)…'
+    : process.env.CSC_LINK;
+  console.log(`[prepack:check] CSC_LINK set (${masked}) + CSC_KEY_PASSWORD set → installer WILL BE SIGNED`);
+} else {
+  console.warn('[prepack:check] CSC_LINK / CSC_KEY_PASSWORD unset → installer WILL BE UNSIGNED.');
+  console.warn('[prepack:check] See certs/HANDOFF.md for the cert procurement workflow.');
+}
+
