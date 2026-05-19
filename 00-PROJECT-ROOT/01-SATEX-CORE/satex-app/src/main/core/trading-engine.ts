@@ -23,7 +23,7 @@ import { OrderManager, type OrderValidationContext } from '../services/order-man
 import { TickRecorder } from '../services/tick-recorder'
 import { ReplaySource } from '../services/replay-source'
 import { HistoricalImporter } from '../services/historical-importer'
-import { SubSecondAggregator, type SubSecondCandle } from '../services/subsecond-aggregator'
+import { SubSecondCandleAggregator, type SubSecondCandle } from '../services/subsecond-aggregator'
 import { computeSnapshot } from '@shared/indicators'
 import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
@@ -225,7 +225,7 @@ export class TradingEngine {
   /** A1 (v0.4.4) — sub-second crypto candle aggregator. Lazily constructed in
    *  initialize() after `db` is open. The crypto WS tick path feeds it via
    *  `onCryptoTick`; renderer subscribes via the listener set below. */
-  private subsecond: SubSecondAggregator | null = null
+  private subsecond: SubSecondCandleAggregator | null = null
   private subsecondListeners: Set<SubSecondCandleListener> = new Set()
   /** Most-recent closed-trade history kept in memory for the JournalPanel.
    *  Pushed to renderer on each close; capped so a long session doesn't
@@ -345,7 +345,7 @@ export class TradingEngine {
     // db helpers added alongside this commit. forceSealAll runs at shutdown
     // and on powerMonitor 'suspend' so the most-recent partial bucket is
     // captured before state is dropped.
-    this.subsecond = new SubSecondAggregator({
+    this.subsecond = new SubSecondCandleAggregator({
       persistence: {
         insert: (c) => db.insertSubSecondCandle(c),
         trim:   (s, b, k) => db.trimSubSecondCandles(s, b, k),

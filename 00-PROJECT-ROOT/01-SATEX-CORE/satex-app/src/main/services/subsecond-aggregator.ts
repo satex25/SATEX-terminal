@@ -70,7 +70,7 @@ export interface AggregatorDeps {
 const DEFAULT_BUCKETS  = [250, 500] as const
 const DEFAULT_MAX_CANDLES = 1000
 
-export class SubSecondAggregator {
+export class SubSecondCandleAggregator {
   private state = new Map<string, Map<number, BucketState>>()
   private readonly buckets:     readonly number[]
   private readonly maxCandles:  number

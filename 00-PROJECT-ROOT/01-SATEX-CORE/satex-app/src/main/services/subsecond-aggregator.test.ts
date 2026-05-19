@@ -12,7 +12,7 @@
  * isolation, and the dual-bucket (250 + 500) interleaving.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { SubSecondAggregator, type SubSecondCandle, type PersistenceShim } from './subsecond-aggregator'
+import { SubSecondCandleAggregator, type SubSecondCandle, type PersistenceShim } from './subsecond-aggregator'
 import type { AlpacaTick } from './alpaca'
 
 /** Fake persistence — captures every insert + trim call. Per-test reset. */
@@ -45,13 +45,13 @@ function tradeTick(o: Partial<AlpacaTick> & { ts: number; price: number }): Alpa
 }
 
 let fake: FakePersistence
-let agg: SubSecondAggregator
+let agg: SubSecondCandleAggregator
 let emitted: SubSecondCandle[]
 
 beforeEach(() => {
   fake = new FakePersistence()
   emitted = []
-  agg = new SubSecondAggregator({
+  agg = new SubSecondCandleAggregator({
     persistence: fake,
     onEmit: (c) => emitted.push({ ...c }),
     buckets: [250, 500],
@@ -59,7 +59,7 @@ beforeEach(() => {
   })
 })
 
-describe('SubSecondAggregator — bucket math', () => {
+describe('SubSecondCandleAggregator — bucket math', () => {
   it('first crypto trade opens a fresh bucket with open=high=low=close', () => {
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
     const state = agg._snapshotState()
@@ -117,7 +117,7 @@ describe('SubSecondAggregator — bucket math', () => {
   })
 })
 
-describe('SubSecondAggregator — filters', () => {
+describe('SubSecondCandleAggregator — filters', () => {
   it('ignores quote frames (kind === "q")', () => {
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100, kind: 'q' }))
     expect(agg._snapshotState().size).toBe(0)
@@ -166,7 +166,7 @@ describe('SubSecondAggregator — filters', () => {
   })
 })
 
-describe('SubSecondAggregator — multi-symbol + multi-bucket independence', () => {
+describe('SubSecondCandleAggregator — multi-symbol + multi-bucket independence', () => {
   it('maintains isolated state for BTC and ETH', () => {
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100, symbol: 'BTC' }))
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 3000, symbol: 'ETH' }))
@@ -188,7 +188,7 @@ describe('SubSecondAggregator — multi-symbol + multi-bucket independence', () 
   })
 })
 
-describe('SubSecondAggregator — retention', () => {
+describe('SubSecondCandleAggregator — retention', () => {
   it('calls persistence.trim after every seal with the configured maxCandles', () => {
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
     agg.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 }))
@@ -199,14 +199,14 @@ describe('SubSecondAggregator — retention', () => {
 
   it('honors a custom maxCandles override', () => {
     const fake2 = new FakePersistence()
-    const agg2 = new SubSecondAggregator({ persistence: fake2, maxCandles: 100 })
+    const agg2 = new SubSecondCandleAggregator({ persistence: fake2, maxCandles: 100 })
     agg2.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
     agg2.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 }))
     expect(fake2.trims[0]!.keep).toBe(100)
   })
 })
 
-describe('SubSecondAggregator — forceSealAll', () => {
+describe('SubSecondCandleAggregator — forceSealAll', () => {
   it('persists every in-flight bucket and clears state', () => {
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100, symbol: 'BTC' }))
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 3000, symbol: 'ETH' }))
@@ -225,7 +225,7 @@ describe('SubSecondAggregator — forceSealAll', () => {
   })
 })
 
-describe('SubSecondAggregator — failure resilience', () => {
+describe('SubSecondCandleAggregator — failure resilience', () => {
   it('swallows a persistence.insert throw and still emits to the renderer', () => {
     fake.failNext = true
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
@@ -238,7 +238,7 @@ describe('SubSecondAggregator — failure resilience', () => {
   })
 
   it('a throwing onEmit does not break the live tick path', () => {
-    const agg3 = new SubSecondAggregator({
+    const agg3 = new SubSecondCandleAggregator({
       persistence: fake,
       onEmit: () => { throw new Error('renderer push failed (test)') },
     })
