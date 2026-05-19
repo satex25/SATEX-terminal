@@ -6,7 +6,7 @@
  */
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Notification, shell } from 'electron'
 import { join } from 'path'
-import { existsSync } from 'node:fs'
+import { existsSync, unlinkSync } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { z, type ZodTypeAny } from 'zod'
 import { TradingEngine } from './core/trading-engine'
@@ -58,22 +58,52 @@ enableFileSink(app.getPath('userData'))
 
 const log = createLogger('main')
 
-// ── Chromium stability shims ────────────────────────────────────────────────
-// Windows Electron repeatedly hits "Network service crashed, restarting
-// service" during the renderer's initial load, which leaves the BrowserWindow
-// stuck on a blank page and the `ready-to-show` event never fires. The
-// canonical workaround is to disable hardware-accelerated compositing in the
-// main process — kills the GPU process, which is the upstream cause of the
-// network-service crash on flaky Win11 GPU drivers. Trade-off is a small
-// rendering perf hit, but the SATEX terminal is text-heavy and runs fine
-// without GPU compositing.
+// ── Chromium stability shims — opt-in HW acceleration (v0.4.3 B7) ──────────
+// HISTORY: Windows Electron on flaky Win11 GPU drivers hits "Network service
+// crashed, restarting service" during the renderer's initial load. Disabling
+// hardware-accelerated compositing kills the GPU process (the upstream cause)
+// and the issue clears. Cost is a small text-rendering perf hit, which the
+// SATEX terminal absorbs fine.
+//
+// v0.4.3 B7 change: HW acceleration is still DISABLED BY DEFAULT (safety
+// first), but users with known-good GPUs can opt in via either:
+//   • `SATEX_HW_ACCEL=1` environment variable (one-off per launch), or
+//   • a `userData/enable-gpu.flag` file (persistent across launches).
+//
+// Auto-blacklist: if the GPU process crashes during a session that started
+// with HW accel enabled, the flag is auto-deleted so the next boot reverts
+// to the safe-default (disabled). This means a single GPU crash heals
+// itself on restart — users don't need to know how to flip a setting.
+//
+// `app.getGPUInfo()` would be the "correct" probe but it's async + only
+// valid after `app.ready`, while `disableHardwareAcceleration()` must run
+// BEFORE `ready`. Persisted-flag pattern is the only viable shape inside
+// Electron's lifecycle constraints.
 //
 // MUST run before app.whenReady() — switches set after `ready` are ignored.
-app.disableHardwareAcceleration()
-// Force-disable the GPU sandbox for the same reason — some Win11 builds need
-// both switches to stop the network service from cycling.
-app.commandLine.appendSwitch('disable-gpu')
-app.commandLine.appendSwitch('disable-gpu-compositing')
+const ENABLE_GPU_FLAG = join(app.getPath('userData'), 'enable-gpu.flag')
+const enableGpu = process.env['SATEX_HW_ACCEL'] === '1' || existsSync(ENABLE_GPU_FLAG)
+if (!enableGpu) {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+}
+// Auto-blacklist on GPU process death — gracefully degrade for next boot.
+// child-process-gone replaces gpu-process-crashed since Electron 22.
+app.on('child-process-gone', (_e, details) => {
+  if (details.type === 'GPU' && details.reason !== 'clean-exit') {
+    try {
+      if (existsSync(ENABLE_GPU_FLAG)) {
+        unlinkSync(ENABLE_GPU_FLAG)
+        // Logger may not be wired yet during the very early crash path; use
+        // a plain console.warn so the message at least lands in the file
+        // sink once it's online.
+        // eslint-disable-next-line no-console
+        console.warn('[satex] GPU process crashed — removed enable-gpu flag; next boot will use software rendering')
+      }
+    } catch { /* best-effort */ }
+  }
+})
 
 // ── A4 — Crash dump capture (Chromium Crashpad) ─────────────────────────────
 // Enables minidump generation on main / renderer / GPU process crashes. The
