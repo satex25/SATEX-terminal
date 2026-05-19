@@ -175,10 +175,23 @@ process.on('uncaughtException', (err) => gracefulShutdown('uncaughtException', e
 process.on('unhandledRejection', (reason) => gracefulShutdown('unhandledRejection', reason))
 
 function resolveVaultProjectRoot(): string {
+  // v0.4.3 B8 — SATEX_VAULT_ROOT env override takes precedence over auto-
+  // discovery. Packaged installs ship app.getAppPath() pointing inside the
+  // asar bundle, where the walk-up for .obsidian/ fails and the vault writer
+  // lands on `process.cwd()` — often the Program Files install dir, where
+  // writes either silently fail (UAC) or pollute system paths. Setting
+  // SATEX_VAULT_ROOT=C:\Users\me\SatexVault in the user's environment makes
+  // the resolution deterministic and the vault writes targetable.
+  const envRoot = process.env['SATEX_VAULT_ROOT']
+  if (envRoot && existsSync(envRoot)) {
+    return envRoot
+  }
   // electron-vite builds main into <repo>/00-PROJECT-ROOT/01-SATEX-CORE/satex-app/out/main/
   // and the vault lives at <repo-root>/Vault/. app.getAppPath() returns the
   // satex-app dir; walk up to find the directory that contains .obsidian/.
-  // Falls back to cwd if no marker is found within 6 levels.
+  // Falls back to userData/Vault (always writable, predictable) if no marker
+  // is found within 6 levels — better than the previous cwd fallback which
+  // could land on the Program Files install dir under a packaged build.
   const start = app.getAppPath()
   let cur = start
   for (let i = 0; i < 6; i++) {
@@ -190,7 +203,8 @@ function resolveVaultProjectRoot(): string {
     if (parent === cur) break
     cur = parent
   }
-  return process.cwd()
+  // Packaged-install safe fallback: userData/Vault is always writable.
+  return join(app.getPath('userData'), 'Vault')
 }
 
 // ── Window ───────────────────────────────────────────────────────────────────
