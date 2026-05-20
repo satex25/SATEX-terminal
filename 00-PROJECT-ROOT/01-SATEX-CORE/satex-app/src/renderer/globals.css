@@ -2218,13 +2218,22 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .bb-ws-tab {
   background: transparent; border: 0;
   color: var(--bb-txt-dim);
-  border-bottom: 1px solid transparent;
+  /* v0.6 Phase 2.5 — base border is 2px so the active state can bump width
+   * without a 1px layout shift on click. Inactive stays transparent. */
+  border-bottom: 2px solid transparent;
   padding: 4px 2px;
   font-size: 11px; letter-spacing: 0.04em;
   font-family: inherit; cursor: pointer;
 }
 .bb-ws-tab:hover { color: var(--bb-txt); }
-.bb-ws-tab.on { color: var(--bb-accent); border-bottom-color: var(--bb-accent); }
+.bb-ws-tab.on {
+  color: var(--bb-accent);
+  border-bottom-color: var(--bb-accent);
+  /* v0.6 Phase 2.5 — match the v3 prototype's active-tab emphasis. The 2px
+   * border + 600 weight read as "this is where you are" without needing
+   * additional surface chrome. Theme-reactive via var(--bb-accent). */
+  font-weight: 600;
+}
 
 .bb-cmd-stub {
   display: flex; align-items: center; gap: 8px;
