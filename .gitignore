@@ -103,14 +103,8 @@ tmp/
 "Screenshot *"
 Untitled.base
 
-# Accidental Vite scaffold left over from a mistyped `npm create vite`
-00-PROJECT-ROOT/01-SATEX-CORE/satex-app --template react-ts/
-
 # Archived cruft — kept on disk for reference, never committed
 RUBBISH/
-
-# Audit workfiles — raw specialist agent reports (kept locally for traceability)
-.audit-workfiles/
 
 # Obsidian vault workspace state (keep notes, drop workspace cache)
 .obsidian/workspace*

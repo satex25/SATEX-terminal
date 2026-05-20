@@ -102,6 +102,3 @@ tmp/
 *.temp
 .tmp_*
 
-# Accidental Vite scaffold left over from `npm create vite -- --template react-ts`
-# Real godmode app lives at satex-app/; this folder is unused boilerplate.
-satex-app --template react-ts/
