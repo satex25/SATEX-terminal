@@ -26,6 +26,13 @@
   --bb-neg:       #ff4655;
   --bb-warn:      #f5a623;
   --bb-gold:      #c9a04a;
+  /* v0.6 Phase 1 — period-based EMA color tokens. Surfaced for future chart
+   *  consumers; the current ChartPanel still drives EMA color from the HMM
+   *  regime (regimeToEmaColor in ChartPanel.tsx). Theme overrides below mutate
+   *  these so a renderer that wires to --bb-ema9 / --bb-ema21 reacts to
+   *  theme switches without code changes. */
+  --bb-ema9:      #f5c46a;
+  --bb-ema21:     #b48cff;
 
   /* ── Compatibility shim ───────────────────────────────────────────────────
      Legacy Tokyo-era token names mapped to Black Box values so existing CSS
@@ -97,6 +104,39 @@
 /* Legacy data-accent attribute — no-op now since cyan is the only accent.
    Kept so old <html data-accent="..."> writes don't break style cascade. */
 :root[data-accent] { --accent: var(--bb-accent); --accent-2: var(--bb-accent-d); --accent-glow: var(--bb-accent); --accent-soft: rgba(0,200,255,0.16); --accent-faint: rgba(0,200,255,0.05); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * v0.6 Phase 1 — alternative theme palettes
+ *
+ * Applied by the themeStore writing `data-theme="<id>"` on the <html> root.
+ * Default theme (no attribute set OR data-theme="blackbox"/"tokyo") inherits
+ * the Classic Black Box tokens defined in `:root` above. The two alternatives
+ * below override the core --bb-* tokens; the compatibility shim's
+ * `var(--bb-*)` references resolve via the cascade so derived names
+ * (--bull, --bear, --accent, etc.) update automatically.
+ *
+ * Caveat — the *-soft / *-glow rgba() values in the shim are hardcoded with
+ * the Classic palette's RGB channels (e.g. `rgba(33,201,122,0.16)`). A future
+ * polish pass should migrate those to color-mix() so they track theme
+ * changes. For Phase 1 the core swatches + accent ring are sufficient to
+ * see the theme switch live.
+ * ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme="mono"] {
+  --bb-pos:      #f0f0f4;
+  --bb-neg:      #8a8a92;
+  --bb-ema9:     #c8c8d0;
+  --bb-ema21:    #7a7a84;
+  --bb-accent:   #cfcfd4;
+  --bb-accent-d: #9a9aa4;
+}
+:root[data-theme="bluyel"] {
+  --bb-pos:      #3b9eff;
+  --bb-neg:      #f5c542;
+  --bb-ema9:     #ffd86b;
+  --bb-ema21:    #69b8ff;
+  --bb-accent:   #3b9eff;
+  --bb-accent-d: #2378c8;
+}
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden; }
