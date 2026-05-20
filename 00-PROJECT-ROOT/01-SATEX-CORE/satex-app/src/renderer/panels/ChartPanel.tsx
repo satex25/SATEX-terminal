@@ -145,6 +145,7 @@ export function ChartPanel() {
   const candles  = useMarketStore(selectCandles(symbol))
   const indicators = useAccountStore(s => s.indicators.get(symbol))
   const indSettings = useIndicatorStore(s => s.settings)
+  const setLegendVisible = useIndicatorStore(s => s.setLegendVisible)
   const regimeSnap  = useRegimeStore(s => s.snapshot)
   // C13 / F2 — VPIN-driven flow-toxicity overlay. Subscribe to the depth
   // snapshot for the focused symbol (depth-feed.ts publishes one snapshot at
@@ -911,10 +912,13 @@ export function ChartPanel() {
         try { main.removePriceLine(l) } catch { /* ignore */ }
       }
       pivotLineRefs.current = []
+      // The "awaiting prior-day H/L/C" state is already surfaced in the
+      // indicator legend ("PP · awaiting") — duplicating it in the
+      // .chart-ind-warn watermark just creates noise at the right edge of
+      // the chart. So this block stays warning-free: pivot points either
+      // render or they don't, and the legend communicates which case is live.
       const localNotes: string[] = []
-      if (!priorHlc) {
-        localNotes.push('Pivot Points awaiting prior-day H/L/C')
-      } else {
+      if (priorHlc) {
         const H = priorHlc.high, L = priorHlc.low, C = priorHlc.close
         const pp = (H + L + C) / 3
         const R1 = 2 * pp - L, S1 = 2 * pp - H
@@ -1130,6 +1134,25 @@ export function ChartPanel() {
             })}
           </div>
 
+          {/* Indicator-legend visibility toggle (A1 follow-up). Lets a power
+              user hide the per-series label stack in the chart's top-right
+              corner without disabling the indicators themselves. Reuses the
+              `.seg` chip styling so it visually slots next to the timeframe
+              picker without new CSS. */}
+          <div className="seg" role="group" aria-label="Indicator legend visibility">
+            <button
+              type="button"
+              className={indSettings.legendVisible ? 'on' : ''}
+              onClick={() => setLegendVisible(!indSettings.legendVisible)}
+              title={indSettings.legendVisible
+                ? 'Hide the indicator legend (the indicators themselves stay drawn)'
+                : 'Show the indicator legend'}
+              aria-pressed={indSettings.legendVisible}
+            >
+              LEGEND
+            </button>
+          </div>
+
           <div className="chart-histday" role="group" aria-label="Historical day replay">
             {inReplay ? (
               <>
@@ -1261,8 +1284,11 @@ export function ChartPanel() {
         )}
 
         {/* Indicator legend (Phase 11) — driven by useIndicatorStore. Hidden
-            when no overlay is enabled so the chart canvas isn't cluttered. */}
-        {(indSettings.enabled.ema
+            when no overlay is enabled (canvas stays uncluttered) AND hidden
+            when the user explicitly toggles legendVisible off via the LEGEND
+            button in the chart toolbar. The indicators themselves still
+            compute and draw — only the right-corner label list is suppressed. */}
+        {indSettings.legendVisible && (indSettings.enabled.ema
           || indSettings.enabled.rsi
           || indSettings.enabled.fibonacci
           || indSettings.enabled['pivot-points']

@@ -196,6 +196,7 @@ export const IndicatorSettingsSetReq = z.object({
   emaPeriods: z.array(EmaPeriodS).min(1).max(4),
   rsiPeriod: z.number().int().min(2).max(200),
   fibLookback: z.number().int().min(5).max(1000),
+  legendVisible: z.boolean(),
 })
 export type IndicatorSettingsSetReq = z.infer<typeof IndicatorSettingsSetReq>
 

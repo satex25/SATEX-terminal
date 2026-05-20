@@ -103,6 +103,13 @@ export interface IndicatorSettings {
   rsiPeriod: number
   /** Fibonacci anchor lookback (bars). */
   fibLookback: number
+  /** Whether the .chart-ind-legend overlay is rendered on the chart. The
+   *  indicators themselves still compute and draw when their `enabled` flag
+   *  is set — this only hides the per-series label list in the chart's
+   *  top-right corner. Defaults true; toggled via the LEGEND button in the
+   *  chart toolbar. Backward-compatible: a persisted settings file from
+   *  before this field existed sanitizes to true via the default. */
+  legendVisible: boolean
 }
 
 export const DEFAULT_INDICATOR_SETTINGS: IndicatorSettings = {
@@ -115,7 +122,8 @@ export const DEFAULT_INDICATOR_SETTINGS: IndicatorSettings = {
     'fibonacci':     false,
     'pivot-points':  false,
   },
-  emaPeriods:  [9, 21],
-  rsiPeriod:   14,
-  fibLookback: 50,
+  emaPeriods:    [9, 21],
+  rsiPeriod:     14,
+  fibLookback:   50,
+  legendVisible: true,
 }

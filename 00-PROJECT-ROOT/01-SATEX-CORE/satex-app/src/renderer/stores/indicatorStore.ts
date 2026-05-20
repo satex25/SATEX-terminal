@@ -29,6 +29,10 @@ interface IndicatorStoreState {
   toggleEmaPeriod: (p: EmaPeriod) => void
   setRsiPeriod:    (n: number) => void
   setFibLookback:  (n: number) => void
+  /** Show/hide the chart-overlay indicator legend without affecting which
+   *  indicators are computing. Persists to disk via the same write-through
+   *  pipe as the other settings. */
+  setLegendVisible: (v: boolean) => void
   /** Hydrate from the main process via window.satex.indicators.getSettings. */
   hydrate: () => Promise<void>
   /** Manually persist current state (most setters auto-persist; this is the
@@ -90,6 +94,14 @@ export const useIndicatorStore = create<IndicatorStoreState>((set, get) => ({
     const clamped = Math.max(5, Math.min(1000, Math.round(n)))
     if (clamped === cur.fibLookback) return
     const next: IndicatorSettings = { ...cur, fibLookback: clamped }
+    set({ settings: next })
+    persist(next)
+  },
+
+  setLegendVisible: (v) => {
+    const cur = get().settings
+    if (cur.legendVisible === v) return
+    const next: IndicatorSettings = { ...cur, legendVisible: v }
     set({ settings: next })
     persist(next)
   },

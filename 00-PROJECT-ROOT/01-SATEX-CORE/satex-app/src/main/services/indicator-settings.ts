@@ -143,6 +143,12 @@ function sanitize(input: Partial<IndicatorSettings>): IndicatorSettings {
   }
   const rsiPeriod = clampInt(input.rsiPeriod, DEFAULT_SETTINGS.rsiPeriod, 2, 200)
   const fibLookback = clampInt(input.fibLookback, DEFAULT_SETTINGS.fibLookback, 5, 1000)
+  // Backward-compat: persisted files written before legendVisible existed
+  // come back as undefined; default to the type's true so existing users
+  // don't see the legend silently vanish on the next launch.
+  const legendVisible = typeof input.legendVisible === 'boolean'
+    ? input.legendVisible
+    : DEFAULT_SETTINGS.legendVisible
 
   return {
     version: 1,
@@ -150,6 +156,7 @@ function sanitize(input: Partial<IndicatorSettings>): IndicatorSettings {
     emaPeriods:  validPeriods.length > 0 ? validPeriods : [...DEFAULT_SETTINGS.emaPeriods],
     rsiPeriod,
     fibLookback,
+    legendVisible,
   }
 }
 

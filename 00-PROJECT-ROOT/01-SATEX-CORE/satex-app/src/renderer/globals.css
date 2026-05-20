@@ -3202,7 +3202,14 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   z-index: 4;
   font-family: var(--font-mono);
   letter-spacing: 0.04em;
-  max-width: 280px;
+  /* Wider than the original 280px so common messages ("Pivot Points
+     awaiting prior-day H/L/C") fit on a single line. white-space stays
+     normal so multi-line messages wrap at word boundaries; overflow-wrap
+     break-word is a safety net for any future hyphen-free long token so
+     it can't escape the box mid-character. */
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 .chart-ind-warn::before {
   content: "⚠ INSUFFICIENT DATA";
