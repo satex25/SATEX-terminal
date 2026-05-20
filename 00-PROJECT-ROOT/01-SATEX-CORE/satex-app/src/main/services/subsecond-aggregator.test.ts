@@ -1,10 +1,15 @@
 /**
- * SATEX — Sub-second crypto candle aggregator tests (A1, v0.4.4).
+ * SATEX — Sub-second crypto candle aggregator tests (A1, v0.4.4 → Sprint 3).
  *
  * Pins the per-(symbol, bucketMs) OHLC math, the roll-then-seal contract on
- * the bucket boundary, the kind/asset-class filters, and the retention trim
- * invariant. Pure logic — no electron, no SQLite. The PersistenceShim is
- * a fake that captures inserts in an array so assertions read like a tape.
+ * the bucket boundary, the kind/asset-class filters, and the Sprint 3
+ * telemetry-hook contract. Pure logic — no electron, no SQLite. The
+ * PersistenceShim is a fake that captures inserts in an array so assertions
+ * read like a tape.
+ *
+ * Sprint 3 — retention trim is no longer the aggregator's concern (lifted to
+ * SubsecondRetentionWorker on a 60s cadence). PersistenceShim is now
+ * insert-only; tests for the trim contract live in `subsecond-retention.test.ts`.
  *
  * The aggregator is a hot-path component for v0.5 scalping plays — any
  * regression here corrupts the chart timeline silently. Tests are deliberately
@@ -15,19 +20,14 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { SubSecondCandleAggregator, type SubSecondCandle, type PersistenceShim, type PreferredBucket } from './subsecond-aggregator'
 import type { AlpacaTick } from './alpaca'
 
-/** Fake persistence — captures every insert + trim call. Per-test reset. */
+/** Fake persistence — captures every insert call. Per-test reset. */
 class FakePersistence implements PersistenceShim {
   inserts: SubSecondCandle[] = []
-  trims:   Array<{ symbol: string; bucketMs: number; keep: number }> = []
   /** Set to true to make insert throw — exercises the aggregator's swallow path. */
   failNext = false
   insert(c: SubSecondCandle): void {
     if (this.failNext) { this.failNext = false; throw new Error('disk full (test)') }
     this.inserts.push({ ...c })
-  }
-  trim(symbol: string, bucketMs: number, keep: number): number {
-    this.trims.push({ symbol, bucketMs, keep })
-    return 0
   }
 }
 
@@ -55,7 +55,6 @@ beforeEach(() => {
     persistence: fake,
     onEmit: (c) => emitted.push({ ...c }),
     buckets: [250, 500],
-    maxCandles: 1000,
   })
 })
 
@@ -188,21 +187,50 @@ describe('SubSecondCandleAggregator — multi-symbol + multi-bucket independence
   })
 })
 
-describe('SubSecondCandleAggregator — retention', () => {
-  it('calls persistence.trim after every seal with the configured maxCandles', () => {
-    agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
-    agg.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 }))
-    // One 250 seal happened — exactly one trim call for that pair.
-    const trims = fake.trims.filter(t => t.bucketMs === 250)
-    expect(trims).toEqual([{ symbol: 'BTC', bucketMs: 250, keep: 1000 }])
+// Sprint 3 — the aggregator no longer calls persistence.trim. The retention
+// contract is now owned by SubsecondRetentionWorker; tests live in
+// `subsecond-retention.test.ts`. PersistenceShim deliberately has no `trim`
+// method anymore — adding it back here would invite the per-insert hot-path
+// trim to drift back in.
+describe('SubSecondCandleAggregator — Sprint 3 telemetry hook', () => {
+  it('calls onTelemetryEmit on every seal with (symbol, bucketMs)', () => {
+    const calls: Array<{ symbol: string; bucketMs: number }> = []
+    const agg2 = new SubSecondCandleAggregator({
+      persistence: fake,
+      onTelemetryEmit: (symbol, bucketMs) => { calls.push({ symbol, bucketMs }) },
+    })
+    agg2.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
+    agg2.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 })) // rolls 250
+    agg2.ingestTick(tradeTick({ ts: 1_000_000_550, price: 108 })) // rolls 250 + 500
+    expect(calls).toEqual([
+      { symbol: 'BTC', bucketMs: 250 },
+      { symbol: 'BTC', bucketMs: 250 },
+      { symbol: 'BTC', bucketMs: 500 },
+    ])
   })
 
-  it('honors a custom maxCandles override', () => {
-    const fake2 = new FakePersistence()
-    const agg2 = new SubSecondCandleAggregator({ persistence: fake2, maxCandles: 100 })
+  it('a throwing onTelemetryEmit does NOT crash the live tick path', () => {
+    const agg2 = new SubSecondCandleAggregator({
+      persistence: fake,
+      onTelemetryEmit: () => { throw new Error('telemetry counter overflow (test)') },
+    })
     agg2.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
+    expect(() => agg2.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 }))).not.toThrow()
+  })
+
+  it('onTelemetryEmit fires even when persistence.insert throws', () => {
+    // From the engine's POV the seal "happened" — the renderer saw the bar.
+    // Telemetry tracks emit volume, not durability — so the counter must
+    // increment regardless of whether the row landed on disk.
+    const calls: Array<{ symbol: string; bucketMs: number }> = []
+    const agg2 = new SubSecondCandleAggregator({
+      persistence: fake,
+      onTelemetryEmit: (symbol, bucketMs) => { calls.push({ symbol, bucketMs }) },
+    })
+    agg2.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
+    fake.failNext = true
     agg2.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 }))
-    expect(fake2.trims[0]!.keep).toBe(100)
+    expect(calls).toEqual([{ symbol: 'BTC', bucketMs: 250 }])
   })
 })
 
@@ -230,10 +258,11 @@ describe('SubSecondCandleAggregator — failure resilience', () => {
     fake.failNext = true
     agg.ingestTick(tradeTick({ ts: 1_000_000_000, price: 100 }))
     agg.ingestTick(tradeTick({ ts: 1_000_000_300, price: 105 })) // triggers the failing seal
-    // Insert threw; trim was NOT called (because the throw short-circuited);
-    // but the renderer still got the bar so the chart shows a live shape.
+    // Insert threw, but the renderer still got the bar so the chart shows a
+    // live shape. (Retention trim used to be inside this same try/catch in
+    // Sprint 1 — Sprint 3 lifted it to the periodic worker, so the catch is
+    // now strictly about the insert call.)
     expect(fake.inserts).toHaveLength(0)
-    expect(fake.trims.filter(t => t.bucketMs === 250)).toHaveLength(0)
     expect(emitted.filter(c => c.bucketMs === 250)).toHaveLength(1)
   })
 

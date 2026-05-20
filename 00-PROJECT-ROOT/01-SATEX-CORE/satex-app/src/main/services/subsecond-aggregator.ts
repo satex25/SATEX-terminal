@@ -47,9 +47,6 @@ interface BucketState {
 
 export interface PersistenceShim {
   insert: (c: SubSecondCandle) => void
-  /** Returns rows-deleted count. Aggregator doesn't currently use the return
-   *  value but tests assert against it. */
-  trim:   (symbol: string, bucketMs: number, keep: number) => number
 }
 
 export interface AggregatorDeps {
@@ -61,20 +58,21 @@ export interface AggregatorDeps {
    *  Pinned per-symbol changes are not supported in Sprint 1 — every crypto
    *  symbol gets both bucket sizes. */
   buckets?:    readonly number[]
-  /** Retention cap per (symbol, bucketMs). At 250ms that's ~4 min of history;
-   *  at 500ms ~8 min. Older rows are trimmed application-side after each
-   *  insert. */
-  maxCandles?: number
   /** Sprint 2 — fired AFTER a successful setPreferredBucket. trading-engine
    *  wires this to SubsecondPrefsService.setOne() so the pref is persisted to
    *  disk. The aggregator does not depend on persistence success — if the
    *  callback throws the in-memory pref is still updated (the next renderer
    *  read sees the new value; only the disk durability is lost). */
   onPreferenceChanged?: (symbol: string, ms: PreferredBucket) => void
+  /** Sprint 3 — fired AFTER every successful seal (insert + onEmit). Wired by
+   *  trading-engine to `SubsecondTelemetry.recordEmit()` so the once-per-minute
+   *  INFO log can report the per-(symbol, bucketMs) emit rate. Optional — if
+   *  unset, the aggregator runs as a silent producer. Throws are swallowed
+   *  (telemetry failure must never crash the live tick path). */
+  onTelemetryEmit?: (symbol: string, bucketMs: number) => void
 }
 
 const DEFAULT_BUCKETS  = [250, 500] as const
-const DEFAULT_MAX_CANDLES = 1000
 
 /** Sprint 2 — buckets a user can pick as the per-symbol default. Tighter than
  *  the maintained set (which could grow to include 100ms later) so the
@@ -91,17 +89,17 @@ export class SubSecondCandleAggregator {
    *  (not in renderer state) so the preference survives a renderer reload. */
   private preferredBucketBySymbol = new Map<string, PreferredBucket>()
   private readonly buckets:     readonly number[]
-  private readonly maxCandles:  number
   private readonly persistence: PersistenceShim
   private readonly onEmit?:     (c: SubSecondCandle) => void
   private readonly onPreferenceChanged?: (symbol: string, ms: PreferredBucket) => void
+  private readonly onTelemetryEmit?:     (symbol: string, bucketMs: number) => void
 
   constructor(deps: AggregatorDeps) {
     this.persistence = deps.persistence
     this.onEmit      = deps.onEmit
     this.buckets     = deps.buckets    ?? DEFAULT_BUCKETS
-    this.maxCandles  = deps.maxCandles ?? DEFAULT_MAX_CANDLES
     this.onPreferenceChanged = deps.onPreferenceChanged
+    this.onTelemetryEmit     = deps.onTelemetryEmit
   }
 
   /** Sprint 2 — set the user's preferred default bucket for `symbol`. Pure
@@ -234,22 +232,31 @@ export class SubSecondCandleAggregator {
     current.volume += size
   }
 
-  /** Persist + emit + trim the supplied bucket. Used by both the natural
-   *  roll path (ingestOne) and the explicit forceSealAll path. */
+  /** Persist + emit the supplied bucket. Used by both the natural roll path
+   *  (ingestOne) and the explicit forceSealAll path.
+   *
+   *  Sprint 3 — retention trim moved out of the hot path. The inline
+   *  `persistence.trim` call ran on every seal (~12 calls/sec at steady state
+   *  across 3 crypto symbols × 2 bucket sizes); it's now driven by the
+   *  periodic SubsecondRetentionWorker on a 60s cadence. The worker is the
+   *  ONLY production caller of `trimSubSecondCandles` — never reintroduce a
+   *  trim call here. */
   private sealBucket(symbol: string, bucketMs: number, b: BucketState): void {
     const row: SubSecondCandle = {
       symbol, bucketMs, openMs: b.openMs,
       open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
     }
-    try {
-      this.persistence.insert(row)
-      this.persistence.trim(symbol, bucketMs, this.maxCandles)
-    } catch {
+    try { this.persistence.insert(row) }
+    catch {
       // Persistence failures must not kill the live tick path. The bucket is
       // lost from durable storage but the renderer emission still happens
       // (best-effort) so the chart at least reflects the live shape.
     }
     try { this.onEmit?.(row) } catch { /* renderer push must never crash engine */ }
+    // Telemetry counter runs even when persistence threw — the emit DID
+    // happen from the engine's POV (renderer received it), which is what the
+    // emit-rate log is measuring.
+    try { this.onTelemetryEmit?.(symbol, bucketMs) } catch { /* never crash engine on telemetry */ }
   }
 
   /** Seal every in-flight bucket and drop internal state. Called at engine

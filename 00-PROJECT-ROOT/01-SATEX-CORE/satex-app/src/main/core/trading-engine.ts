@@ -24,6 +24,8 @@ import { TickRecorder } from '../services/tick-recorder'
 import { ReplaySource } from '../services/replay-source'
 import { HistoricalImporter } from '../services/historical-importer'
 import { SubSecondCandleAggregator, type SubSecondCandle, type PreferredBucket } from '../services/subsecond-aggregator'
+import { SubsecondRetentionWorker } from '../services/subsecond-retention'
+import { SubsecondTelemetry } from '../services/subsecond-telemetry'
 import { computeSnapshot } from '@shared/indicators'
 import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
@@ -234,6 +236,12 @@ export class TradingEngine {
    *  wires SubsecondPrefsService.setOne here so a renderer setSubsecondPref
    *  IPC call persists to disk. */
   private subsecondPrefListeners: Set<SubSecondPrefChangedListener> = new Set()
+  /** A1 Sprint 3 — periodic retention worker (60s cadence). Replaces the
+   *  per-insert trim that ran inside aggregator.sealBucket() in Sprint 1. */
+  private subsecondRetention: SubsecondRetentionWorker | null = null
+  /** A1 Sprint 3 — per-minute INFO log of (symbol, bucketMs) emit rates so
+   *  operators can spot pathological symbols in production logs. */
+  private subsecondTelemetry: SubsecondTelemetry | null = null
   /** Most-recent closed-trade history kept in memory for the JournalPanel.
    *  Pushed to renderer on each close; capped so a long session doesn't
    *  grow unbounded. Persists across replay swap (it's session-scoped). */
@@ -352,11 +360,19 @@ export class TradingEngine {
     // db helpers added alongside this commit. forceSealAll runs at shutdown
     // and on powerMonitor 'suspend' so the most-recent partial bucket is
     // captured before state is dropped.
-    this.subsecond = new SubSecondCandleAggregator({
+    // A1 Sprint 3 — telemetry built BEFORE the aggregator so the aggregator
+    // can take its recordEmit method as the onTelemetryEmit dep. The retention
+    // worker is independent of the aggregator — it reads the table directly
+    // via db.getAllSubSecondSeries — and is constructed alongside.
+    this.subsecondTelemetry = new SubsecondTelemetry({})
+    this.subsecondRetention = new SubsecondRetentionWorker({
       persistence: {
-        insert: (c) => db.insertSubSecondCandle(c),
-        trim:   (s, b, k) => db.trimSubSecondCandles(s, b, k),
+        getAllSeries: () => db.getAllSubSecondSeries(),
+        trim:         (s, b, k) => db.trimSubSecondCandles(s, b, k),
       },
+    })
+    this.subsecond = new SubSecondCandleAggregator({
+      persistence: { insert: (c) => db.insertSubSecondCandle(c) },
       onEmit: (c) => { for (const l of this.subsecondListeners) l(c) },
       // A1 Sprint 2 — write-through fan-out. main/index.ts subscribes via
       // engine.onSubsecondPrefChanged() and calls SubsecondPrefsService.setOne
@@ -368,7 +384,15 @@ export class TradingEngine {
           catch (e) { log.warn('subsecond pref listener threw', { err: String(e) }) }
         }
       },
+      // A1 Sprint 3 — bind the telemetry counter to every seal. Bound method
+      // reference is stable (telemetry is constructed once); aggregator
+      // swallows any throw so a telemetry hiccup can never crash the tick path.
+      onTelemetryEmit: (sym, bms) => this.subsecondTelemetry?.recordEmit(sym, bms),
     })
+    // Start both Sprint 3 workers now that all wiring is complete. start() is
+    // idempotent on both; shutdown() pairs each with stop().
+    this.subsecondRetention.start()
+    this.subsecondTelemetry.start()
 
     // Brain — load weights from db
     this.brain.initialize()
@@ -608,6 +632,11 @@ export class TradingEngine {
     try { powerMonitor.off('resume',  this.onSystemResume)  } catch { /* not registered */ }
     this.recorder?.stop()
     this.replay?.stop()
+    // A1 Sprint 3 — stop the periodic workers BEFORE forceSealAll so no
+    // retention trim is in flight against a DB that's about to be closed.
+    // Both stop() methods are idempotent + sync.
+    this.subsecondRetention?.stop()
+    this.subsecondTelemetry?.stop()
     // A1 (v0.4.4) — flush every in-flight sub-second bucket before db.closeDB
     // below truncates the WAL. forceSealAll runs synchronous prepare+run; safe
     // to call here. Subsequent operations on a closed DB would throw, hence

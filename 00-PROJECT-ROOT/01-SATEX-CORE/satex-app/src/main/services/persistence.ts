@@ -685,8 +685,10 @@ export function getSubSecondCandles(symbol: string, bucketMs: number, limit: num
 }
 
 /** Trim the (symbol, bucketMs) series to the most-recent `keep` rows, dropping
- *  any older. Called from the aggregator after each insert when the row count
- *  exceeds the retention cap. Idempotent. Returns the number of rows deleted. */
+ *  any older. v0.4.4 A1 Sprint 3 — called from `SubsecondRetentionWorker` once
+ *  per minute (was called inline from the aggregator's sealBucket hot path in
+ *  Sprint 1; lifted out so the per-tick path stays write-only). Idempotent.
+ *  Returns the number of rows deleted. */
 export function trimSubSecondCandles(symbol: string, bucketMs: number, keep: number): number {
   // Subquery picks the (keep+1)th most-recent open_ms; everything older
   // than that gets dropped. Faster than COUNT-then-DELETE because SQLite
@@ -702,6 +704,24 @@ export function trimSubSecondCandles(symbol: string, bucketMs: number, keep: num
       )
   `).run(symbol, bucketMs, symbol, bucketMs, keep)
   return Number(r.changes)
+}
+
+/** A1 Sprint 3 — list every distinct (symbol, bucket_ms) pair that has rows in
+ *  the sub-second table. The retention worker iterates this on each cycle so
+ *  trim covers series from prior sessions too (the table is flat across
+ *  sessions — no session_id column). Bounded by the universe size × {250,500},
+ *  so the SELECT DISTINCT walks at most ~36 rows even with a year of data and
+ *  is satisfied by the existing `idx_subsec_sym_bucket_ts` index. */
+export function getAllSubSecondSeries(): Array<{ symbol: string; bucketMs: number }> {
+  const rows = openDB().prepare(`
+    SELECT DISTINCT symbol, bucket_ms
+    FROM crypto_subsecond_candles
+    ORDER BY symbol, bucket_ms
+  `).all() as Array<Record<string, unknown>>
+  return rows.map((r) => ({
+    symbol:   String(r['symbol']),
+    bucketMs: Number(r['bucket_ms']),
+  }))
 }
 
 // ─── S1-10 — Tape integrity manifest ────────────────────────────────────────
