@@ -423,13 +423,14 @@ export function SettingsModal({ open, onClose }: Props) {
       <div className="dialog-section">
         <div className="dialog-section-title">Display</div>
         <div className="form-row">
-          <label>Theme</label>
-          <div className="seg" style={{ width: 'fit-content' }}>
+          <label id="theme-seg-label">Theme</label>
+          <div className="seg" style={{ width: 'fit-content' }} role="group" aria-labelledby="theme-seg-label">
             {THEMES.map((t) => (
               <button
                 key={t.id}
                 type="button"
                 className={theme === t.id ? 'on' : ''}
+                aria-pressed={theme === t.id}
                 onClick={() => setTheme(t.id as ThemeId)}
                 title={t.description}
               >

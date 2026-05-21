@@ -1325,38 +1325,38 @@ export function ChartPanel() {
               const regimeSuffix = theme === 'classic' && dominantRegime ? ` · ${dominantRegime}` : ''
               return (
                 <div className="row" key={`ema-${p}`}>
-                  <span className="swatch" style={{ background: swatchColor }} />
+                  <span className="swatch" aria-hidden="true" style={{ background: swatchColor }} />
                   EMA {p}{regimeSuffix}
                 </div>
               )
             })}
             {indSettings.enabled.rsi && (
               <div className="row">
-                <span className="swatch" style={{ background: applyOpacity(readCssVar('--bb-accent') || '#00c8ff', 0.88) }} />
+                <span className="swatch" aria-hidden="true" style={{ background: applyOpacity(readCssVar('--bb-accent') || '#00c8ff', 0.88) }} />
                 RSI {indSettings.rsiPeriod}
               </div>
             )}
             {indSettings.enabled.fibonacci && (
               <div className="row">
-                <span className="swatch" style={{ background: '#c9a04a' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: '#c9a04a' }} />
                 FIB · {indSettings.fibLookback}b
               </div>
             )}
             {indSettings.enabled['pivot-points'] && (
               <div className="row">
-                <span className="swatch" style={{ background: 'rgba(0,200,255,0.95)' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: 'rgba(0,200,255,0.95)' }} />
                 PP {priorHlc ? `· ${priorHlc.date}` : '· awaiting'}
               </div>
             )}
             {indSettings.enabled['double-top'] && (
               <div className="row">
-                <span className="swatch" style={{ background: '#ff4655' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: '#ff4655' }} />
                 2T pattern
               </div>
             )}
             {indSettings.enabled['double-bottom'] && (
               <div className="row">
-                <span className="swatch" style={{ background: '#21c97a' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: '#21c97a' }} />
                 2B pattern
               </div>
             )}

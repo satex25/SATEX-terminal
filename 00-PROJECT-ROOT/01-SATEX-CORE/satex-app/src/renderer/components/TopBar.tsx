@@ -264,13 +264,14 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
       <span className="bb-vrule" />
 
       {/* Workspace tabs */}
-      <div className="bb-workspace-tabs">
-        <span className="bb-eyebrow">WORKSPACE</span>
+      <div className="bb-workspace-tabs" role="group" aria-label="Workspace">
+        <span className="bb-eyebrow" aria-hidden="true">WORKSPACE</span>
         {WORKSPACE_TABS.map(t => (
           <button
             key={t}
             type="button"
             className={`bb-ws-tab ${workspace === t ? 'on' : ''}`}
+            aria-pressed={workspace === t}
             onClick={() => onWorkspace(t)}
             title={WORKSPACE_TITLES[t]}
           >{t}</button>
@@ -280,7 +281,7 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
       <span style={{ flex: 1 }} />
 
       {/* Command palette stub */}
-      <button type="button" className="bb-cmd-stub" onClick={onCmd}>
+      <button type="button" className="bb-cmd-stub" onClick={onCmd} aria-label="Open command palette (⌘K)">
         <span className="bb-cmd-prefix">›</span>
         <span className="bb-cmd-hint">buy 100 nvda lmt 962.40</span>
         <span className="bb-cmd-kbd">⌘K</span>
@@ -321,7 +322,10 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
           <span
             className={`bb-tactics-pip bb-${tactics.state}`}
             onClick={() => onOpenModal('tactics')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenModal('tactics') } }}
             role="button"
+            tabIndex={0}
+            aria-label={`MAY-TACTICS: ${tactics.state}`}
             title={tactics.vetoReason ?? `MAY-TACTICS: ${tactics.state}`}
           >
             策 {tactics.state.toUpperCase()}
