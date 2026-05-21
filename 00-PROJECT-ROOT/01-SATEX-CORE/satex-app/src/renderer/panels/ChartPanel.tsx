@@ -18,6 +18,7 @@ import { useRegimeStore } from '../stores/regimeStore'
 import { useDepthStore } from '../stores/depthStore'
 import { useFeedStore } from '../stores/feedStore'
 import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
+import { emaColorForPeriod } from '../lib/ema-theme'
 import { DeltaStrip } from '../components/DeltaStrip'
 import {
   emaSeries as computeEmaSeries,
@@ -77,23 +78,6 @@ function dateFromHistSessionId(id: string | null | undefined): string | null {
 
 // ── Indicator-overlay helpers ─────────────────────────────────────────────────
 
-/**
- * Maps a dominant HMM regime state to its EMA accent color, per the Phase 11
- * spec. Codebase uses EXPANSION/MEAN-REVERT/COMPRESSION/CAPITULATION; the spec
- * named the last two TREND/PANIC. Mapping is explicit so the rename is safe.
- */
-function emaColorForRegime(state: string | null | undefined): string {
-  switch (state) {
-    case 'COMPRESSION':  return '#21c97a' // green
-    case 'EXPANSION':    return '#00c8ff' // cyan (spec: "TREND")
-    case 'MEAN-REVERT':  return '#f5a623' // orange
-    case 'CAPITULATION': return '#ff4655' // red (spec: "PANIC")
-    default:             return '#9aa1ad' // neutral mute
-  }
-}
-
-/** Visual differentiation across EMA periods on the same chart. */
-const EMA_PERIOD_OPACITY: Record<number, number> = { 9: 1.00, 21: 0.78, 50: 0.58, 200: 0.42 }
 
 /** Fibonacci level palette — gold/silver/bronze trio per spec, with the
  *  two outer levels rendered in neutral grey so the eye lands on 61.8 / 50 / 38.2. */
@@ -129,43 +113,6 @@ function readCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 
-/**
- * Per-period EMA color and opacity, theme-aware.
- *
- * Classic theme: regime-based color (EXPANSION=cyan, COMPRESSION=green,
- *   MEAN-REVERT=orange, CAPITULATION=red) with period-opacity gradient
- *   (EMA9=1.0, EMA21=0.78, EMA50=0.58, EMA200=0.42). Two signals on one
- *   element: regime via hue, period via opacity.
- *
- * Mono / Bluyel: period-based color read from `--bb-ema9` / `--bb-ema21`
- *   CSS tokens (per-theme overrides set in globals.css). Opacity fixed at
- *   1.0 — color already separates EMA9 from EMA21, an opacity gradient
- *   would just muddy the signal.
- *
- * Fallback for non-standard `indSettings.emaPeriods` (outside {9, 21}):
- *   --bb-ema9 in alt themes, `EMA_PERIOD_OPACITY[period] ?? 0.5` in Classic.
- *
- * The Regime Dashboard panel remains the source of truth for regime state
- * in alt themes — the chart is a secondary view.
- */
-function emaColorForPeriod(
-  period: number,
-  dominantRegime: string | null | undefined,
-  theme: string,
-): { color: string; opacity: number } {
-  if (theme === 'classic') {
-    return {
-      color:   emaColorForRegime(dominantRegime),
-      opacity: EMA_PERIOD_OPACITY[period] ?? 0.5,
-    }
-  }
-  // Mono / Bluyel — period-keyed CSS tokens, full opacity.
-  const token = period <= 9 ? '--bb-ema9' : period <= 21 ? '--bb-ema21' : '--bb-ema9'
-  return {
-    color:   readCssVar(token) || (period <= 9 ? '#f5c46a' : '#b48cff'),
-    opacity: 1.0,
-  }
-}
 
 function aggregate(candles: readonly Candle[], bucketSec: number): Candle[] {
   if (bucketSec <= 1 || candles.length === 0) return candles.slice()
@@ -837,7 +784,7 @@ export function ChartPanel() {
       for (const period of wantPeriods) {
         // v0.6 Phase 3 — per-period color is theme-aware: regime+opacity in
         // Classic, period token at full opacity in Mono/Bluyel.
-        const { color: baseColor, opacity } = emaColorForPeriod(period, dominantRegime, theme)
+        const { color: baseColor, opacity } = emaColorForPeriod(period, dominantRegime, theme, readCssVar)
         const lineColor = applyOpacity(baseColor, opacity)
         let s = emaSeriesMap.current.get(period) as {
           applyOptions: (o: unknown) => void
@@ -1373,7 +1320,7 @@ export function ChartPanel() {
               // Classic appends the dominant regime; Mono/Bluyel hide that
               // suffix because EMA color is period-keyed, not regime-keyed
               // (the regime signal lives in the Regime Dashboard there).
-              const { color: baseColor, opacity } = emaColorForPeriod(p, dominantRegime, theme)
+              const { color: baseColor, opacity } = emaColorForPeriod(p, dominantRegime, theme, readCssVar)
               const swatchColor = applyOpacity(baseColor, opacity)
               const regimeSuffix = theme === 'classic' && dominantRegime ? ` · ${dominantRegime}` : ''
               return (
