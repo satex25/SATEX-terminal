@@ -82,7 +82,7 @@ export interface PerfStats {
 
 export interface FrameProfileReport {
   frames:     number   // total frames captured in the window
-  durationMs: number   // sum of inter-frame deltas (wall-clock of the window)
+  durationMs: number   // sum of inter-frame deltas (== wall-clock window for telescoping RAF deltas)
   fps:        number   // frames / (durationMs/1000)
   p50Ms:      number
   p95Ms:      number

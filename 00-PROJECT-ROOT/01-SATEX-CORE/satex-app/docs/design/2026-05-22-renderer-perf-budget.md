@@ -103,7 +103,7 @@ explicitly started — and only the harness starts it — so production cost is 
 ```ts
 export interface FrameProfileReport {
   frames:     number   // total frames captured in the window
-  durationMs: number   // wall-clock span (last ts − first ts)
+  durationMs: number   // sum of inter-frame deltas (= wall-clock span for RAF deltas)
   fps:        number   // frames / (durationMs/1000)
   p50Ms:      number
   p95Ms:      number

@@ -127,6 +127,14 @@ describe('perf.frameProfile — RAF collector lifecycle (stubbed RAF)', () => {
     expect(cancelSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('stop() is idempotent (cancels RAF exactly once)', () => {
+    perf.frameProfile.start()
+    perf.frameProfile.stop()
+    perf.frameProfile.stop()
+    expect(cancelSpy).toHaveBeenCalledTimes(1)
+    expect(perf.frameProfile.isRunning()).toBe(false)
+  })
+
   it('is idempotent on start (no second RAF loop)', () => {
     perf.frameProfile.start()
     perf.frameProfile.start()
@@ -140,7 +148,7 @@ describe('perf.frameProfile — RAF collector lifecycle (stubbed RAF)', () => {
     const idAfterStop = rafId
     captured(99) // a stale frame fires after stop
     expect(rafId).toBe(idAfterStop)               // loop did not reschedule
-    expect(perf.frameProfile.report().frames).toBe(0) // reset by next start, no growth
+    expect(perf.frameProfile.report().frames).toBe(0) // buffer still empty: start() cleared it and the stale frame early-returned without recording
   })
 
   it('survives 10 start/stop cycles with no leak', () => {
@@ -158,9 +166,12 @@ describe('perf.frameProfile — disabled via SATEX_PERF_OFF', () => {
 
   it('start() is a no-op and report() is zeroed', async () => {
     vi.stubGlobal('window', { location: { search: '?SATEX_PERF_OFF=1' } })
+    const raf = vi.fn((cb: (ts: number) => void) => { void cb; return 1 })
+    vi.stubGlobal('requestAnimationFrame', raf)
     vi.resetModules()
     const fresh = await import('./perf')
     fresh.perf.frameProfile.start()
+    expect(raf).not.toHaveBeenCalled()        // PERF_OFF won, not the RAF-absent guard
     expect(fresh.perf.frameProfile.isRunning()).toBe(false)
     expect(fresh.perf.frameProfile.report().frames).toBe(0)
   })
