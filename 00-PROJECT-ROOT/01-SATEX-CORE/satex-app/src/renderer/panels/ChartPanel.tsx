@@ -16,6 +16,7 @@ import { useAccountStore } from '../stores/accountStore'
 import { useIndicatorStore } from '../stores/indicatorStore'
 import { useRegimeStore } from '../stores/regimeStore'
 import { useDepthStore } from '../stores/depthStore'
+import { perf } from '../lib/perf'
 import { useFeedStore } from '../stores/feedStore'
 import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
 import { emaColorForPeriod } from '../lib/ema-theme'
@@ -620,10 +621,10 @@ export function ChartPanel() {
     if (!seriesRef.current || view.length === 0) return
     try {
       const s = seriesRef.current as { setData: (d: unknown) => void }
-      s.setData(view.map(c => ({
+      perf.measure('chart:setData', () => s.setData(view.map(c => ({
         time: c.time as unknown,
         open: c.open, high: c.high, low: c.low, close: c.close,
-      })))
+      }))))
     } catch { /* stale ref */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, tf, view.length])
@@ -661,13 +662,13 @@ export function ChartPanel() {
       const liveHigh  = Math.max(last.high, liveClose)
       const liveLow   = Math.min(last.low,  liveClose)
       const s = seriesRef.current as { update: (d: unknown) => void }
-      s.update({
+      perf.measure('chart:update', () => s.update({
         time: last.time as unknown,
         open: last.open,
         high: liveHigh,
         low:  liveLow,
         close: liveClose,
-      })
+      }))
     } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quote?.last, view, showSub])
