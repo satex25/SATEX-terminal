@@ -7,6 +7,22 @@
 - test: npm test
 - deadcode: npm run knip
 
+## Renderer perf canary (v0.6)
+
+Opt-in frame-budget E2E (NOT in CI — CI is typecheck + vitest only). Run before a
+renderer-heavy release:
+
+```powershell
+npm run build
+$env:SATEX_E2E_PERF='1'; npx playwright test tests/e2e/renderer-perf.spec.ts
+```
+
+Boots isolated + offscreen (throwaway `--user-data-dir`/`SATEX_VAULT_ROOT`, and
+`SATEX_SIMULATOR_24_7=true` so candles stream off-hours), drives the Trade `ChartPanel`, and
+asserts p50 ≤ 16 ms + p95 ≤ 10 ms under symbol-rotation + tick-stream load. The percentile
+math + profiler lifecycle are unit-tested in `src/renderer/lib/perf.test.ts` (runs in CI).
+Design + the full diagnosis trail: `docs/design/2026-05-22-renderer-perf-budget.md`.
+
 ## v0.4.4 — Sub-second crypto candles (2026-05-19)
 
 Commits riding into the v0.4.4 cut:

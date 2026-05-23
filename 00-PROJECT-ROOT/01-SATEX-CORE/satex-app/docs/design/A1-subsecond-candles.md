@@ -218,7 +218,10 @@ within the v0.4.3 frame budget (median 4–6 ms).
 ### Sprint 3 — Performance tuning + retention enforcement (2 days)
 
 1. Retention eviction job on a 60-second cadence (`tickRecorder` pattern).
-2. Perf canary test — synthetic 20 trades/sec for 5 min, assert frame budget.
+2. ✅ **Delivered (v0.6, 2026-05-23)** — Perf canary, generalised to a renderer frame-budget
+   harness (`tests/e2e/renderer-perf.spec.ts`). Asserts p50 ≤ 16 ms + p95 ≤ 10 ms on the Trade
+   `ChartPanel` under simulator load (TICK_HZ=20 supplies the "20 trades/sec"). See
+   `docs/design/2026-05-22-renderer-perf-budget.md`.
 3. Telemetry — log the sub-second emit rate at INFO once per minute so we
    can spot pathological symbols in production logs.
 

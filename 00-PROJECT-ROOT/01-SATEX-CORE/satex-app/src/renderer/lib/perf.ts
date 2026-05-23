@@ -80,6 +80,48 @@ export interface PerfStats {
   lastMs: number
 }
 
+export interface FrameProfileReport {
+  frames:     number   // total frames captured in the window
+  durationMs: number   // sum of inter-frame deltas (== wall-clock window for telescoping RAF deltas)
+  fps:        number   // frames / (durationMs/1000)
+  p50Ms:      number
+  p95Ms:      number
+  p99Ms:      number
+  maxMs:      number
+  longFrames: number   // frame deltas > FRAME_BUDGET_MS (16)
+  jankRatio:  number   // longFrames / frames (0 when frames === 0)
+}
+
+/** Pure summary of frame deltas (ms). No RAF / window — Node-testable.
+ *  Percentiles use nearest-rank on a sorted copy. */
+export function summarizeFrames(samples: readonly number[]): FrameProfileReport {
+  const n = samples.length
+  if (n === 0) {
+    return { frames: 0, durationMs: 0, fps: 0, p50Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0, longFrames: 0, jankRatio: 0 }
+  }
+  const sorted = [...samples].sort((a, b) => a - b)
+  const pct = (p: number): number => sorted[Math.min(n - 1, Math.max(0, Math.ceil((p / 100) * n) - 1))]!
+  let durationMs = 0
+  let longFrames = 0
+  for (const s of samples) {
+    durationMs += s
+    if (s > FRAME_BUDGET_MS) longFrames++
+  }
+  return {
+    frames:     n,
+    durationMs,
+    fps:        durationMs > 0 ? (n / durationMs) * 1000 : 0,
+    p50Ms:      pct(50),
+    p95Ms:      pct(95),
+    p99Ms:      pct(99),
+    maxMs:      sorted[n - 1]!,
+    longFrames,
+    jankRatio:  longFrames / n,
+  }
+}
+
+const frameProfileState = { running: false, raf: 0, lastTs: 0, samples: [] as number[] }
+
 export const perf = {
   /** Measure a synchronous function call. Returns whatever the fn returned. */
   measure<T>(tag: string, fn: () => T): T {
@@ -139,6 +181,43 @@ export const perf = {
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
+  },
+
+  /** Harness-only frame profiler. Captures EVERY frame delta into a buffer and
+   *  summarizes percentiles on demand. Separate from frameWatch (outlier-only).
+   *  Only the E2E perf canary starts it, so production cost is zero. */
+  frameProfile: {
+    start(): void {
+      if (PERF_OFF || frameProfileState.running) return
+      if (typeof requestAnimationFrame === 'undefined') return // non-browser: no-op
+      frameProfileState.running = true
+      frameProfileState.samples = []
+      frameProfileState.lastTs = performance.now()
+      const loop = (ts: number): void => {
+        if (!frameProfileState.running) return
+        frameProfileState.samples.push(ts - frameProfileState.lastTs)
+        frameProfileState.lastTs = ts
+        frameProfileState.raf = requestAnimationFrame(loop)
+      }
+      frameProfileState.raf = requestAnimationFrame(loop)
+    },
+    stop(): FrameProfileReport {
+      if (frameProfileState.running) {
+        frameProfileState.running = false
+        if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(frameProfileState.raf)
+      }
+      return summarizeFrames(frameProfileState.samples)
+    },
+    report(): FrameProfileReport {
+      return summarizeFrames(frameProfileState.samples)
+    },
+    reset(): void {
+      frameProfileState.samples = []
+      frameProfileState.lastTs = performance.now()
+    },
+    isRunning(): boolean {
+      return frameProfileState.running
+    },
   },
 }
 

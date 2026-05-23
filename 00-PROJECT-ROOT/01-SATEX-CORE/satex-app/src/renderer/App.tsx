@@ -35,6 +35,7 @@ import { ExitReflectionModal } from './components/modals/ExitReflectionModal'
 import { UpdateToast } from './components/UpdateToast'
 import { useIndicatorStore } from './stores/indicatorStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
+import { useThemeStore } from './stores/themeStore'
 import { WatchlistPanel } from './panels/WatchlistPanel'
 import { QuadChartPanel } from './panels/QuadChartPanel'
 import { MacroStripPanel } from './panels/MacroStripPanel'
@@ -109,6 +110,20 @@ export default function App() {
     void useIndicatorStore.getState().hydrate()
     void useWorkspaceStore.getState().hydrate()
   }, [])
+
+  // v0.6 Phase 1 — apply the active theme by writing `data-theme` on <html>.
+  // The themeStore's initial state already reflects localStorage, so this
+  // effect runs once at mount with the persisted value, then again on every
+  // subsequent setTheme() call from the Settings dialog. The "classic" theme
+  // is the default (no attribute = the :root token block in globals.css);
+  // the two alternatives ('mono', 'bluyel') add CSS-variable overrides via
+  // their `:root[data-theme="…"]` selectors.
+  const theme = useThemeStore((s) => s.theme)
+  useEffect(() => {
+    const html = document.documentElement
+    if (theme === 'classic') html.removeAttribute('data-theme')
+    else html.setAttribute('data-theme', theme)
+  }, [theme])
 
   // Keyboard shortcuts
   useEffect(() => {

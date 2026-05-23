@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { Modal } from '../Modal'
 import { UNIVERSE } from '@shared/constants'
 import { useSubsecondStore, type PreferredBucketMs } from '../../stores/subsecondStore'
+import { useThemeStore, THEMES, type ThemeId } from '../../stores/themeStore'
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -46,6 +47,12 @@ export function SettingsModal({ open, onClose }: Props) {
   // array — no need to memoize per render.
   const subsecondPrefs = useSubsecondStore((s) => s.prefs)
   const [subsecondBusy, setSubsecondBusy] = useState<string | null>(null)
+
+  // v0.6 Phase 1 — theme picker. The store applies the `data-theme` attribute
+  // via the effect in App.tsx; this Settings section is just the surface that
+  // lets the user pick.
+  const theme    = useThemeStore((s) => s.theme)
+  const setTheme = useThemeStore((s) => s.setTheme)
 
   // Data-source state (simulator vs Alpaca live) — surfaced so the user has
   // a single in-app place to swap from the env-forced simulator over to
@@ -415,6 +422,27 @@ export function SettingsModal({ open, onClose }: Props) {
 
       <div className="dialog-section">
         <div className="dialog-section-title">Display</div>
+        <div className="form-row">
+          <label id="theme-seg-label">Theme</label>
+          <div className="seg" style={{ width: 'fit-content' }} role="group" aria-labelledby="theme-seg-label">
+            {THEMES.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={theme === t.id ? 'on' : ''}
+                aria-pressed={theme === t.id}
+                onClick={() => setTheme(t.id as ThemeId)}
+                title={t.description}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="form-hint">
+          {THEMES.find((t) => t.id === theme)?.description ?? ''}
+          {' '}Theme changes apply instantly across the app and persist locally.
+        </div>
         <div className="form-row">
           <label>Zoom</label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

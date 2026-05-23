@@ -5,6 +5,25 @@ All notable changes to SATEX (satex-app) are recorded here. Format roughly follo
 semver because the app is still pre-1.0 — minor bumps may introduce behavior
 changes alongside fixes during the v0.x stabilization series.
 
+## Unreleased (v0.6 "Black Box")
+
+### Added
+
+- **Renderer frame-budget canary.** New opt-in Playwright E2E
+  (`tests/e2e/renderer-perf.spec.ts`, gated by `SATEX_E2E_PERF=1`) boots the app under an
+  isolated, offscreen simulator profile, switches to the Trade workspace, and drives the
+  lightweight-charts `ChartPanel` via watchlist symbol rotation while the tick stream runs.
+  It captures every frame delta through a new `perf.frameProfile` and asserts the renderer
+  holds its budget — **p50 ≤ 16 ms** (60 fps floor) and **p95 ≤ 10 ms** (median-of-3 baseline
+  8.3 ms × 1.15) — plus a stress-sufficiency gate and zero console errors. Backed by
+  `perf.frameProfile` (pure `summarizeFrames` percentile/fps/jank math + a thin RAF collector)
+  and `perf.measure` timing on the ChartPanel `setData`/`update` hot paths — the same `update`
+  path whose S1-1 regression once cost 125 ms boot frames. New `src/renderer/lib/perf.test.ts`
+  pins the math + profiler lifecycle (CI-covered via `npm test`). The E2E is a manual/release
+  gate (CI runs no Playwright; promotion tracked as TD-2026-05-22-01). Fulfils the A1 design
+  doc's deferred perf canary (§6 Sprint 3). Design + findings:
+  `docs/design/2026-05-22-renderer-perf-budget.md`.
+
 ## 0.4.4 (2026-05-XX)
 
 Sub-second crypto candles ship end-to-end. The A1 design doc

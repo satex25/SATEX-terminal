@@ -26,6 +26,20 @@
   --bb-neg:       #ff4655;
   --bb-warn:      #f5a623;
   --bb-gold:      #c9a04a;
+  /* v0.6 Phase 1 — period-based EMA color tokens. Surfaced for future chart
+   *  consumers; the current ChartPanel still drives EMA color from the HMM
+   *  regime (regimeToEmaColor in ChartPanel.tsx). Theme overrides below mutate
+   *  these so a renderer that wires to --bb-ema9 / --bb-ema21 reacts to
+   *  theme switches without code changes. */
+  --bb-ema9:      #f5c46a;
+  --bb-ema21:     #b48cff;
+  /* v0.6 Phase 2 — ambient shimmer color, consumed by the .app background
+   * radial-gradient and any future theme-aware chrome that wants a single
+   * "warm corner glow" hook. Defaults to the original vermilion so existing
+   * Classic installs keep their ambient. Mono sets this to `transparent`
+   * which makes the gradient compute to fully transparent (color-mix with
+   * transparent on both sides). Bluyel uses its accent blue. */
+  --bb-ambient:   #e94b3c;
 
   /* ── Compatibility shim ───────────────────────────────────────────────────
      Legacy Tokyo-era token names mapped to Black Box values so existing CSS
@@ -51,19 +65,24 @@
 
   --bull:        var(--bb-pos);
   --bull-glow:   var(--bb-pos);
-  --bull-soft:   rgba(33,201,122,0.16);
+  /* v0.6 Phase 2 — soft/faint variants now derive from the bb-* tokens via
+   * color-mix(), so theme switches propagate to hover rings, badges, button
+   * backgrounds, etc. without rewriting each consumer. The previous rgba()
+   * literals froze the Classic palette into Mono/Bluyel hover states.
+   * color-mix is supported in Chromium 111+ (Electron 27+ ships 118+). */
+  --bull-soft:   color-mix(in srgb, var(--bb-pos)    16%, transparent);
   --bear:        var(--bb-neg);
   --bear-glow:   var(--bb-neg);
-  --bear-soft:   rgba(255,70,85,0.16);
+  --bear-soft:   color-mix(in srgb, var(--bb-neg)    16%, transparent);
   --warn:        var(--bb-warn);
   --warn-glow:   var(--bb-warn);
-  --warn-soft:   rgba(245,166,35,0.16);
+  --warn-soft:   color-mix(in srgb, var(--bb-warn)   16%, transparent);
 
   --accent:       var(--bb-accent);
   --accent-2:     var(--bb-accent-d);
   --accent-glow:  var(--bb-accent);
-  --accent-soft:  rgba(0,200,255,0.16);
-  --accent-faint: rgba(0,200,255,0.05);
+  --accent-soft:  color-mix(in srgb, var(--bb-accent) 16%, transparent);
+  --accent-faint: color-mix(in srgb, var(--bb-accent)  5%, transparent);
 
   /* Typography — JetBrains Mono everywhere. The display/serif aliases stay
      for back-compat with existing CSS class definitions; they all resolve
@@ -97,6 +116,47 @@
 /* Legacy data-accent attribute — no-op now since cyan is the only accent.
    Kept so old <html data-accent="..."> writes don't break style cascade. */
 :root[data-accent] { --accent: var(--bb-accent); --accent-2: var(--bb-accent-d); --accent-glow: var(--bb-accent); --accent-soft: rgba(0,200,255,0.16); --accent-faint: rgba(0,200,255,0.05); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * v0.6 Phase 1 — alternative theme palettes
+ *
+ * Applied by the themeStore writing `data-theme="<id>"` on the <html> root.
+ * Default theme (no attribute set OR data-theme="blackbox"/"tokyo") inherits
+ * the Classic Black Box tokens defined in `:root` above. The two alternatives
+ * below override the core --bb-* tokens; the compatibility shim's
+ * `var(--bb-*)` references resolve via the cascade so derived names
+ * (--bull, --bear, --accent, etc.) update automatically.
+ *
+ * Caveat — the *-soft / *-glow rgba() values in the shim are hardcoded with
+ * the Classic palette's RGB channels (e.g. `rgba(33,201,122,0.16)`). A future
+ * polish pass should migrate those to color-mix() so they track theme
+ * changes. For Phase 1 the core swatches + accent ring are sufficient to
+ * see the theme switch live.
+ * ────────────────────────────────────────────────────────────────────────── */
+:root[data-theme="mono"] {
+  --bb-pos:      #f0f0f4;
+  --bb-neg:      #8a8a92;
+  --bb-ema9:     #c8c8d0;
+  --bb-ema21:    #7a7a84;
+  --bb-accent:   #cfcfd4;
+  --bb-accent-d: #9a9aa4;
+  /* Mono is intentionally chrome-free — turn off the ambient shimmer so the
+   * background reads as a single flat surface. The .app gradient resolves to
+   * `color-mix(in srgb, transparent X%, transparent)` = fully transparent
+   * regardless of percentage, so the radial-gradient layer disappears. */
+  --bb-ambient:  transparent;
+}
+:root[data-theme="bluyel"] {
+  --bb-pos:      #3b9eff;
+  --bb-neg:      #f5c542;
+  --bb-ema9:     #ffd86b;
+  --bb-ema21:    #69b8ff;
+  --bb-accent:   #3b9eff;
+  --bb-accent-d: #2378c8;
+  /* Ambient picks up the blue accent so the corner shimmer reinforces the
+   * primary signal color rather than fighting it with off-palette warmth. */
+  --bb-ambient:  #3b9eff;
+}
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden; }
@@ -142,8 +202,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   height: 100vh;
   background: var(--bg-0);
   background-image:
-    radial-gradient(ellipse 70% 45% at 50% -22%, rgba(233,75,60,0.08), transparent 60%),
-    radial-gradient(ellipse 55% 35% at 100% 110%, rgba(233,75,60,0.04), transparent 60%);
+    radial-gradient(ellipse 70% 45% at 50% -22%, color-mix(in srgb, var(--bb-ambient) 8%, transparent), transparent 60%),
+    radial-gradient(ellipse 55% 35% at 100% 110%, color-mix(in srgb, var(--bb-ambient) 4%, transparent), transparent 60%);
 }
 
 /* MENUBAR */
@@ -2158,13 +2218,22 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .bb-ws-tab {
   background: transparent; border: 0;
   color: var(--bb-txt-dim);
-  border-bottom: 1px solid transparent;
+  /* v0.6 Phase 2.5 — base border is 2px so the active state can bump width
+   * without a 1px layout shift on click. Inactive stays transparent. */
+  border-bottom: 2px solid transparent;
   padding: 4px 2px;
   font-size: 11px; letter-spacing: 0.04em;
   font-family: inherit; cursor: pointer;
 }
 .bb-ws-tab:hover { color: var(--bb-txt); }
-.bb-ws-tab.on { color: var(--bb-accent); border-bottom-color: var(--bb-accent); }
+.bb-ws-tab.on {
+  color: var(--bb-accent);
+  border-bottom-color: var(--bb-accent);
+  /* v0.6 Phase 2.5 — match the v3 prototype's active-tab emphasis. The 2px
+   * border + 600 weight read as "this is where you are" without needing
+   * additional surface chrome. Theme-reactive via var(--bb-accent). */
+  font-weight: 600;
+}
 
 .bb-cmd-stub {
   display: flex; align-items: center; gap: 8px;

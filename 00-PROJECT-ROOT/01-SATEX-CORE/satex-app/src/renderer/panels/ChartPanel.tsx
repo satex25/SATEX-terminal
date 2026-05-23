@@ -16,8 +16,10 @@ import { useAccountStore } from '../stores/accountStore'
 import { useIndicatorStore } from '../stores/indicatorStore'
 import { useRegimeStore } from '../stores/regimeStore'
 import { useDepthStore } from '../stores/depthStore'
+import { perf } from '../lib/perf'
 import { useFeedStore } from '../stores/feedStore'
 import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
+import { emaColorForPeriod } from '../lib/ema-theme'
 import { DeltaStrip } from '../components/DeltaStrip'
 import {
   emaSeries as computeEmaSeries,
@@ -35,6 +37,7 @@ import {
 } from '@shared/constants'
 import type { Candle, ReplayStatus, SubSecondCandle } from '@shared/types'
 import { useSubsecondStore } from '../stores/subsecondStore'
+import { useThemeStore } from '../stores/themeStore'
 import {
   isUsEquityMarketOpen,
   mostRecentClosedSessionDate,
@@ -76,23 +79,6 @@ function dateFromHistSessionId(id: string | null | undefined): string | null {
 
 // ── Indicator-overlay helpers ─────────────────────────────────────────────────
 
-/**
- * Maps a dominant HMM regime state to its EMA accent color, per the Phase 11
- * spec. Codebase uses EXPANSION/MEAN-REVERT/COMPRESSION/CAPITULATION; the spec
- * named the last two TREND/PANIC. Mapping is explicit so the rename is safe.
- */
-function emaColorForRegime(state: string | null | undefined): string {
-  switch (state) {
-    case 'COMPRESSION':  return '#21c97a' // green
-    case 'EXPANSION':    return '#00c8ff' // cyan (spec: "TREND")
-    case 'MEAN-REVERT':  return '#f5a623' // orange
-    case 'CAPITULATION': return '#ff4655' // red (spec: "PANIC")
-    default:             return '#9aa1ad' // neutral mute
-  }
-}
-
-/** Visual differentiation across EMA periods on the same chart. */
-const EMA_PERIOD_OPACITY: Record<number, number> = { 9: 1.00, 21: 0.78, 50: 0.58, 200: 0.42 }
 
 /** Fibonacci level palette — gold/silver/bronze trio per spec, with the
  *  two outer levels rendered in neutral grey so the eye lands on 61.8 / 50 / 38.2. */
@@ -116,6 +102,18 @@ function applyOpacity(color: string, alpha: number): string {
   const b = parseInt(h.slice(4, 6), 16)
   return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
 }
+
+/**
+ * Reads a CSS custom property from the live document root. Required for
+ * passing theme tokens into Lightweight Charts canvas rendering — canvas
+ * elements don't inherit CSS variables; they must be read explicitly. The
+ * `data-theme` attribute on <html> is set by App.tsx's theme effect before
+ * the first chart paint, so the value is always current-theme-correct.
+ */
+function readCssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
 
 function aggregate(candles: readonly Candle[], bucketSec: number): Candle[] {
   if (bucketSec <= 1 || candles.length === 0) return candles.slice()
@@ -178,7 +176,9 @@ export function ChartPanel() {
     for (let i = 1; i < arr.length; i++) if (arr[i]!.p > best.p) best = arr[i]!
     return best.name
   }, [regimeSnap])
-  const emaColor = emaColorForRegime(dominantRegime)
+  // v0.6 Phase 3 — theme drives EMA color in alt themes (Mono/Bluyel).
+  // Classic still uses regime via emaColorForPeriod's branch.
+  const theme = useThemeStore(s => s.theme)
 
   // Prior-day H/L/C powers Pivot Points. Refetched on symbol change AND on
   // pivot-points enable so toggling without changing symbols still works.
@@ -532,10 +532,17 @@ export function ChartPanel() {
           handleScale:  true,
         })
 
+        // v0.6 Phase 3 — initial candle colors at the actual SATEX --bb-pos /
+        // --bb-neg values (the pre-fix #22c55e / #ef4444 were Tailwind green-500
+        // and red-500, off-palette even in Classic). The theme-reactive effect
+        // below re-applies these via readCssVar on every theme switch, so the
+        // hardcoded values here only matter for the first paint before the
+        // effect runs once.
         const series = chart.addSeries(CandlestickSeries, {
-          upColor:          '#22c55e', downColor:       '#ef4444',
-          borderUpColor:    '#22c55e', borderDownColor: '#ef4444',
-          wickUpColor:      '#4ade80', wickDownColor:   '#f87171',
+          upColor:          '#21c97a', downColor:       '#ff4655',
+          borderUpColor:    '#21c97a', borderDownColor: '#ff4655',
+          wickUpColor:      applyOpacity('#21c97a', 0.6),
+          wickDownColor:    applyOpacity('#ff4655', 0.6),
           priceLineVisible: true,
           lastValueVisible: true,
         })
@@ -573,6 +580,36 @@ export function ChartPanel() {
     }
   }, [])
 
+  // v0.6 Phase 3 — candle colors track the active theme. Re-reads --bb-pos /
+  // --bb-neg from CSS on every theme change and pushes through the existing
+  // CandlestickSeries. Wick colors derive at 60% opacity so they read as
+  // lighter accents over the dark bg, matching the pre-Phase-3 visual
+  // (which used hardcoded Tailwind 400-shades for the same effect).
+  useEffect(() => {
+    if (!seriesRef.current) return
+    const pos = readCssVar('--bb-pos') || '#21c97a'
+    const neg = readCssVar('--bb-neg') || '#ff4655'
+    try {
+      ;(seriesRef.current as { applyOptions: (o: unknown) => void }).applyOptions({
+        upColor:         pos, downColor:       neg,
+        borderUpColor:   pos, borderDownColor: neg,
+        wickUpColor:     applyOpacity(pos, 0.6),
+        wickDownColor:   applyOpacity(neg, 0.6),
+      })
+    } catch { /* series not yet mounted — first paint handles it */ }
+  }, [theme])
+
+  // v0.6 Phase 3 — RSI series color tracks --bb-accent. Same pattern as the
+  // candle effect above. Idempotent if the RSI series isn't created yet
+  // (chunkRsi adds it lazily on first RSI-enabled render).
+  useEffect(() => {
+    const rsi = rsiSeriesRef.current as { applyOptions: (o: unknown) => void } | null
+    if (!rsi) return
+    const accent = readCssVar('--bb-accent') || '#00c8ff'
+    try { rsi.applyOptions({ color: applyOpacity(accent, 0.88) }) }
+    catch { /* RSI series stale — next chunkRsi will reseed */ }
+  }, [theme])
+
   // Bulk reset when symbol, timeframe, or aggregated length changes.
   // Deliberately depends on `view.length` rather than full `view` — the
   // live-update effect below ratchets the in-flight bar via `view`/`quote.last`
@@ -585,10 +622,10 @@ export function ChartPanel() {
     if (!seriesRef.current || view.length === 0) return
     try {
       const s = seriesRef.current as { setData: (d: unknown) => void }
-      s.setData(view.map(c => ({
+      perf.measure('chart:setData', () => s.setData(view.map(c => ({
         time: c.time as unknown,
         open: c.open, high: c.high, low: c.low, close: c.close,
-      })))
+      }))))
     } catch { /* stale ref */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, tf, view.length])
@@ -626,13 +663,13 @@ export function ChartPanel() {
       const liveHigh  = Math.max(last.high, liveClose)
       const liveLow   = Math.min(last.low,  liveClose)
       const s = seriesRef.current as { update: (d: unknown) => void }
-      s.update({
+      perf.measure('chart:update', () => s.update({
         time: last.time as unknown,
         open: last.open,
         high: liveHigh,
         low:  liveLow,
         close: liveClose,
-      })
+      }))
     } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quote?.last, view, showSub])
@@ -737,21 +774,27 @@ export function ChartPanel() {
           emaSeriesMap.current.delete(p)
         }
       }
-      const sig = `${view.length}|${[...wantPeriods].sort((a, b) => a - b).join(',')}|${emaColor}`
+      // Cache signature includes regime AND theme so a switch in either busts
+      // the cache and re-applies colors. (Pre-Phase-3 this used `${emaColor}`
+      // which combined regime via the helper; theme is a new axis now.)
+      const sig = `${view.length}|${[...wantPeriods].sort((a, b) => a - b).join(',')}|${dominantRegime ?? 'null'}|${theme}`
       if (cache.ema?.sig === sig) {
         notes.push(...cache.ema.notes)
         return
       }
       const localNotes: string[] = []
       for (const period of wantPeriods) {
-        const color = applyOpacity(emaColor, EMA_PERIOD_OPACITY[period] ?? 0.5)
+        // v0.6 Phase 3 — per-period color is theme-aware: regime+opacity in
+        // Classic, period token at full opacity in Mono/Bluyel.
+        const { color: baseColor, opacity } = emaColorForPeriod(period, dominantRegime, theme, readCssVar)
+        const lineColor = applyOpacity(baseColor, opacity)
         let s = emaSeriesMap.current.get(period) as {
           applyOptions: (o: unknown) => void
           setData: (d: unknown) => void
         } | undefined
         if (!s) {
           s = chart.addSeries(lwc.LineSeries, {
-            color, lineWidth: 1.4,
+            color: lineColor, lineWidth: 1.4,
             priceLineVisible: false, lastValueVisible: false,
             title: `EMA${period}`,
           }) as typeof s
@@ -769,7 +812,7 @@ export function ChartPanel() {
           if (Number.isFinite(v)) data.push({ time: view[i]!.time as unknown, value: v })
         }
         try {
-          s!.applyOptions({ color, title: `EMA${period}` })
+          s!.applyOptions({ color: lineColor, title: `EMA${period}` })
           s!.setData(data)
         } catch { /* ignore */ }
       }
@@ -803,8 +846,12 @@ export function ChartPanel() {
         }
       } else {
         if (!rsiSeriesRef.current) {
+          // v0.6 Phase 3 — initial RSI color reads --bb-accent so the very
+          // first paint matches the active theme. The [theme] effect above
+          // re-applies on subsequent switches.
           const rsi = chart.addSeries(lwc.LineSeries, {
-            color: 'rgba(0,200,255,0.88)', lineWidth: 1.2,
+            color: applyOpacity(readCssVar('--bb-accent') || '#00c8ff', 0.88),
+            lineWidth: 1.2,
             priceLineVisible: false, lastValueVisible: true,
             title: `RSI${period}`,
           }, 1) as {
@@ -1051,7 +1098,7 @@ export function ChartPanel() {
       if (pendingHandle != null) window.cancelIdleCallback(pendingHandle)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.length, indSettings, dominantRegime, emaColor, priorHlc])
+  }, [view.length, indSettings, dominantRegime, theme, priorHlc])
 
   const up = (quote?.changePct ?? 0) >= 0
 
@@ -1295,39 +1342,48 @@ export function ChartPanel() {
           || indSettings.enabled['double-top']
           || indSettings.enabled['double-bottom']) && (
           <div className="chart-ind-legend">
-            {indSettings.enabled.ema && indSettings.emaPeriods.map(p => (
-              <div className="row" key={`ema-${p}`}>
-                <span className="swatch" style={{ background: applyOpacity(emaColor, EMA_PERIOD_OPACITY[p] ?? 0.5) }} />
-                EMA {p}{dominantRegime ? ` · ${dominantRegime}` : ''}
-              </div>
-            ))}
+            {indSettings.enabled.ema && indSettings.emaPeriods.map(p => {
+              // v0.6 Phase 3 — swatch + label both follow the active theme.
+              // Classic appends the dominant regime; Mono/Bluyel hide that
+              // suffix because EMA color is period-keyed, not regime-keyed
+              // (the regime signal lives in the Regime Dashboard there).
+              const { color: baseColor, opacity } = emaColorForPeriod(p, dominantRegime, theme, readCssVar)
+              const swatchColor = applyOpacity(baseColor, opacity)
+              const regimeSuffix = theme === 'classic' && dominantRegime ? ` · ${dominantRegime}` : ''
+              return (
+                <div className="row" key={`ema-${p}`}>
+                  <span className="swatch" aria-hidden="true" style={{ background: swatchColor }} />
+                  EMA {p}{regimeSuffix}
+                </div>
+              )
+            })}
             {indSettings.enabled.rsi && (
               <div className="row">
-                <span className="swatch" style={{ background: 'rgba(0,200,255,0.88)' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: applyOpacity(readCssVar('--bb-accent') || '#00c8ff', 0.88) }} />
                 RSI {indSettings.rsiPeriod}
               </div>
             )}
             {indSettings.enabled.fibonacci && (
               <div className="row">
-                <span className="swatch" style={{ background: '#c9a04a' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: '#c9a04a' }} />
                 FIB · {indSettings.fibLookback}b
               </div>
             )}
             {indSettings.enabled['pivot-points'] && (
               <div className="row">
-                <span className="swatch" style={{ background: 'rgba(0,200,255,0.95)' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: 'rgba(0,200,255,0.95)' }} />
                 PP {priorHlc ? `· ${priorHlc.date}` : '· awaiting'}
               </div>
             )}
             {indSettings.enabled['double-top'] && (
               <div className="row">
-                <span className="swatch" style={{ background: '#ff4655' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: '#ff4655' }} />
                 2T pattern
               </div>
             )}
             {indSettings.enabled['double-bottom'] && (
               <div className="row">
-                <span className="swatch" style={{ background: '#21c97a' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: '#21c97a' }} />
                 2B pattern
               </div>
             )}
