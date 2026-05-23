@@ -29,6 +29,10 @@ const DURATION_MIN  = Number(process.env['SATEX_E2E_PERF_MINUTES'] ?? '5')
 const WARMUP_MS     = 10_000
 const ROTATE_MS     = 2000
 const TARGET_P50_MS = 16
+// Locked 2026-05-23 from a median-of-3 isolated baseline: p95 = 8.3ms on all
+// three runs (σ≈0 — the seeded simulator is deterministic). Budget = round(8.3 ×
+// 1.15) = 10ms (~20% headroom). p50 stays the fixed 60fps floor. See spec §5.2.
+const BUDGET_P95_MS = 10
 const ROTATION_SYMBOLS = ['BTC', 'ETH', 'NVDA', 'TSLA']
 const MAIN_ENTRY    = path.join(__dirname, '..', '..', 'out', 'main', 'index.js')
 
@@ -160,7 +164,8 @@ test.describe('renderer frame budget (A1 perf canary)', () => {
       // Fixed 60fps floor.
       expect(report.p50Ms, `p50 ${report.p50Ms.toFixed(1)}ms exceeds the 60fps floor ${TARGET_P50_MS}ms`).toBeLessThanOrEqual(TARGET_P50_MS)
 
-      // p95 budget assert is added in Task 5 after baseline calibration.
+      // p95 regression budget (calibrated baseline × 1.15).
+      expect(report.p95Ms, `p95 ${report.p95Ms.toFixed(1)}ms exceeds budget ${BUDGET_P95_MS}ms (baseline 8.3ms × 1.15)`).toBeLessThanOrEqual(BUDGET_P95_MS)
 
       expect(errors, `renderer logged ${errors.length} error(s): ${errors.join(' | ')}`).toEqual([])
     } finally {

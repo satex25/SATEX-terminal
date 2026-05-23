@@ -159,28 +159,36 @@ Mirrors `heap.spec.ts` conventions exactly:
 
 #### 4.3.1 Designated stress path (resolves M-2)
 
-Not claimed as the provable global worst case (exhaustive proof is over-investment for a
-canary); defined and *measured* as the canary's stress path:
+**Implementation finding (2026-05-23):** the plan named **Quad** as the stress path, but
+Quad (`QuadChartPanel`) is a separate **hand-drawn-SVG** component with no `<canvas>` and no
+`perf.measure` — the `chart:setData`/`chart:update` instrumentation lives **only** on the
+lightweight-charts `ChartPanel`, which renders in **Trade/Focus**. The canary therefore
+measures the **Trade** workspace (single ChartPanel) — also where the documented S1-1 125ms
+frame-stall regression occurred. Quad's SVG render cost is a separate, uninstrumented concern,
+out of scope here (candidate follow-up).
 
-1. Switch to the **Quad** workspace tab (2×2 = four chart canvases — the heaviest layout).
-2. Populate the four cells with **BTC, ETH, NVDA, TSLA** (both crypto + two high-vol
-   equities — the heaviest *available* mix; C-3).
-3. Enable **all six indicators** via `useIndicatorStore` (EMA / RSI / Double Top /
-   Double Bottom / Fibonacci / Pivot Points; C-4) so every `update()` recomputes the
-   full overlay set.
-4. **Rotate the focused symbol** ≈ every 250 ms across the universe to force `setData`
-   full-rebuilds (the audit's rotation stressor). 250 ms is the floor — faster than the
-   50 ms tick coalesce buys nothing on the streaming path, but symbol-switch `setData` is
-   not coalesced, so rotation is a genuine rebuild stressor.
+What the harness does:
 
-Selectors follow `validation.spec.ts`: workspace tabs are buttons with text
-`Trade/Focus/Markets/Replay/Quad`; symbol focus via watchlist rows. Exact selectors
-confirmed during implementation; if a programmatic store hook is cleaner than DOM clicks
-for indicator toggles, the harness uses `win.evaluate` against the store.
+1. Boots **isolated** (throwaway `--user-data-dir` + `SATEX_VAULT_ROOT`) and **offscreen**
+   (position −4000,−4000 + opacity 0 + skip-taskbar — **not** minimized, which would set
+   `document.hidden` and throttle RAF). Sets **`SATEX_SIMULATOR_24_7=true`**: the simulator
+   pauses outside US RTH by default (`market-data.ts`), and a fresh profile has no persisted
+   candle history, so without this the chart stays empty and the instrumented paths never fire.
+2. Waits for a **real React mount** (a visible `.bb-watchlist-row`, not the spurious `body *`
+   descendant check that passed on an empty `#root`), switches to the **Trade** tab (the
+   fresh-profile default workspace is Quad), and confirms a chart `<canvas>` attached.
+3. Polls the instrumented counts until the chart actually has candle data (≤30 s), then
+   profiles while **rotating the focused symbol every 2 s** across BTC/ETH/NVDA/TSLA. Each
+   rotation remounts `ChartPanel` (`key={symbol}`) → a full `setData` rebuild; between
+   rotations the live tick stream drives `chart:update`. (250 ms rotation was too fast for the
+   async chart to re-init and produced zero mutations.)
+
+A `---PERF DIAG---` block (dump keys, root children, watchlist rows, canvas count, active
+symbol) makes any zero-activity result self-explaining.
 
 #### 4.3.2 Measurement sequence
 
-1. Boot → wait for renderer mount (`body *` count > 0, per smoke/validation).
+1. Boot isolated + offscreen → wait for a real React mount (visible `.bb-watchlist-row`).
 2. Apply the stress path (§4.3.1).
 3. **Warm-up settle ~10 s** (excluded from measurement).
 4. `win.evaluate(() => window.satexPerf.frameProfile.start())`.
@@ -335,7 +343,10 @@ npx vitest run src/renderer/lib/perf.test.ts
 
 ## 12. Open items (lock during implementation, not blockers)
 
-1. `BUDGET_P95_MS` — locked from the median-of-3 baseline (§5.2).
-2. Exact Quad-cell population + indicator-toggle mechanism (DOM clicks vs `win.evaluate`
-   store hook) — chosen for reliability during implementation.
-3. Whether to also wrap the EMA/RSI period `setData` as `chart:indicators` (secondary).
+1. ✅ `BUDGET_P95_MS` = **10 ms** — locked 2026-05-23 from a median-of-3 isolated baseline:
+   p95 = 8.3 ms on all three runs (σ≈0; deterministic seeded sim) × 1.15 ≈ 9.5 → 10
+   (~20% headroom). Actual p50 = 4.2 ms vs the 16 ms floor.
+2. ✅ Stress path resolved (§4.3.1): **Trade** + watchlist symbol rotation @ 2 s, with
+   canvas + candle-data gates. Quad is SVG (uninstrumented) — out of scope.
+3. Not done (optional): wrap the EMA/RSI period `setData` as `chart:indicators` (secondary
+   diagnostic). The candle `setData`/`update` coverage proved sufficient for the canary.
