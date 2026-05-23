@@ -106,12 +106,19 @@ Untitled.base
 # Archived cruft — kept on disk for reference, never committed
 RUBBISH/
 
-# Obsidian vault workspace state (keep notes, drop workspace cache)
-.obsidian/workspace*
-.obsidian/cache
-.obsidian/plugins/*/data.json
+# Obsidian vault config — workspace-local, never shared. The markdown notes in
+# Vault/ stay tracked; the .obsidian/ app-config dir does not.
+.obsidian/
 
 # Claude Code workspace state (local agent state should not be committed)
 .claude/sessions/
 .claude/projects/
 .claude/local/
+
+# SATEX vault — machine-local runtime + app-written state, never shared:
+#   Observer = continuous-observer checkpoints (one every ~10 min)
+#   Sessions = session-close artifacts
+#   Settings = app-persisted workspace layout + per-symbol subsecond prefs
+Vault/Observer/
+Vault/Sessions/
+Vault/Settings/
