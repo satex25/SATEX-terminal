@@ -15,6 +15,7 @@ import { app, powerMonitor } from 'electron'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { getEnv } from '../services/env'
+import { evaluateDataSourceSwitch } from './data-source-guard'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
 import { MarketSimulator, type MarketDataSource, type Unsub } from '../services/market-data'
@@ -57,7 +58,7 @@ import { MarketObserver } from '../services/market-observer'
 import { PatternLearner } from '../services/pattern-learner'
 import { VaultWriter } from '../services/vault-writer'
 import { AutonomousTrader, type AutonomousConfig } from '../services/autonomous-trader'
-import type { AutonomousDecision, AutonomousStatus } from '@shared/types'
+import type { AutonomousDecision, AutonomousStatus, DataSource, DataSourceStatus } from '@shared/types'
 import { RegimeService } from '../services/regime'
 import { RiskGatesService } from '../services/risk-gates'
 import { MacroCalendarService } from '../services/macro-calendar'
@@ -156,6 +157,10 @@ export class TradingEngine {
   /** Cached unsubscribes for the current market source's wiring. Re-installed
    *  whenever we swap source (live ↔ replay) so listeners follow the swap. */
   private marketSubs: Unsub[] = []
+  /** The active market DATA feed. Set in initialize(); flipped by setDataSource. */
+  private dataSource: DataSource = 'simulator'
+  /** True only during a setDataSource swap — gates submitOrder. */
+  private switchingSource = false
   private replayStatusTimer: NodeJS.Timeout | null = null
   private currentSessionId = sessionId()
   private startedAt        = Date.now()
@@ -432,6 +437,7 @@ export class TradingEngine {
       this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
       log.info('using alpaca live market', { feed, mode, fromStore: !!stored, baseUrl })
     }
+    this.dataSource = useAlpaca ? 'live' : 'simulator'
 
     // Wire data events (helper so we can re-wire on live↔replay swap)
     this.installMarketWiring(this.market)
@@ -814,6 +820,9 @@ export class TradingEngine {
       log.warn('order refused — replay active', { symbol: req.symbol, side: req.side })
       return { ok: false, reason: 'Order submission disabled during historical replay — stop replay to trade' }
     }
+    if (this.switchingSource) {
+      return { ok: false, reason: 'Data feed is switching — retry in a moment.' }
+    }
     const quote = this.market.getQuote(req.symbol)
     // 2026-05-18 — explicit no-quote refusal under live mode. Pre-fix, when
     // `quote` was undefined (symbol never received a tick, just-subscribed,
@@ -967,6 +976,94 @@ export class TradingEngine {
   clearCredentials(): { ok: boolean } { clearAlpacaCreds(); return { ok: true } }
   setBaiduKey(key: string): { ok: boolean; reason?: string } { return storeSetBaiduKey(key) }
   getBaiduMasked(): BaiduMaskedStatus { return storeGetBaiduMasked() }
+
+  getDataSource(): DataSourceStatus {
+    return {
+      source:        this.dataSource,
+      liveAvailable: !!getAlpacaCreds('paper'),
+      switching:     this.switchingSource,
+    }
+  }
+
+  /** Runtime swap between the synthetic simulator and the live Alpaca (paper)
+   *  data feed. PREPARE (fallible — Alpaca REST auth) → COMMIT (local, atomic).
+   *  On any failure the engine is never left source-less. The interlock decision
+   *  is the pure, unit-tested evaluateDataSourceSwitch. */
+  async setDataSource(target: DataSource): Promise<{ ok: boolean; reason?: string; source?: DataSource }> {
+    const verdict = evaluateDataSourceSwitch({
+      current:           this.dataSource,
+      target,
+      replayActive:      !!this.replay,
+      realCapitalArmed:  isLive() || getAlpacaMode() === 'live',
+      paperCredsPresent: !!getAlpacaCreds('paper'),
+    })
+    if (!verdict.ok)  return { ok: false, reason: verdict.reason }
+    if (verdict.noop) return { ok: true, source: target }
+
+    this.switchingSource = true
+    this.regime?.pause()
+    this.recorder?.pause()
+    let toreDown = false
+    try {
+      if (target === 'live') {
+        // PREPARE (fallible): Alpaca REST auth BEFORE any teardown.
+        const creds = getAlpacaCreds('paper')!
+        const env = getEnv()
+        const alpaca = new AlpacaClient({
+          keyId: creds.keyId, secretKey: creds.secretKey,
+          baseUrl: resolveBaseUrl(env.alpacaBaseUrl), dataUrl: env.alpacaDataUrl, feed: creds.feed,
+        })
+        const acct = await alpaca.getAccount()
+        const positions = (await alpaca.getPositions()).map(p => AlpacaClient.toSatexPosition(p, Date.now()))
+        // COMMIT (local, atomic).
+        this.uninstallMarketWiring(); toreDown = true
+        try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+        this.alpaca = alpaca
+        this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
+        this.om.syncFromAlpaca({ equity: acct.equity, cash: acct.cash, buyingPower: acct.buyingPower }, positions)
+        this.om.setSessionStartEquity(acct.equity)
+        this.market = new LiveMarket(alpaca)
+      } else {
+        // → Simulator: no fallible prep; tear down + reset to a clean paper world.
+        this.uninstallMarketWiring(); toreDown = true
+        try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+        this.alpaca = null
+        this.om.resetToPaper(DEFAULT_EQUITY)
+        this.market = new MarketSimulator()
+      }
+      this.dataSource = target
+      this.installMarketWiring(this.market)
+      await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
+      this.regime?.resume()
+      this.recorder?.resume()
+      this.switchingSource = false
+      this.seedBroadcastDone = false
+      this.broadcastInitialSeed()
+      log.info('data source switched', { source: target })
+      return { ok: true, source: target }
+    } catch (err) {
+      // PREPARE failure → nothing torn down, old source intact (clean no-op).
+      // Failure after teardown → fall back to a fresh simulator (local, cannot
+      // fail) so the engine is never left source-less.
+      if (toreDown) {
+        this.alpaca = null
+        this.om.resetToPaper(DEFAULT_EQUITY)
+        this.market = new MarketSimulator()
+        this.dataSource = 'simulator'
+        this.installMarketWiring(this.market)
+        try { await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start() } catch { /* sim start is local */ }
+        this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
+        this.seedBroadcastDone = false
+        this.broadcastInitialSeed()
+      }
+      this.regime?.resume()
+      this.recorder?.resume()
+      this.switchingSource = false
+      log.warn('data source switch failed', { target, toreDown, err: String(err) })
+      return { ok: false, reason: `Could not switch to ${target}: ${String(err)}` }
+    }
+  }
 
   /** Rebuild AlpacaClient + LiveMarket using freshly stored credentials for
    *  the currently-active mode. */
