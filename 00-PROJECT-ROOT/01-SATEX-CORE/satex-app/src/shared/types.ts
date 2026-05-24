@@ -229,6 +229,19 @@ export interface Position {
 
 export type AccountMode = 'paper' | 'live'
 
+/** The market DATA feed in use — distinct from execution mode (AccountMode). */
+export type DataSource = 'simulator' | 'live'
+
+export interface DataSourceStatus {
+  source: DataSource
+  /** True when Alpaca paper creds are stored — i.e. 'live' is selectable. */
+  liveAvailable: boolean
+  /** True while a swap is in flight (chip shows a spinner, clicks ignored). */
+  switching: boolean
+}
+
+export interface DataSourceSetRequest { target: DataSource }
+
 export interface Account {
   equity: number
   cash: number

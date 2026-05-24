@@ -115,6 +115,27 @@ export class OrderManager {
     log.info('session start equity reset', { prior, next: equity, dailyPnl: this.account.dailyPnl })
   }
 
+  /** Reset to a fresh paper sandbox — used by the data-feed switch when
+   *  entering Simulator. Clears all positions + orders and rebuilds the
+   *  account at `startingEquity`. The kill-switch latch is intentionally
+   *  PRESERVED: a feed swap must never silently re-enable trading. */
+  resetToPaper(startingEquity = DEFAULT_EQUITY): void {
+    this.positions.clear()
+    this.orders.clear()
+    this.sessionStartEquity = startingEquity
+    this.account = {
+      equity:           startingEquity,
+      cash:             startingEquity,
+      buyingPower:      startingEquity * BUYING_POWER_MULT,
+      openPositions:    [],
+      dailyPnl:         0,
+      dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
+      mode:             'paper',
+      killSwitchArmed:  this.account.killSwitchArmed,
+      sessionStartedAt: Date.now(),
+    }
+  }
+
   // ── Kill Switch ─────────────────────────────────────────────────────────────
   armKillSwitch(reason = 'manual'): void {
     if (this.account.killSwitchArmed) return

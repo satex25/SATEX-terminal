@@ -70,6 +70,10 @@ export const IPC = {
   ALPACA_MODE_GET:    'satex:alpacaMode:get',
   ALPACA_MODE_SET:    'satex:alpacaMode:set',
 
+  // Data feed (Simulator ⇄ Live Alpaca data)
+  DATA_SOURCE_GET:    'satex:dataSource:get',
+  DATA_SOURCE_SET:    'satex:dataSource:set',
+
   // AI brain
   BRAIN_DECISION:     'satex:brain:decision',
 

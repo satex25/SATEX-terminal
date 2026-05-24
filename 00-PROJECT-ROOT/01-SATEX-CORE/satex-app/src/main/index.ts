@@ -15,7 +15,7 @@ import { IPC } from '@shared/ipc-channels'
 import {
   OrderSubmitReq, OrderCancelReq, KillSwitchReq, CandlesGetReq, SymbolOnlyReq,
   OptionalSymbolReq, SubscribeReq, WatchlistSetReq, SessionIdReq, OptionalSessionIdReq,
-  CredentialsSetReq, BaiduSetReq, LiveModeSetReq, AlpacaModeSetReq, BrainDecisionReq,
+  CredentialsSetReq, BaiduSetReq, LiveModeSetReq, AlpacaModeSetReq, BrainDecisionReq, DataSourceSetReq,
   AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
@@ -790,6 +790,10 @@ function registerIpcHandlers(): void {
   register(IPC.BAIDU_SET,              validated(BaiduSetReq, (key)       => engine.setBaiduKey(key)))
   register(IPC.ALPACA_RECONNECT,       async ()                          => engine.reconnectAlpaca())
   register(IPC.HEALTH_CHECK,           ()                                => engine.healthCheck())
+
+  // ── Data feed (Simulator ⇄ Live Alpaca data) ────────────────────────────────
+  register(IPC.DATA_SOURCE_GET, ()                              => engine.getDataSource())
+  register(IPC.DATA_SOURCE_SET, validated(DataSourceSetReq, (req) => engine.setDataSource(req.target)))
 
   // ── Live mode (Phase 5) ──────────────────────────────────────────────────────
   register(IPC.LIVE_MODE_GET, ()                              => engine.getLiveMode())

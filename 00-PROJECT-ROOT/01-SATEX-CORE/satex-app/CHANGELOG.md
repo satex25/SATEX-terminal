@@ -24,6 +24,18 @@ changes alongside fixes during the v0.x stabilization series.
   doc's deferred perf canary (§6 Sprint 3). Design + findings:
   `docs/design/2026-05-22-renderer-perf-budget.md`.
 
+- **Runtime data-feed switch (Simulator ⇄ Live Alpaca paper data).** A one-click TopBar
+  source chip (`◇ SIM DATA` ⇄ `◆ ALPACA`, cyan — distinct from the amber PAPER/LIVE money
+  toggle) swaps the market data feed at runtime, no restart. The swap is transactional
+  (`prepare`→`commit`: Alpaca REST auth runs before any teardown, so a failed switch is a
+  clean no-op) and reconciles the OrderManager to a clean state (→Sim: fresh $100k paper;
+  →Live: real Alpaca paper positions/equity via `syncFromAlpaca`). Strictly paper-safe: the
+  switch is refused while ● LIVE real-capital is armed or a replay is active, and `submitOrder`
+  is gated mid-swap. Stored Alpaca keys persist across relaunch (safeStorage), so the live
+  feed stays available with no re-entry — covered by a new persistence E2E. Interlock logic is
+  the pure, unit-tested `data-source-guard.ts`. Design:
+  `docs/design/2026-05-24-data-feed-switch.md`.
+
 ## 0.4.4 (2026-05-XX)
 
 Sub-second crypto candles ship end-to-end. The A1 design doc

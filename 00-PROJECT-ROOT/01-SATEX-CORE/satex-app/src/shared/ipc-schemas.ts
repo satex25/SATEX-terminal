@@ -35,6 +35,13 @@ const PositiveFiniteS = z.number().positive().finite()
 const NonNegativeFiniteS = z.number().nonnegative().finite()
 const FiniteIntS = z.number().int().finite()
 
+// ── Data feed ─────────────────────────────────────────────────────────────────
+// The `DataSourceSetRequest` type alias lives in shared/types.ts; this schema is
+// the runtime wall for the DATA_SOURCE_SET channel.
+export const DataSourceSetReq = z.object({
+  target: z.enum(['simulator', 'live']),
+}).strict()
+
 // ── Orders ──────────────────────────────────────────────────────────────────
 // `.strict()` rejects unknown fields rather than silently stripping them.
 // Defense-in-depth alongside the `triggeredBy` removal (adversarial finding

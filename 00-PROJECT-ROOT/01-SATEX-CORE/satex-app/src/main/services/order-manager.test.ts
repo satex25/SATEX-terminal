@@ -373,3 +373,37 @@ describe('OrderManager — kill-switch persistence wiring (2026-05-18)', () => {
     expect(om.getAccount().killSwitchArmed).toBe(true)
   })
 })
+
+describe('resetToPaper — clean-sandbox reset for the data-feed switch', () => {
+  it('clears positions + orders and restores a fresh paper account', () => {
+    const om = new OrderManager(50_000)
+    const o = om.createOrder(baseBuy({ quantity: 10 }))
+    om.fillOrder(o.id, 100)
+    expect(om.getPosition('NVDA')).toBeDefined()
+
+    om.resetToPaper(100_000)
+
+    expect(om.getPosition('NVDA')).toBeUndefined()
+    expect(om.getOrders()).toEqual([])
+    const a = om.getAccount()
+    expect(a.equity).toBe(100_000)
+    expect(a.cash).toBe(100_000)
+    expect(a.buyingPower).toBe(100_000 * 2)   // BUYING_POWER_MULT
+    expect(a.dailyPnl).toBe(0)
+    expect(a.mode).toBe('paper')
+    expect(a.openPositions).toEqual([])
+  })
+
+  it('defaults to DEFAULT_EQUITY when no argument given', () => {
+    const om = new OrderManager(50_000)
+    om.resetToPaper()
+    expect(om.getAccount().equity).toBe(100_000)   // DEFAULT_EQUITY
+  })
+
+  it('preserves an armed kill switch (a reset must never silently re-enable trading)', () => {
+    const om = new OrderManager()
+    om.armKillSwitch('test')
+    om.resetToPaper()
+    expect(om.getAccount().killSwitchArmed).toBe(true)
+  })
+})
