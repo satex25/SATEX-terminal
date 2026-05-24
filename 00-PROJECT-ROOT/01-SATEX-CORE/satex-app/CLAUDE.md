@@ -23,6 +23,16 @@ asserts p50 ≤ 16 ms + p95 ≤ 10 ms under symbol-rotation + tick-stream load. 
 math + profiler lifecycle are unit-tested in `src/renderer/lib/perf.test.ts` (runs in CI).
 Design + the full diagnosis trail: `docs/design/2026-05-22-renderer-perf-budget.md`.
 
+## Data-feed switch (Simulator ⇄ Live Alpaca)
+
+Runtime market-data-feed toggle in the TopBar (`FeedSwitch.tsx` → `dataSourceStore` → IPC
+`DATA_SOURCE_SET` → `engine.setDataSource`). Reconciliation is reset-to-clean (OrderManager
+`resetToPaper` on →Sim; `syncFromAlpaca` on →Live). Interlock logic is the pure, unit-tested
+`data-source-guard.ts`. Paper-safe (blocked while real-capital armed / replay active).
+Opt-in E2Es: `$env:SATEX_E2E_FEED='1'; npx playwright test tests/e2e/feed-switch.spec.ts`
+(switch + rollback) and `tests/e2e/creds-persistence.spec.ts` (keys survive relaunch).
+Design: `docs/design/2026-05-24-data-feed-switch.md`.
+
 ## v0.4.4 — Sub-second crypto candles (2026-05-19)
 
 Commits riding into the v0.4.4 cut:
