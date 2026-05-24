@@ -24,6 +24,7 @@ import type {
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
   ClosedTrade, JournalTag, Trade, FeedStatus, UpdateAvailable,
   SubSecondCandle,
+  DataSource, DataSourceStatus, DataSourceSetRequest,
 } from '@shared/types'
 import type { IndicatorSettings } from '@shared/chart-indicators'
 import type { WorkspaceState } from '@shared/types'
@@ -76,6 +77,10 @@ const satexApi = {
   // ── Live mode (Phase 5) ─────────────────────────────────────────────────────
   getLiveMode: ()                                  => ipcRenderer.invoke(IPC.LIVE_MODE_GET) as Promise<LiveModeStatus>,
   setLiveMode: (req: LiveModeSetRequest)           => ipcRenderer.invoke(IPC.LIVE_MODE_SET, req) as Promise<{ ok: boolean; reason?: string }>,
+
+  // ── Data feed (Simulator ⇄ Live Alpaca data) ────────────────────────────────
+  getDataSource: ()                                => ipcRenderer.invoke(IPC.DATA_SOURCE_GET) as Promise<DataSourceStatus>,
+  setDataSource: (req: DataSourceSetRequest)       => ipcRenderer.invoke(IPC.DATA_SOURCE_SET, req) as Promise<{ ok: boolean; reason?: string; source?: DataSource }>,
 
   // ── Alpaca endpoint mode (paper vs live URL) ────────────────────────────────
   getAlpacaMode: ()                                => ipcRenderer.invoke(IPC.ALPACA_MODE_GET) as Promise<AlpacaModeStatus>,
