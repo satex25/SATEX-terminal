@@ -27,6 +27,7 @@ import { Dropdown, type DropdownItem } from './Dropdown'
 import { Dragonfly } from './Dragonfly'
 import { SessionPill } from './SessionPill'
 import { StatPill } from './StatPill'
+import { FeedSwitch } from './FeedSwitch'
 import { useClocks } from '../hooks/useClocks'
 import type {
   TacticsStatus, ObserverStats, LearnerStats, VaultStats,
@@ -315,6 +316,10 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
           {modeDisplay === 'live' ? 'LIVE' : 'LIVE'}
         </button>
       </div>
+
+      {/* Data-feed switch (Simulator ⇄ live Alpaca data) — cyan, distinct from the PAPER/LIVE money toggle */}
+      <span className="bb-vrule" />
+      <FeedSwitch />
 
       {/* Status pills */}
       <div className="bb-status-cluster">
