@@ -74,6 +74,11 @@ export const IPC = {
   DATA_SOURCE_GET:    'satex:dataSource:get',
   DATA_SOURCE_SET:    'satex:dataSource:set',
 
+  // Replay-free historical bars for the chart's off-hours backfill. Fetches a
+  // single day's OHLC bars for one symbol and returns them directly — no tape,
+  // no replay session, no workspace takeover (cf. REPLAY_IMPORT_HISTORICAL).
+  MARKET_HISTORICAL_BARS: 'satex:market:historicalBars',
+
   // AI brain
   BRAIN_DECISION:     'satex:brain:decision',
 

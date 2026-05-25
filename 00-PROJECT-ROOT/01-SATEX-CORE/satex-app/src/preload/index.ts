@@ -19,7 +19,7 @@ import type {
   ObserverStats, LearnerStats, VaultStats, PatternWeight,
   VaultCheckpointRequest,
   ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
-  HistoricalImportRequest, HistoricalImportResult,
+  HistoricalImportRequest, HistoricalImportResult, HistoricalBarsRequest, HistoricalBarsResult,
   AutonomousStatus, AutonomousDecision,
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
   ClosedTrade, JournalTag, Trade, FeedStatus, UpdateAvailable,
@@ -158,6 +158,12 @@ const satexApi = {
     importHistorical: (req: HistoricalImportRequest) => ipcRenderer.invoke(IPC.REPLAY_IMPORT_HISTORICAL, req) as Promise<HistoricalImportResult>,
     deleteSession:    (sessionId: string)            => ipcRenderer.invoke(IPC.REPLAY_DELETE_SESSION, sessionId) as Promise<{ ok: boolean; reason?: string }>,
   },
+
+  // Replay-free historical bars for the chart's off-hours backfill (see
+  // MARKET_HISTORICAL_BARS). Returns one symbol's day of OHLC bars directly —
+  // no replay session, so the chart can show the last NY session without the
+  // Replay workspace taking over.
+  getHistoricalBars: (req: HistoricalBarsRequest) => ipcRenderer.invoke(IPC.MARKET_HISTORICAL_BARS, req) as Promise<HistoricalBarsResult>,
 
   // ── Chart-indicator toggle persistence (Phase 11) ───────────────────────────
   indicators: {

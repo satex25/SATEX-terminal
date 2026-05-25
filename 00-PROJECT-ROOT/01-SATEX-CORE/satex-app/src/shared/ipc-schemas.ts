@@ -189,6 +189,14 @@ export const HistoricalImportReq = z.object({
 })
 export type HistoricalImportReq = z.infer<typeof HistoricalImportReq>
 
+/** Replay-free single-symbol bars fetch for the chart's off-hours backfill. */
+export const HistoricalBarsReq = z.object({
+  symbol: SymbolS,
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD'),
+  timeframe: HistoricalTimeframeS.optional(),
+}).strict()
+export type HistoricalBarsReq = z.infer<typeof HistoricalBarsReq>
+
 // ── Indicator settings ──────────────────────────────────────────────────────
 export const IndicatorSettingsSetReq = z.object({
   version: z.literal(1),

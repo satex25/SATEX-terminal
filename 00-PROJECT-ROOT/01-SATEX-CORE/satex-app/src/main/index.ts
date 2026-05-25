@@ -17,7 +17,7 @@ import {
   OptionalSymbolReq, SubscribeReq, WatchlistSetReq, SessionIdReq, OptionalSessionIdReq,
   CredentialsSetReq, BaiduSetReq, LiveModeSetReq, AlpacaModeSetReq, BrainDecisionReq, DataSourceSetReq,
   AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
-  ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq,
+  ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq, HistoricalBarsReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
   WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
 } from '@shared/ipc-schemas'
@@ -875,6 +875,7 @@ function registerIpcHandlers(): void {
   register(IPC.REPLAY_BOOKMARKS,         validated(SessionIdReq,          (sessionId)  => engine.listReplayBookmarks(sessionId)))
   register(IPC.REPLAY_STATUS_GET,        ()                                            => engine.getReplayStatus())
   register(IPC.REPLAY_IMPORT_HISTORICAL, validated(HistoricalImportReq,   (req)        => engine.importHistoricalDay(req)))
+  register(IPC.MARKET_HISTORICAL_BARS,   validated(HistoricalBarsReq,     (req)        => engine.getHistoricalBars(req)))
   register(IPC.REPLAY_DELETE_SESSION,    validated(SessionIdReq,          (sessionId)  => engine.deleteReplaySession(sessionId)))
 
   // ── Chart-indicator toggle persistence (Phase 11) ────────────────────────────

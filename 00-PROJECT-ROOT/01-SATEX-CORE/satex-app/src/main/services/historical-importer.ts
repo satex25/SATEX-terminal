@@ -31,7 +31,7 @@ import {
   REPLAY_MIN_SPEED,
 } from '@shared/constants'
 import type {
-  HistoricalImportRequest, HistoricalImportResult, HistoricalTimeframe,
+  HistoricalImportRequest, HistoricalImportResult, HistoricalBarsResult, HistoricalTimeframe,
   TickTapeRow, SessionRecord,
 } from '@shared/types'
 import * as db from './persistence'
@@ -92,8 +92,7 @@ export class HistoricalImporter {
     // ── Fetch bars per symbol ───────────────────────────────────────────────
     // US regular session window in UTC. Alpaca returns whatever it has inside
     // the window; weekends/holidays produce an empty list, which we surface.
-    const startIso = `${req.date}T13:00:00Z`   // ~09:00 ET in winter, ~08:00 in summer
-    const endIso   = `${req.date}T21:30:00Z`   // ~16:30 ET — covers full session
+    const { startIso, endIso } = sessionWindowIso(req.date)
 
     const tapeRows: TickTapeRow[] = []
     const imported: string[] = []
@@ -195,6 +194,38 @@ export class HistoricalImporter {
     }
   }
 
+  /** Replay-free fetch of one symbol's OHLC bars for a single calendar day.
+   *  Returns the bars directly for the chart's off-hours backfill — no OHLC
+   *  tick expansion, no DB write, no synthetic session, no replay. Mirrors the
+   *  creds-check + date-validation + session-window logic of `import()` but
+   *  stops at the `getBars` call. An empty bars array (closed day / too recent
+   *  for the free feed) is a valid `ok:true` result — the caller decides what
+   *  to do with zero bars. */
+  async fetchDayBars(
+    symbol: string,
+    date: string,
+    tf: HistoricalTimeframe = '1Min',
+  ): Promise<HistoricalBarsResult> {
+    if (!this.alpaca || !this.alpaca.isConfigured) {
+      return {
+        ok: false,
+        reason: 'No Alpaca credentials — open Settings and paste your paper key/secret first.',
+      }
+    }
+    const dateValidation = validateDate(date)
+    if (!dateValidation.ok) return { ok: false, reason: dateValidation.reason }
+    if (!(tf in TF_SPAN_MS)) return { ok: false, reason: `Unsupported timeframe: ${tf}` }
+
+    const { startIso, endIso } = sessionWindowIso(date)
+    try {
+      const bars = await this.alpaca.getBars(symbol.trim().toUpperCase(), tf, startIso, endIso)
+      return { ok: true, bars }
+    } catch (err) {
+      log.warn('historical bars fetch failed', { symbol, date, err: String(err) })
+      return { ok: false, reason: String(err) }
+    }
+  }
+
   /** Permanently delete a session's tape rows + bookmarks + session row.
    *  Use only for `hist_*` sessions — live sessions hold trading history. */
   deleteSession(sessionId: string): { ok: boolean; reason?: string } {
@@ -220,6 +251,17 @@ function validateDate(date: string): { ok: boolean; reason?: string } {
   const dow = d.getUTCDay()
   if (dow === 0 || dow === 6) return { ok: false, reason: 'Weekends have no US-stock data.' }
   return { ok: true }
+}
+
+/** US regular-session window for a calendar day, in UTC. Shared by the tape
+ *  importer and the replay-free bars fetch so both query the same range.
+ *  Alpaca returns whatever it has inside the window; weekends/holidays yield
+ *  an empty list. */
+function sessionWindowIso(date: string): { startIso: string; endIso: string } {
+  return {
+    startIso: `${date}T13:00:00Z`,   // ~09:00 ET in winter, ~08:00 in summer
+    endIso:   `${date}T21:30:00Z`,   // ~16:30 ET — covers full session
+  }
 }
 
 /** Deterministic session id. Same (date, tf, symbols-set) → same id. */

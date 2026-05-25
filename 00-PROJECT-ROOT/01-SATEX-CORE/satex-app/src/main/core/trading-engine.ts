@@ -38,7 +38,7 @@ import type {
   BaiduMaskedStatus, ObserverStats, LearnerStats, VaultStats, PatternWeight,
   VaultCheckpointRequest,
   ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
-  HistoricalImportRequest, HistoricalImportResult,
+  HistoricalImportRequest, HistoricalImportResult, HistoricalBarsRequest, HistoricalBarsResult,
   ClosedTrade, JournalTag, Trade,
 } from '@shared/types'
 import { shortId } from '../services/id-generator'
@@ -1389,6 +1389,18 @@ export class TradingEngine {
     const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
     const importer = new HistoricalImporter(alpaca)
     return importer.import(req)
+  }
+
+  /** Replay-free historical bars for the chart's off-hours backfill. Reuses the
+   *  same REST-only Alpaca fallback as importHistoricalDay so it works when the
+   *  engine booted in simulator mode but the user has since saved credentials.
+   *  Crucially this NEVER touches `this.replay`, `this.market`, wiring, or
+   *  `dataSource` — it is a pure read, so the chart can show the last NY session
+   *  without the Replay workspace taking over. */
+  async getHistoricalBars(req: HistoricalBarsRequest): Promise<HistoricalBarsResult> {
+    const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
+    const importer = new HistoricalImporter(alpaca)
+    return importer.fetchDayBars(req.symbol, req.date, req.timeframe ?? '1Min')
   }
 
   deleteReplaySession(sessionId: string): { ok: boolean; reason?: string } {

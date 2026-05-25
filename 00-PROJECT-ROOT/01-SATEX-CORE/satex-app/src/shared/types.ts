@@ -656,6 +656,22 @@ export interface HistoricalImportResult {
   skipped?: string[]
 }
 
+/** Request for a replay-free single-symbol day of OHLC bars (chart backfill). */
+export interface HistoricalBarsRequest {
+  /** Ticker (NVDA, SPY, …). */
+  symbol: string
+  /** YYYY-MM-DD (US Eastern session). Weekends / holidays / future dates rejected. */
+  date: string
+  /** Bar size — defaults to 1Min when omitted. */
+  timeframe?: HistoricalTimeframe
+}
+
+export interface HistoricalBarsResult {
+  ok: boolean
+  reason?: string
+  bars?: Candle[]
+}
+
 // ─── SATEX Terminal v2 · Black Box (Phase 10) ────────────────────────────────
 // Session-aware terminal UI: HMM regime, pre-trade risk gates, macro calendar,
 // system-log tail, real L2 depth. Each domain has its own main-process service
