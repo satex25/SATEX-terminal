@@ -232,18 +232,28 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     backfilledRef.current = true
     let cancelled = false
     void (async () => {
-      const result = await planLastSessionBackfill({
-        symbol,
-        assetClass: entry?.assetClass,
-        inReplay: false,
-        isMarketOpen: isUsEquityMarketOpen,
-        mostRecentClosedSessionDate,
-        getCredentialsMasked: async () => window.satex?.getCredentialsMasked(),
-        fetchBars: async (req) => (await window.satex?.getHistoricalBars(req)) ?? { ok: false },
-      })
-      if (cancelled || result.action !== 'backfilled') return
-      if ((useMarketStore.getState().candles.get(symbol)?.length ?? 0) === 0) {
-        useMarketStore.getState().bulkReplaceCandles(symbol, result.bars)
+      try {
+        const result = await planLastSessionBackfill({
+          symbol,
+          assetClass: entry?.assetClass,
+          inReplay: false,
+          isMarketOpen: isUsEquityMarketOpen,
+          mostRecentClosedSessionDate,
+          getCredentialsMasked: async () => window.satex?.getCredentialsMasked(),
+          fetchBars: async (req) => (await window.satex?.getHistoricalBars(req)) ?? { ok: false },
+        })
+        if (cancelled || result.action !== 'backfilled') return
+        if ((useMarketStore.getState().candles.get(symbol)?.length ?? 0) === 0) {
+          useMarketStore.getState().bulkReplaceCandles(symbol, result.bars)
+        }
+      } catch (e) {
+        // Defense-in-depth: the planner's internal awaits (getCredentialsMasked,
+        // fetchBars) catch Alpaca-side failures and return ok:false, so this
+        // path typically never fires. Only an unrelated rejection (main process
+        // unresponsive, preload bridge missing) would land here. Pane stays in
+        // the empty state — never crash the renderer. Mirrors ChartPanel's
+        // surrounding try/catch in its auto-backfill effect.
+        console.warn('[quad-pane] auto-backfill failed:', e)
       }
     })()
     return () => { cancelled = true }
