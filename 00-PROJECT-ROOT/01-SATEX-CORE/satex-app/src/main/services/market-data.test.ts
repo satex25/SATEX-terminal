@@ -96,3 +96,49 @@ describe('MarketSimulator — per-asset-class emission gate (2026-05-26)', () =>
     expect(classes.has('index')).toBe(false)
   })
 })
+
+describe('MarketSimulator — seedOverrides (Task 3, 2026-05-26)', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(TUESDAY_OPEN_ET) })
+  afterEach(()  => { vi.useRealTimers() })
+
+  it('uses seedOverrides for the initial price when an override exists', () => {
+    const overrides = new Map<string, number>([['NVDA', 135.50], ['BTC', 71_000]])
+    const sim = new MarketSimulator(1, overrides)
+    const nvda = sim.getQuote('NVDA')!
+    const btc  = sim.getQuote('BTC')!
+    expect(nvda.last).toBe(135.50)
+    expect(btc.last).toBe(71_000)
+    expect(nvda.prevClose).toBe(135.50)
+    expect(btc.prevClose).toBe(71_000)
+  })
+
+  it('falls back to UNIVERSE.seed for symbols not in the overrides map', () => {
+    const overrides = new Map<string, number>([['NVDA', 135.50]])
+    const sim = new MarketSimulator(1, overrides)
+    const spy = sim.getQuote('SPY')!
+    const spyEntry = UNIVERSE.find(u => u.symbol === 'SPY')!
+    expect(spy.last).toBe(spyEntry.seed)
+  })
+
+  it('rejects non-finite + non-positive overrides — falls back to UNIVERSE.seed', () => {
+    // Defense against a hostile or malformed Alpaca response leaking NaN/0 into
+    // the GBM walk. price === 0 would also DoS Math.exp(log-return) math.
+    const overrides = new Map<string, number>([
+      ['NVDA', NaN],
+      ['SPY',  0],
+      ['BTC',  -1],
+    ])
+    const sim = new MarketSimulator(1, overrides)
+    expect(sim.getQuote('NVDA')!.last).toBe(UNIVERSE.find(u => u.symbol === 'NVDA')!.seed)
+    expect(sim.getQuote('SPY')!.last).toBe(UNIVERSE.find(u => u.symbol === 'SPY')!.seed)
+    expect(sim.getQuote('BTC')!.last).toBe(UNIVERSE.find(u => u.symbol === 'BTC')!.seed)
+  })
+
+  it('treats omitted seedOverrides identically to the pre-Task-3 constructor', () => {
+    const a = new MarketSimulator(1)
+    const b = new MarketSimulator(1, new Map())  // empty map === no overrides
+    for (const u of UNIVERSE) {
+      expect(a.getQuote(u.symbol)!.last).toBe(b.getQuote(u.symbol)!.last)
+    }
+  })
+})

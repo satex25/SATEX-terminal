@@ -227,6 +227,123 @@ describe('AlpacaClient.getCryptoBars — /v1beta3/crypto/us/bars (2026-05-26)', 
   })
 })
 
+describe('AlpacaClient.getLatestPrices — seed hydration helper (2026-05-26)', () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status, headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('returns latest stock prices keyed by symbol, preferring latestTrade over latestQuote', async () => {
+    // Stocks endpoint: { snapshots: { NVDA: { latestTrade:{p:..}, latestQuote:{bp:.., ap:..} } } }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/v2/stocks/snapshots')) {
+        return jsonResponse({
+          snapshots: {
+            NVDA: { latestTrade: { p: 135.50 }, latestQuote: { bp: 135.45, ap: 135.55 } },
+            SPY:  { latestTrade: { p: 608.10 } },
+          },
+        })
+      }
+      return jsonResponse({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA', 'SPY'])
+
+    expect(out.get('NVDA')).toBe(135.50)
+    expect(out.get('SPY')).toBe(608.10)
+    const url = String(fetchMock.mock.calls[0]![0])
+    expect(url).toContain('/v2/stocks/snapshots')
+    expect(url).toContain('symbols=NVDA%2CSPY')
+  })
+
+  it('falls back to mid(bid,ask) when latestTrade is missing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string) => jsonResponse({
+      snapshots: {
+        AAPL: { latestQuote: { bp: 200, ap: 202 } },  // no latestTrade
+      },
+    })))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['AAPL'])
+    expect(out.get('AAPL')).toBe(201)  // mid
+  })
+
+  it('hits the crypto endpoint separately for crypto-class symbols', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/v1beta3/crypto/us/latest/trades')) {
+        return jsonResponse({ trades: { 'BTC/USD': { p: 71_000 }, 'ETH/USD': { p: 3_800 } } })
+      }
+      return jsonResponse({ snapshots: {} })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['BTC', 'ETH'])
+
+    expect(out.get('BTC')).toBe(71_000)
+    expect(out.get('ETH')).toBe(3_800)
+    const url = fetchMock.mock.calls.map(c => String(c[0])).find(u => u.includes('crypto'))!
+    expect(url).toContain('symbols=BTC%2FUSD%2CETH%2FUSD')
+  })
+
+  it('returns combined stock + crypto prices in one call', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/v2/stocks/snapshots')) {
+        return jsonResponse({ snapshots: { NVDA: { latestTrade: { p: 135 } } } })
+      }
+      if (url.includes('/v1beta3/crypto/us/latest/trades')) {
+        return jsonResponse({ trades: { 'BTC/USD': { p: 71_000 } } })
+      }
+      return jsonResponse({})
+    }))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA', 'BTC'])
+    expect(out.get('NVDA')).toBe(135)
+    expect(out.get('BTC')).toBe(71_000)
+    expect(out.size).toBe(2)
+  })
+
+  it('returns an empty map when credentials are missing (no throw)', async () => {
+    const cli = new AlpacaClient({ ...dummyCfg, keyId: '', secretKey: '' })
+    const out = await cli.getLatestPrices(['NVDA'])
+    expect(out.size).toBe(0)
+  })
+
+  it('returns a partial map when one branch fails (other-branch results survive)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/v2/stocks/snapshots')) return new Response('429', { status: 429 })
+      if (url.includes('/v1beta3/crypto/us/latest/trades')) {
+        return jsonResponse({ trades: { 'BTC/USD': { p: 71_000 } } })
+      }
+      return jsonResponse({})
+    }))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA', 'BTC'])
+    expect(out.get('BTC')).toBe(71_000)
+    expect(out.has('NVDA')).toBe(false)
+  })
+
+  it('skips symbols not present in the response (no NaN, no zero)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ snapshots: {} })))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA'])
+    expect(out.has('NVDA')).toBe(false)
+  })
+
+  it('handles an empty input gracefully', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices([])
+    expect(out.size).toBe(0)
+    expect(fetchMock).not.toHaveBeenCalled()  // no roundtrips for empty
+  })
+})
+
 describe('AlpacaClient — WS 406 connection-limit cooldown (2026-05-26)', () => {
   function cooldownUntilOf(client: AlpacaClient): number {
     return (client as unknown as { connectionLimitCooldownUntil: number }).connectionLimitCooldownUntil

@@ -288,6 +288,87 @@ export class AlpacaClient {
     }))
   }
 
+  /** Latest prices for an arbitrary symbol mix, dispatching stocks vs crypto
+   *  to their respective Alpaca endpoints in parallel. Returns a Map keyed by
+   *  the BARE symbol (BTC, not BTC/USD) so callers can join against UNIVERSE
+   *  without unpairing. Best-effort: a fetch failure on one branch leaves the
+   *  other branch's results in the map. No-creds returns an empty map without
+   *  hitting the network. Used by the engine's seed-hydration step
+   *  (2026-05-26) so the simulator boots from realistic prices instead of the
+   *  hardcoded UNIVERSE.seed values. */
+  async getLatestPrices(symbols: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>()
+    if (!this.isConfigured) return out
+    if (symbols.length === 0) return out
+
+    const stocks: string[] = []
+    const crypto: string[] = []
+    for (const raw of symbols) {
+      const sym = raw.trim().toUpperCase()
+      if (sym.length === 0) continue
+      const entry = findUniverseEntry(sym)
+      if (entry?.assetClass === 'crypto') crypto.push(sym)
+      else stocks.push(sym)
+    }
+
+    await Promise.all([
+      stocks.length > 0 ? this.fetchStockSnapshots(stocks, out).catch(err =>
+        log.warn('seed hydration stocks branch failed', { err: String(err) })
+      ) : Promise.resolve(),
+      crypto.length > 0 ? this.fetchCryptoLatestTrades(crypto, out).catch(err =>
+        log.warn('seed hydration crypto branch failed', { err: String(err) })
+      ) : Promise.resolve(),
+    ])
+
+    return out
+  }
+
+  private async fetchStockSnapshots(symbols: string[], out: Map<string, number>): Promise<void> {
+    this.rateLimiter.gate('GET /v2/stocks/snapshots')
+    const p = new URLSearchParams({ symbols: symbols.join(',') })
+    const res = await fetch(`${this.cfg.dataUrl}/v2/stocks/snapshots?${p}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(AlpacaClient.REST_TIMEOUT_MS),
+    })
+    if (!res.ok) throw new Error(`alpaca getLatestPrices stocks → ${res.status}: ${await res.text()}`)
+    const data = await res.json() as {
+      snapshots?: Record<string, {
+        latestTrade?: { p?: number }
+        latestQuote?: { bp?: number; ap?: number }
+      }>
+    }
+    for (const [sym, snap] of Object.entries(data.snapshots ?? {})) {
+      const trade = snap.latestTrade?.p
+      if (Number.isFinite(trade) && (trade as number) > 0) {
+        out.set(sym, trade as number); continue
+      }
+      const bp = snap.latestQuote?.bp ?? 0
+      const ap = snap.latestQuote?.ap ?? 0
+      if (Number.isFinite(bp) && Number.isFinite(ap) && bp > 0 && ap > 0) {
+        out.set(sym, (bp + ap) / 2)
+      }
+    }
+  }
+
+  private async fetchCryptoLatestTrades(symbols: string[], out: Map<string, number>): Promise<void> {
+    const pairs = symbols.map(s => `${s}/USD`)
+    this.rateLimiter.gate('GET /v1beta3/crypto/us/latest/trades')
+    const p = new URLSearchParams({ symbols: pairs.join(',') })
+    const res = await fetch(`${this.cfg.dataUrl}/v1beta3/crypto/us/latest/trades?${p}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(AlpacaClient.REST_TIMEOUT_MS),
+    })
+    if (!res.ok) throw new Error(`alpaca getLatestPrices crypto → ${res.status}: ${await res.text()}`)
+    const data = await res.json() as { trades?: Record<string, { p?: number }> }
+    for (const [pair, t] of Object.entries(data.trades ?? {})) {
+      const base = pair.split('/')[0] ?? pair
+      const price = t.p
+      if (Number.isFinite(price) && (price as number) > 0) {
+        out.set(base, price as number)
+      }
+    }
+  }
+
   /** Crypto historical bars via Alpaca's v1beta3 endpoint. Mirrors `getBars`
    *  but talks to /v1beta3/crypto/us/bars, which uses a slash-paired symbol
    *  format (BTC → BTC/USD) and returns a `bars` map keyed by that pair —

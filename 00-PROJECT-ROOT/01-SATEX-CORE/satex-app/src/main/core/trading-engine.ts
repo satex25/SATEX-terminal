@@ -420,9 +420,19 @@ export class TradingEngine {
     // Market data source
     if (!useAlpaca) {
       const seed = env.rngSeed ?? undefined
-      this.market = new MarketSimulator(seed)
+      // Task 3 (2026-05-26): when creds ARE saved but env forces simulator mode,
+      // pull real Alpaca snapshots to seed the GBM walk. Without this the sim
+      // boots from the hardcoded UNIVERSE.seed values, which drift away from
+      // reality between releases (e.g. NVDA $965 is a pre-2024-split number).
+      // Best-effort with a 3s budget so a slow/unreachable Alpaca never stalls
+      // engine boot — falls back to UNIVERSE.seed silently on failure.
+      const seedOverrides = await this.hydrateSimulatorSeedsBestEffort()
+      this.market = new MarketSimulator(seed, seedOverrides)
       const reason = env.useSimulator ? 'env-forced' : 'no-credentials'
-      log.info('using simulator', { seed, reason, mode, hasStoredCreds: !!stored })
+      log.info('using simulator', {
+        seed, reason, mode, hasStoredCreds: !!stored,
+        ...(seedOverrides && seedOverrides.size > 0 ? { hydratedSeeds: seedOverrides.size } : {}),
+      })
     } else {
       const cfg: AlpacaConfig = {
         keyId, secretKey,
@@ -1507,6 +1517,32 @@ export class TradingEngine {
     }
     log.info('historical-import: built REST-only AlpacaClient (engine in simulator mode)', { mode, feed: cfg.feed })
     return new AlpacaClient(cfg)
+  }
+
+  /** Task 3 (2026-05-26) — fetch real Alpaca snapshots so MarketSimulator can
+   *  start its GBM walk from realistic prices instead of the hardcoded
+   *  UNIVERSE.seed. Returns undefined when no creds are available (so the
+   *  simulator's log line can skip the noisy `hydratedSeeds: 0`). Bounded by
+   *  a 3 s race so an unreachable / slow Alpaca never stalls engine boot;
+   *  partial failures inside getLatestPrices are already swallowed there. */
+  private async hydrateSimulatorSeedsBestEffort(): Promise<Map<string, number> | undefined> {
+    const restClient = this.buildRestOnlyAlpacaClient()
+    if (!restClient) return undefined
+    const symbols = UNIVERSE.map(u => u.symbol)
+    const TIMEOUT_MS = 3_000
+    const hydrated = await Promise.race([
+      restClient.getLatestPrices(symbols).catch(err => {
+        log.warn('simulator seed hydration failed', { err: String(err) })
+        return new Map<string, number>()
+      }),
+      new Promise<Map<string, number>>(resolve =>
+        setTimeout(() => {
+          log.warn('simulator seed hydration timed out — using UNIVERSE.seed', { timeoutMs: TIMEOUT_MS })
+          resolve(new Map<string, number>())
+        }, TIMEOUT_MS),
+      ),
+    ])
+    return hydrated.size > 0 ? hydrated : undefined
   }
 
   /**
