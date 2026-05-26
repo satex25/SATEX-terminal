@@ -1400,6 +1400,14 @@ export class TradingEngine {
   async getHistoricalBars(req: HistoricalBarsRequest): Promise<HistoricalBarsResult> {
     const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
     const importer = new HistoricalImporter(alpaca)
+    // Asset-class dispatch (2026-05-26): crypto trades 24/7 so "last completed
+    // NY session date" doesn't apply — hit the v1beta3 crypto endpoint for the
+    // last 24h instead. The IPC contract is unchanged; we look the class up
+    // from UNIVERSE so the renderer doesn't need to know which feed runs.
+    const entry = findUniverseEntry(req.symbol.trim().toUpperCase())
+    if (entry?.assetClass === 'crypto') {
+      return importer.fetchRecentCryptoBars(req.symbol, req.timeframe ?? '1Min')
+    }
     return importer.fetchDayBars(req.symbol, req.date, req.timeframe ?? '1Min')
   }
 

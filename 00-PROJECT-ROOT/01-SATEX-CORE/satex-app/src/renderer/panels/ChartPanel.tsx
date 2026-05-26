@@ -287,6 +287,7 @@ export function ChartPanel() {
       try {
         const result = await planLastSessionBackfill({
           symbol,
+          assetClass: entry?.assetClass,
           inReplay,
           isMarketOpen: isUsEquityMarketOpen,
           mostRecentClosedSessionDate,
@@ -295,15 +296,24 @@ export function ChartPanel() {
         })
         if (cancelled) return
         if (result.action === 'backfilled') {
-          // One bulk update swaps the whole day in — no replay, no workspace
+          // One bulk update swaps the data in — no replay, no workspace
           // takeover. The simulator feed keeps running underneath.
           useMarketStore.getState().bulkReplaceCandles(symbol, result.bars)
-          setHistDate(result.date)
-          setHistInfo(`Showing last NY session (${result.date}) · US market closed`)
-        } else if (result.action === 'skipped' && result.reason === 'no-creds') {
+          if (entry?.assetClass === 'crypto') {
+            // Crypto returns a rolling 24h via fetchRecentCryptoBars — there
+            // is no "NY session" date to surface in the picker.
+            setHistInfo('Showing last 24h of crypto bars')
+          } else {
+            setHistDate(result.date)
+            setHistInfo(`Showing last NY session (${result.date}) · US market closed`)
+          }
+        } else if (result.action === 'skipped' && result.reason === 'no-creds' && entry?.assetClass !== 'crypto') {
           // Soft, dismissable nudge so the user understands why the chart is on
           // simulator data. Shown once per session — a dismiss latches in
           // sessionStorage so it doesn't follow the user around between tabs.
+          // Skipped for crypto: it doesn't have NY-session semantics, and the
+          // simulator already streams crypto 24/7 (asset-class emit gate,
+          // 2026-05-26) so cold boots populate within a second.
           try {
             if (!sessionStorage.getItem('satex.chart.no-creds-dismissed')) {
               setHistInfo('Outside US market hours · simulated data only. Add Alpaca keys in Settings → Data Source to auto-load the last NY session.')
@@ -322,7 +332,9 @@ export function ChartPanel() {
     return () => { cancelled = true }
     // symbol drives a ChartPanel remount (key={symbol} in App.tsx), so the
     // latch naturally resets per symbol and each gets one backfill attempt.
-  }, [inReplay, replayStatus, symbol])
+    // entry?.assetClass is derived from symbol so it's already captured, but
+    // we list it explicitly to satisfy react-hooks/exhaustive-deps.
+  }, [inReplay, replayStatus, symbol, entry?.assetClass])
 
   /**
    * Load a previous calendar day into the chart via Phase 9.1 historical

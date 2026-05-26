@@ -226,6 +226,35 @@ export class HistoricalImporter {
     }
   }
 
+  /** Replay-free fetch of one crypto symbol's most-recent OHLC bars. Mirrors
+   *  `fetchDayBars` but for symbols that trade ~24/7 — there is no "session"
+   *  to anchor to, so the window is `[now - hoursBack*1h, now]`. Used by the
+   *  Quad/Trade off-hours backfill for crypto symbols; the renderer doesn't
+   *  pass a date because the date semantic doesn't apply. */
+  async fetchRecentCryptoBars(
+    symbol: string,
+    tf: HistoricalTimeframe = '1Min',
+    hoursBack = 24,
+  ): Promise<HistoricalBarsResult> {
+    if (!this.alpaca || !this.alpaca.isConfigured) {
+      return {
+        ok: false,
+        reason: 'No Alpaca credentials — open Settings and paste your paper key/secret first.',
+      }
+    }
+    if (!(tf in TF_SPAN_MS)) return { ok: false, reason: `Unsupported timeframe: ${tf}` }
+    const now = Date.now()
+    const startIso = new Date(now - hoursBack * 3_600_000).toISOString()
+    const endIso   = new Date(now).toISOString()
+    try {
+      const bars = await this.alpaca.getCryptoBars(symbol.trim().toUpperCase(), tf, startIso, endIso)
+      return { ok: true, bars }
+    } catch (err) {
+      log.warn('historical crypto bars fetch failed', { symbol, hoursBack, err: String(err) })
+      return { ok: false, reason: String(err) }
+    }
+  }
+
   /** Permanently delete a session's tape rows + bookmarks + session row.
    *  Use only for `hist_*` sessions — live sessions hold trading history. */
   deleteSession(sessionId: string): { ok: boolean; reason?: string } {

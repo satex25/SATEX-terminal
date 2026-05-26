@@ -284,6 +284,31 @@ export class AlpacaClient {
     }))
   }
 
+  /** Crypto historical bars via Alpaca's v1beta3 endpoint. Mirrors `getBars`
+   *  but talks to /v1beta3/crypto/us/bars, which uses a slash-paired symbol
+   *  format (BTC → BTC/USD) and returns a `bars` map keyed by that pair —
+   *  not a flat array. USD is the only quote we trade and matches the WS
+   *  crypto subscription format (`cryptoWs` uses BTC/USD too). Shares the
+   *  same 200/min rate-limit bucket as the stock endpoint. */
+  async getCryptoBars(symbol: string, tf: '1Min' | '5Min' | '15Min' | '1Hour' | '1Day', startIso: string, endIso?: string): Promise<Candle[]> {
+    if (!this.isConfigured) throw new Error('alpaca: missing credentials')
+    const pair = `${symbol.trim().toUpperCase()}/USD`
+    this.rateLimiter.gate(`GET /v1beta3/crypto/us/bars ${pair}`)
+    const p = new URLSearchParams({ symbols: pair, timeframe: tf, start: startIso, limit: '10000' })
+    if (endIso) p.set('end', endIso)
+    const res = await fetch(`${this.cfg.dataUrl}/v1beta3/crypto/us/bars?${p}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(AlpacaClient.REST_TIMEOUT_MS),
+    })
+    if (!res.ok) throw new Error(`alpaca getCryptoBars ${pair} → ${res.status}: ${await res.text()}`)
+    const data = await res.json() as { bars?: Record<string, Array<{ t: string; o: number; h: number; l: number; c: number; v: number }>> }
+    const raw = (data.bars ?? {})[pair] ?? []
+    return raw.map(b => ({
+      time: Math.floor(new Date(b.t).getTime() / 1000),
+      open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v,
+    }))
+  }
+
   /**
    * Filter symbols for a given Alpaca data feed.
    *

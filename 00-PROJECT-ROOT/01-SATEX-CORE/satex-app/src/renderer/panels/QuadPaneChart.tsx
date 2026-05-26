@@ -217,12 +217,15 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles.length, opts.showVWAP, theme])
 
-  // ── Off-hours backfill — fill an empty pane with the last completed NY
-  //    session (replay-free, via getHistoricalBars). Equity/index only; futures
-  //    & crypto fall back to the live stream / "awaiting data". One attempt per
-  //    mount, applied only if the pane is STILL empty when bars arrive so a
-  //    concurrent live tick / engine reseed is never clobbered. Quad is hidden
-  //    while a replay is active, so inReplay is always false here.
+  // ── Off-hours backfill — fill an empty pane with real bars from Alpaca:
+  //    equity/index → the last completed NY session (1Min, RTH window);
+  //    crypto      → the rolling last 24h (24/7 markets have no "session").
+  //    Futures fall back to the live stream / "awaiting data" (no Alpaca feed).
+  //    Replay-free via getHistoricalBars; main dispatches per asset class.
+  //    One attempt per mount, applied only if the pane is STILL empty when
+  //    bars arrive so a concurrent live tick / engine reseed is never
+  //    clobbered. Quad is hidden while a replay is active, so inReplay is
+  //    always false here.
   const backfilledRef = useRef(false)
   useEffect(() => {
     if (backfilledRef.current || candles.length > 0) return
@@ -231,6 +234,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     void (async () => {
       const result = await planLastSessionBackfill({
         symbol,
+        assetClass: entry?.assetClass,
         inReplay: false,
         isMarketOpen: isUsEquityMarketOpen,
         mostRecentClosedSessionDate,

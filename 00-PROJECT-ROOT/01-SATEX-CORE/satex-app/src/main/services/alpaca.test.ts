@@ -16,7 +16,7 @@
  * payloads, then assert every numeric field on the emitted AlpacaTick is
  * finite and the symbol is length-capped.
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { AlpacaClient, type AlpacaTick, type AlpacaConfig } from './alpaca'
 
 const dummyCfg: AlpacaConfig = {
@@ -165,5 +165,64 @@ describe('AlpacaClient — crypto WS boundary NaN guards (D6, v0.4.3)', () => {
     expect(ticks[0]!.symbol).toBe('BTC')
     expect(ticks[0]!.price).toBe(50_000)
     expect(ticks[0]!.kind).toBe('t')
+  })
+})
+
+describe('AlpacaClient.getCryptoBars — /v1beta3/crypto/us/bars (2026-05-26)', () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status, headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('hits /v1beta3/crypto/us/bars with BTC/USD url-encoded symbol formatting', async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse({
+      bars: { 'BTC/USD': [{ t: '2026-05-26T17:00:00Z', o: 100, h: 101, l: 99, c: 100.5, v: 1000 }] },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = new AlpacaClient(dummyCfg)
+    const bars = await cli.getCryptoBars('BTC', '1Min', '2026-05-25T18:00:00Z', '2026-05-26T18:00:00Z')
+
+    expect(bars).toEqual([{
+      time: Math.floor(new Date('2026-05-26T17:00:00Z').getTime() / 1000),
+      open: 100, high: 101, low: 99, close: 100.5, volume: 1000,
+    }])
+    const url = String(fetchMock.mock.calls[0]![0])
+    expect(url).toContain('/v1beta3/crypto/us/bars')
+    expect(url).toContain('symbols=BTC%2FUSD')   // slash url-encoded
+    expect(url).toContain('timeframe=1Min')
+    expect(url).toContain('start=2026-05-25T18%3A00%3A00Z')
+    expect(url).toContain('end=2026-05-26T18%3A00%3A00Z')
+  })
+
+  it('returns an empty array when the keyed bars list is missing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ bars: {} })))
+    const cli = new AlpacaClient(dummyCfg)
+    const bars = await cli.getCryptoBars('BTC', '1Min', '2026-05-25T18:00:00Z')
+    expect(bars).toEqual([])
+  })
+
+  it('uppercases lowercase input before pairing — eth → ETH/USD', async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse({ bars: { 'ETH/USD': [] } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const cli = new AlpacaClient(dummyCfg)
+    await cli.getCryptoBars('eth', '1Min', '2026-05-25T18:00:00Z')
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('symbols=ETH%2FUSD')
+  })
+
+  it('throws when credentials are missing', async () => {
+    const cli = new AlpacaClient({ ...dummyCfg, keyId: '', secretKey: '' })
+    await expect(cli.getCryptoBars('BTC', '1Min', '2026-05-26T00:00:00Z'))
+      .rejects.toThrow(/credentials/i)
+  })
+
+  it('throws with status + body on non-ok responses', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('rate limited', { status: 429 })))
+    const cli = new AlpacaClient(dummyCfg)
+    await expect(cli.getCryptoBars('BTC', '1Min', '2026-05-26T00:00:00Z'))
+      .rejects.toThrow(/429/)
   })
 })

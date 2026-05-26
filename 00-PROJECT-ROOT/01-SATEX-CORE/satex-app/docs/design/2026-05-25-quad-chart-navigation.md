@@ -49,10 +49,18 @@ A single self-contained lightweight-charts pane. Props: `{ symbol, emaPeriods, t
 ### Data coherence
 - Empty panes no longer mask the problem with a seed stub — they show "awaiting data" until
   real candles arrive (live sim/stream, or the post-replay reseed).
-- **Off-hours backfill reuse:** when a pane is empty *and* the market is closed *and* the symbol
-  is equity/index, reuse `planLastSessionBackfill` + `window.satex.getHistoricalBars` (from the
-  hijack-fix branch) to silently populate that pane's candles — same replay-free path, per pane.
-  Futures/crypto (ES/BTC) fall back to the live stream / "awaiting data".
+- **Asset-class-aware off-hours backfill (2026-05-26 follow-up):** when a pane is empty,
+  reuse `planLastSessionBackfill` + `window.satex.getHistoricalBars` (from the hijack-fix
+  branch) to silently populate that pane's candles — same replay-free path, per pane.
+  Per asset class:
+  - **equity/index** → last completed NY session, 1Min bars, gated on the RTH window
+    (skip while market is open — live ticks populate fast).
+  - **crypto** → rolling last 24h of 1Min bars from Alpaca's `/v1beta3/crypto/us/bars`;
+    the market-open gate doesn't apply (crypto trades 24/7). Symbol pairs to `BTC/USD` /
+    `ETH/USD` in main; the IPC contract is unchanged. The renderer never sees the pair
+    suffix.
+  - **futures** → still falls back to the live stream / "awaiting data" (Alpaca's free
+    tier has no futures bars endpoint).
 
 ### Single-chart gaps (`ChartPanel`)
 - Verify the time-scale config packs contiguous bars (lightweight-charts spaces by data index,

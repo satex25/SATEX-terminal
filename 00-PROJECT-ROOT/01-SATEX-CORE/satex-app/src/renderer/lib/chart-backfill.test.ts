@@ -70,3 +70,53 @@ describe('planLastSessionBackfill — off-hours chart backfill (replay-free)', (
     if (r.action === 'no-bars') expect(r.reason).toBe('alpaca 429')
   })
 })
+
+describe('planLastSessionBackfill — crypto (2026-05-26)', () => {
+  it('does NOT skip on market-open when assetClass is crypto (crypto trades 24/7)', async () => {
+    const fetchBars = vi.fn(async () => ({ ok: true, bars: BARS }))
+    const r = await planLastSessionBackfill(deps({
+      symbol: 'BTC',
+      assetClass: 'crypto',
+      isMarketOpen: () => true,
+      fetchBars,
+    }))
+    expect(r.action).toBe('backfilled')
+    expect(fetchBars).toHaveBeenCalled()
+  })
+
+  it('does NOT skip on market-closed for crypto either — every cold boot gets bars', async () => {
+    const fetchBars = vi.fn(async () => ({ ok: true, bars: BARS }))
+    const r = await planLastSessionBackfill(deps({
+      symbol: 'BTC',
+      assetClass: 'crypto',
+      isMarketOpen: () => false,
+      fetchBars,
+    }))
+    expect(r.action).toBe('backfilled')
+    expect(fetchBars).toHaveBeenCalled()
+  })
+
+  it('still skips on in-replay for crypto (never clobbers an active tape)', async () => {
+    const fetchBars = vi.fn(async () => ({ ok: true, bars: BARS }))
+    const r = await planLastSessionBackfill(deps({
+      symbol: 'BTC', assetClass: 'crypto', inReplay: true, fetchBars,
+    }))
+    expect(r).toEqual({ action: 'skipped', reason: 'in-replay' })
+    expect(fetchBars).not.toHaveBeenCalled()
+  })
+
+  it('still skips on no-creds for crypto', async () => {
+    const r = await planLastSessionBackfill(deps({
+      symbol: 'BTC', assetClass: 'crypto', getCredentialsMasked: async () => ({}),
+    }))
+    expect(r).toEqual({ action: 'skipped', reason: 'no-creds' })
+  })
+
+  it('default assetClass (undefined) preserves the old equity behavior — market-open skips', async () => {
+    // Backward-compat: existing callers that omit assetClass keep the v0.4.4 gate.
+    const fetchBars = vi.fn(async () => ({ ok: true, bars: BARS }))
+    const r = await planLastSessionBackfill(deps({ isMarketOpen: () => true, fetchBars }))
+    expect(r).toEqual({ action: 'skipped', reason: 'market-open' })
+    expect(fetchBars).not.toHaveBeenCalled()
+  })
+})
