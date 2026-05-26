@@ -83,6 +83,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
   // ── create chart (once per mount; symbol is fixed via parent key) ───────────
   useEffect(() => {
     let cancelled = false
+    let ro: ResizeObserver | null = null
     const emaMapAtMount = emaMapRef.current
     void (async () => {
       try {
@@ -115,7 +116,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
         chartRef.current  = chart
         candleRef.current = series
         lwcRef.current    = lwc
-        const ro = new ResizeObserver(() => {
+        ro = new ResizeObserver(() => {
           if (!containerRef.current) return
           ;(chart as { resize: (w: number, h: number) => void })
             .resize(containerRef.current.clientWidth, containerRef.current.clientHeight)
@@ -127,6 +128,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     })()
     return () => {
       cancelled = true
+      ro?.disconnect()  // stop observing before dispose — was leaked (lived only in the init closure)
       if (chartRef.current) {
         try { (chartRef.current as { remove: () => void }).remove() } catch { /* ignore */ }
       }
