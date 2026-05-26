@@ -61,6 +61,14 @@ export interface UniverseEntry {
   dp: number
 }
 
+// Seed prices below are FALLBACK starting values used by the simulator when
+// real-market hydration isn't available (no Alpaca creds saved, network
+// failure, or the 3-second engine-boot budget expired). When creds ARE
+// saved the engine calls AlpacaClient.getLatestPrices on init and the
+// simulator boots from the real-market snapshot instead — see
+// trading-engine.hydrateSimulatorSeedsBestEffort (Task 3, 2026-05-26).
+// Drift in these literals only affects the no-creds path; precise currency
+// here is not load-bearing.
 export const UNIVERSE: readonly UniverseEntry[] = [
   // Index ETFs
   { symbol: 'SPY',  name: 'S&P 500 ETF',        assetClass: 'index',  seed: 608.45,    dp: 2 },

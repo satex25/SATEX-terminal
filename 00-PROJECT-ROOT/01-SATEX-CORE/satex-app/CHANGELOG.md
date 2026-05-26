@@ -36,6 +36,188 @@ changes alongside fixes during the v0.x stabilization series.
   the pure, unit-tested `data-source-guard.ts`. Design:
   `docs/design/2026-05-24-data-feed-switch.md`.
 
+## [0.5.0] - 2026-05-26
+
+The v0.5 RC cut. Quad chart rebuilt from the ground up on `lightweight-charts`,
+plus an asset-class-aware data path that turns the simulator + historical
+backfill into a coherent story across equities, indices, futures, and crypto.
+Tasks 1–4 from the 2026-05-25 dev plan all land here; final audit pass at
+`62de93b` tightens the boot critical path and removes residual `as number`
+casts. Master moves from 247/247 to **366/366 vitest cases across 31 files.**
+
+### Added
+
+- **Quad chart rebuild — 2×2 lightweight-charts panes.** Replaces the
+  hand-drawn SVG `ChartCanvas` (~300 lines deleted) with four independent
+  `QuadPaneChart` instances. Each pane is a self-contained
+  `lightweight-charts` instance with its own candlestick + EMA + VWAP series,
+  RSI14 header, and a clean "— awaiting <symbol> data —" empty state. No
+  more fabricated seed-priced flat lines when a pane has no data.
+  Click-to-expand 1-of-4 focus and the symbol-swap picker are preserved.
+  Design: `docs/design/2026-05-25-quad-chart-navigation.md`.
+
+- **Independent per-pane navigation.** Native drag-pan and wheel-zoom on
+  each pane's timeline. **No shared crosshair, no synchronized scroll** —
+  each pane is an isolated chart instance with its own time scale
+  (`handleScroll: true`, `handleScale: true`). The previous shared `hover`
+  state and the `usePaneData` seed stub are both gone.
+
+- **Full theme reactivity on Quad panes.** Candles read from
+  `--bb-pos`/`--bb-neg` CSS variables via the new `candlestickColors`
+  mapper (extracted from `ChartPanel` so single and quad share one
+  contract); EMA colors come from `--bb-ema9`/`--bb-ema21`; VWAP reads
+  `--bb-accent` with opacity via `applyOpacity`. Switching theme
+  (Classic / Mono / Bluyel) re-applies on every pane via the
+  `theme`-keyed effect — no remount needed.
+
+- **Asset-class-aware off-hours backfill.** Cold-booted empty panes
+  silently populate from real Alpaca bars via the existing
+  `getHistoricalBars` IPC, dispatched per `UniverseEntry.assetClass`:
+  - **equity / index** → last completed NY session, 1Min bars (existing
+    behavior, threaded through the renderer planner's new `assetClass`
+    field).
+  - **crypto** → rolling 24h ending now via the new
+    `/v1beta3/crypto/us/bars` endpoint and `AlpacaClient.getCryptoBars`.
+    The renderer planner skips the `isMarketOpen` gate for crypto since
+    24/7 markets have no RTH window.
+  - **futures** → no Alpaca feed; falls back to the live simulator
+    stream / "awaiting data."
+  IPC contract is unchanged; the asset-class dispatch happens in main via
+  `findUniverseEntry`. `ChartPanel`'s post-backfill banner branches to
+  "Showing last 24h of crypto bars" for crypto symbols and suppresses
+  the "add Alpaca keys for the last NY session" nudge (nonsense for an
+  asset class without NY sessions; the sim emits crypto 24/7 anyway).
+
+- **Asset-class-aware simulator emission gate.** Crypto and futures now
+  emit ticks + candles **24/7** in the simulator. Equities and indices
+  still freeze outside US RTH so the chart doesn't fabricate movement
+  while real markets are closed (preserves the 2026-05-17 fix). The
+  `SATEX_SIMULATOR_24_7=true` escape hatch still forces everything on.
+  Per-asset-class gate (`shouldEmitFor`) is applied inside both `tick()`
+  and `rollCandle()` so individual symbols can be included/excluded on
+  the same pass.
+
+- **Boot-time simulator seed hydration.** When Alpaca credentials are
+  saved, the engine fetches real-market snapshots (`/v2/stocks/snapshots`
+  + `/v1beta3/crypto/us/latest/trades`) at init and feeds them into the
+  `MarketSimulator` constructor as `seedOverrides`. The GBM walk now
+  starts from realistic prices instead of the hardcoded `UNIVERSE.seed`
+  values (some of which were a year or more stale — NVDA $965.20 was
+  the pre-2024-split equivalent). Bounded by a **1-second budget** so
+  the "boot critical path under 1s" invariant is preserved on slow or
+  unreachable Alpaca; falls back to `UNIVERSE.seed` silently on failure.
+  Defensive checks reject NaN / 0 / negative overrides (a 0 override
+  would DoS `Math.exp` on log-return updates).
+
+- **Shared renderer helpers.** Three pure modules extracted from the
+  Quad work, all unit-tested independently:
+  - `renderer/lib/quad-chart-theme.ts` — `candlestickColors(readCssVar)`
+    maps the active theme's CSS variables to `lightweight-charts`
+    options. Replaces the inline candle-init logic in `ChartPanel`.
+  - `renderer/lib/chart-series.ts` — `emaSeries` + `vwapSeries` pure
+    functions (extracted from the SVG `ChartCanvas`; reused by both
+    Quad panes and any future small-chart use).
+  - `renderer/lib/color.ts` — `applyOpacity` (hex + rgb + named-color
+    aware) shared by the EMA regime tinting and VWAP overlay.
+
+### Changed
+
+- **AlpacaClient WS reconnect math** is now a pure helper:
+  `alpaca-reconnect.ts` exports `computeReconnectDelay(attempts,
+  cooldownUntilMs, nowMs)` which returns `max(exponentialBackoff,
+  cooldownRemaining)`. Equity, crypto, and account WS reconnect paths
+  all consume it — single source of truth for the 1s → 30s exponential
+  back-off and the 60s 406 cooldown. Behavior unchanged for equity;
+  see "Fixed" below for the crypto/account behavior change.
+
+### Fixed
+
+- **Crypto WS now honors Alpaca's 406 connection-limit cooldown.** The
+  equity feed has held the cooldown contract since v0.4.2: on
+  `T:'error', code: 406` ("connection limit exceeded"), set
+  `connectionLimitCooldownUntil = now + 60s` so the next reconnect waits
+  out the orphan-socket TTL. The crypto feed shipped without that
+  guard — its `onCryptoDataMsg` logged 406 but did nothing. Its
+  `onclose` then computed pure exponential backoff (1s, 2s, 4s, 8s, 16s,
+  cap 30s) and would burn through all six attempts inside the 60s
+  window, keeping the limit pinned. Fixed by treating 406 identically
+  in both error handlers; both reconnect paths now read the shared
+  cooldown via `computeReconnectDelay`. The account-WS reconnect path
+  also routes through the helper so a data-WS 406 slows it too
+  (Alpaca counts orphan sockets account-wide).
+
+- **Crypto WS reconnect-timer guard.** Pre-fix, crypto's `onclose`
+  scheduled a bare `setTimeout(..., backoff).unref?.()` with no handle
+  tracked, so a rapid close+close sequence on a flaky connection could
+  schedule overlapping reconnects. Added `cryptoReconnectTimer` field
+  + early-return guard, matching the equity and account paths.
+  `disconnectCryptoStream` now clears the timer.
+
+- **Off-hours backfill no longer hijacks the workspace.** Pre-fix, the
+  2026-05-17 off-hours backfill drove a *replay* to load the day's
+  bars, which forced `App.tsx`'s `effectiveWs` to `Replay` (so the
+  scrubber couldn't disappear mid-tape), hijacking the user's chosen
+  workspace (Quad / Trade / Focus / Markets) every off-hours launch
+  whenever Alpaca creds were saved. The replay-free
+  `planLastSessionBackfill` writes the day's bars directly into the
+  candle store via `getHistoricalBars`. No tape, no session, no
+  workspace takeover. Design:
+  `docs/design/2026-05-25-offhours-chart-backfill.md`.
+
+- **Defense-in-depth try/catch on `QuadPaneChart` backfill.** The
+  planner's internal awaits (`getCredentialsMasked`, `fetchBars`)
+  already swallow Alpaca-side failures and return `ok:false`, so the
+  pane gracefully stays in the empty state. Added an outer try/catch
+  for unexpected rejections (main process unresponsive, preload bridge
+  missing) so the renderer never sees an unhandled rejection — mirrors
+  `ChartPanel`'s pattern.
+
+### Architecture
+
+- Per the v0.6 design adoption plan, the **renderer perf canary**
+  from the prior cycle (`tests/e2e/renderer-perf.spec.ts`) targets the
+  single `ChartPanel` — the Quad rebuild is intentionally *not*
+  benchmarked yet because each pane runs the same `lightweight-charts`
+  instance the single chart already uses, and four parallel charts
+  would skew the percentile baseline beyond the median-of-3 reference.
+  Promoting the canary to gate Quad too is tracked as a follow-up.
+
+### Tests
+
+- Vitest 247/247 (master baseline pre-Quad) → **366/366 across 31
+  files** post-Quad. New / extended:
+  - `chart-backfill.test.ts` +5 crypto cases (assetClass bypass of
+    market-open gate, in-replay and no-creds still skip, back-compat
+    for omitted assetClass).
+  - `alpaca.test.ts` +18 cases (getCryptoBars URL formatting and
+    parsing, getLatestPrices stocks + crypto branches, 406 cooldown
+    wiring, mid(bid,ask) fallback, empty-input short-circuit).
+  - `alpaca-reconnect.test.ts` — new file, 7 cases pinning the
+    exponential progression + cooldown semantics.
+  - `historical-importer.test.ts` +7 crypto-bars cases (24h window,
+    hoursBack honored, unsupported timeframe short-circuits the
+    network, fetch failure surfaced cleanly).
+  - `market-data.test.ts` — new file, 8 cases (asset-class emit gate,
+    seed override application + defenses against NaN/0/negative).
+  - `chart-series.test.ts`, `quad-chart-theme.test.ts` — pure-module
+    coverage for the extracted helpers (12 cases total).
+
+### Out of scope (deferred)
+
+- Renderer `marketStore` initial state still seeds from
+  hardcoded `UNIVERSE.seed` at module-import time. The engine's
+  hydrated quotes replace those values within ~50 ms of boot, so the
+  stale window is bounded but nonzero.
+- Live → Sim runtime toggle does **not** apply seed hydration (would
+  add latency to a user-initiated action). Reusing the last-known-live
+  quotes as overrides on the swap path is a future improvement.
+- Futures backfill still attempts one wasted REST call per pane on
+  cold boot (Alpaca returns 4xx for ES/NQ on the stocks endpoint).
+  Could short-circuit at the engine dispatch.
+- The seed-hydration in-flight fetch isn't aborted when the 1s
+  budget expires — request continues until `AbortSignal.timeout`
+  (10s). Future cleanup via `AbortController`.
+
 ## 0.4.4 (2026-05-XX)
 
 Sub-second crypto candles ship end-to-end. The A1 design doc

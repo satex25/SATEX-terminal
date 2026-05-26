@@ -4,8 +4,9 @@
  * Input arrays are assumed oldest-first (index 0 = oldest).
  */
 
-/** Exponential Moving Average over close prices. */
-export function ema(closes: number[], period: number): number {
+/** Exponential Moving Average over close prices. (Internal — the renderer uses
+ *  the per-bar `emaSeries` in lib/chart-series; this scalar feeds computeSnapshot.) */
+function ema(closes: number[], period: number): number {
   if (closes.length === 0) return 0
   const k = 2 / (period + 1)
   let val = closes[0]!
@@ -54,8 +55,8 @@ export function atr(
   return sma(trs, period)
 }
 
-/** VWAP from open of session (volume-weighted). */
-export function vwap(
+/** VWAP from open of session (volume-weighted). (Internal — feeds computeSnapshot.) */
+function vwap(
   candles: Array<{ high: number; low: number; close: number; volume: number }>
 ): number {
   let numerator = 0, denominator = 0

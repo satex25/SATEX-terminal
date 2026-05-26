@@ -16,7 +16,7 @@
  * payloads, then assert every numeric field on the emitted AlpacaTick is
  * finite and the symbol is length-capped.
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { AlpacaClient, type AlpacaTick, type AlpacaConfig } from './alpaca'
 
 const dummyCfg: AlpacaConfig = {
@@ -165,5 +165,237 @@ describe('AlpacaClient — crypto WS boundary NaN guards (D6, v0.4.3)', () => {
     expect(ticks[0]!.symbol).toBe('BTC')
     expect(ticks[0]!.price).toBe(50_000)
     expect(ticks[0]!.kind).toBe('t')
+  })
+})
+
+describe('AlpacaClient.getCryptoBars — /v1beta3/crypto/us/bars (2026-05-26)', () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status, headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('hits /v1beta3/crypto/us/bars with BTC/USD url-encoded symbol formatting', async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse({
+      bars: { 'BTC/USD': [{ t: '2026-05-26T17:00:00Z', o: 100, h: 101, l: 99, c: 100.5, v: 1000 }] },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = new AlpacaClient(dummyCfg)
+    const bars = await cli.getCryptoBars('BTC', '1Min', '2026-05-25T18:00:00Z', '2026-05-26T18:00:00Z')
+
+    expect(bars).toEqual([{
+      time: Math.floor(new Date('2026-05-26T17:00:00Z').getTime() / 1000),
+      open: 100, high: 101, low: 99, close: 100.5, volume: 1000,
+    }])
+    const url = String(fetchMock.mock.calls[0]![0])
+    expect(url).toContain('/v1beta3/crypto/us/bars')
+    expect(url).toContain('symbols=BTC%2FUSD')   // slash url-encoded
+    expect(url).toContain('timeframe=1Min')
+    expect(url).toContain('start=2026-05-25T18%3A00%3A00Z')
+    expect(url).toContain('end=2026-05-26T18%3A00%3A00Z')
+  })
+
+  it('returns an empty array when the keyed bars list is missing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ bars: {} })))
+    const cli = new AlpacaClient(dummyCfg)
+    const bars = await cli.getCryptoBars('BTC', '1Min', '2026-05-25T18:00:00Z')
+    expect(bars).toEqual([])
+  })
+
+  it('uppercases lowercase input before pairing — eth → ETH/USD', async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse({ bars: { 'ETH/USD': [] } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const cli = new AlpacaClient(dummyCfg)
+    await cli.getCryptoBars('eth', '1Min', '2026-05-25T18:00:00Z')
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('symbols=ETH%2FUSD')
+  })
+
+  it('throws when credentials are missing', async () => {
+    const cli = new AlpacaClient({ ...dummyCfg, keyId: '', secretKey: '' })
+    await expect(cli.getCryptoBars('BTC', '1Min', '2026-05-26T00:00:00Z'))
+      .rejects.toThrow(/credentials/i)
+  })
+
+  it('throws with status + body on non-ok responses', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('rate limited', { status: 429 })))
+    const cli = new AlpacaClient(dummyCfg)
+    await expect(cli.getCryptoBars('BTC', '1Min', '2026-05-26T00:00:00Z'))
+      .rejects.toThrow(/429/)
+  })
+})
+
+describe('AlpacaClient.getLatestPrices — seed hydration helper (2026-05-26)', () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status, headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('returns latest stock prices keyed by symbol, preferring latestTrade over latestQuote', async () => {
+    // Stocks endpoint: { snapshots: { NVDA: { latestTrade:{p:..}, latestQuote:{bp:.., ap:..} } } }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/v2/stocks/snapshots')) {
+        return jsonResponse({
+          snapshots: {
+            NVDA: { latestTrade: { p: 135.50 }, latestQuote: { bp: 135.45, ap: 135.55 } },
+            SPY:  { latestTrade: { p: 608.10 } },
+          },
+        })
+      }
+      return jsonResponse({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA', 'SPY'])
+
+    expect(out.get('NVDA')).toBe(135.50)
+    expect(out.get('SPY')).toBe(608.10)
+    const url = String(fetchMock.mock.calls[0]![0])
+    expect(url).toContain('/v2/stocks/snapshots')
+    expect(url).toContain('symbols=NVDA%2CSPY')
+  })
+
+  it('falls back to mid(bid,ask) when latestTrade is missing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string) => jsonResponse({
+      snapshots: {
+        AAPL: { latestQuote: { bp: 200, ap: 202 } },  // no latestTrade
+      },
+    })))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['AAPL'])
+    expect(out.get('AAPL')).toBe(201)  // mid
+  })
+
+  it('hits the crypto endpoint separately for crypto-class symbols', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/v1beta3/crypto/us/latest/trades')) {
+        return jsonResponse({ trades: { 'BTC/USD': { p: 71_000 }, 'ETH/USD': { p: 3_800 } } })
+      }
+      return jsonResponse({ snapshots: {} })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['BTC', 'ETH'])
+
+    expect(out.get('BTC')).toBe(71_000)
+    expect(out.get('ETH')).toBe(3_800)
+    const url = fetchMock.mock.calls.map(c => String(c[0])).find(u => u.includes('crypto'))!
+    expect(url).toContain('symbols=BTC%2FUSD%2CETH%2FUSD')
+  })
+
+  it('returns combined stock + crypto prices in one call', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/v2/stocks/snapshots')) {
+        return jsonResponse({ snapshots: { NVDA: { latestTrade: { p: 135 } } } })
+      }
+      if (url.includes('/v1beta3/crypto/us/latest/trades')) {
+        return jsonResponse({ trades: { 'BTC/USD': { p: 71_000 } } })
+      }
+      return jsonResponse({})
+    }))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA', 'BTC'])
+    expect(out.get('NVDA')).toBe(135)
+    expect(out.get('BTC')).toBe(71_000)
+    expect(out.size).toBe(2)
+  })
+
+  it('returns an empty map when credentials are missing (no throw)', async () => {
+    const cli = new AlpacaClient({ ...dummyCfg, keyId: '', secretKey: '' })
+    const out = await cli.getLatestPrices(['NVDA'])
+    expect(out.size).toBe(0)
+  })
+
+  it('returns a partial map when one branch fails (other-branch results survive)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/v2/stocks/snapshots')) return new Response('429', { status: 429 })
+      if (url.includes('/v1beta3/crypto/us/latest/trades')) {
+        return jsonResponse({ trades: { 'BTC/USD': { p: 71_000 } } })
+      }
+      return jsonResponse({})
+    }))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA', 'BTC'])
+    expect(out.get('BTC')).toBe(71_000)
+    expect(out.has('NVDA')).toBe(false)
+  })
+
+  it('skips symbols not present in the response (no NaN, no zero)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ snapshots: {} })))
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices(['NVDA'])
+    expect(out.has('NVDA')).toBe(false)
+  })
+
+  it('handles an empty input gracefully', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({}))
+    vi.stubGlobal('fetch', fetchMock)
+    const cli = new AlpacaClient(dummyCfg)
+    const out = await cli.getLatestPrices([])
+    expect(out.size).toBe(0)
+    expect(fetchMock).not.toHaveBeenCalled()  // no roundtrips for empty
+  })
+})
+
+describe('AlpacaClient — WS 406 connection-limit cooldown (2026-05-26)', () => {
+  function cooldownUntilOf(client: AlpacaClient): number {
+    return (client as unknown as { connectionLimitCooldownUntil: number }).connectionLimitCooldownUntil
+  }
+
+  it('equity 406 sets connectionLimitCooldownUntil ~60s in the future (regression)', () => {
+    const client = new AlpacaClient(dummyCfg)
+    const before = Date.now()
+    fireEquity(client, { T: 'error', code: 406, msg: 'connection limit' })
+    const cooldown = cooldownUntilOf(client)
+    expect(cooldown).toBeGreaterThanOrEqual(before + 59_000)
+    expect(cooldown).toBeLessThanOrEqual(Date.now() + 60_500)
+  })
+
+  it('equity error with a non-406 code leaves the cooldown at 0', () => {
+    const client = new AlpacaClient(dummyCfg)
+    fireEquity(client, { T: 'error', code: 401, msg: 'auth failed' })
+    expect(cooldownUntilOf(client)).toBe(0)
+  })
+
+  it('crypto 406 ALSO sets the shared cooldown (the fix this commit lands)', () => {
+    const client = new AlpacaClient(dummyCfg)
+    const before = Date.now()
+    fireCrypto(client, { T: 'error', code: 406, msg: 'connection limit' })
+    const cooldown = cooldownUntilOf(client)
+    expect(cooldown).toBeGreaterThanOrEqual(before + 59_000)
+    expect(cooldown).toBeLessThanOrEqual(Date.now() + 60_500)
+  })
+
+  it('crypto error with a non-406 code does NOT set the cooldown', () => {
+    const client = new AlpacaClient(dummyCfg)
+    fireCrypto(client, { T: 'error', code: 401, msg: 'auth failed' })
+    expect(cooldownUntilOf(client)).toBe(0)
+  })
+
+  it('crypto 406 followed by an equity 406 keeps the LATER cooldown (max, not overwrite)', () => {
+    // Both branches write to the same field unconditionally with now+60s.
+    // The "max" property is preserved by the later call having a higher
+    // timestamp; assert the field strictly advances rather than getting
+    // stuck on the earlier value.
+    const client = new AlpacaClient(dummyCfg)
+    fireCrypto(client, { T: 'error', code: 406, msg: 'connection limit' })
+    const first = cooldownUntilOf(client)
+    // sleep equivalent — bump wall clock by faking
+    const later = first + 50  // arbitrary advance
+    vi.spyOn(Date, 'now').mockReturnValue(later)
+    try {
+      fireEquity(client, { T: 'error', code: 406, msg: 'connection limit' })
+      const second = cooldownUntilOf(client)
+      expect(second).toBeGreaterThan(first)
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 })

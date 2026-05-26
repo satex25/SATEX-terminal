@@ -20,6 +20,8 @@ import { perf } from '../lib/perf'
 import { useFeedStore } from '../stores/feedStore'
 import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
 import { emaColorForPeriod } from '../lib/ema-theme'
+import { planLastSessionBackfill } from '../lib/chart-backfill'
+import { applyOpacity } from '../lib/color'
 import { DeltaStrip } from '../components/DeltaStrip'
 import {
   emaSeries as computeEmaSeries,
@@ -90,18 +92,6 @@ const FIB_COLORS: Record<number, string> = {
   0.786: 'rgba(160,160,168,0.55)',
 }
 
-/** Convert a hex color to rgba(...) with the given alpha. Returns the input
- *  unchanged for non-hex strings (so an `rgba(...)` color can pass through). */
-function applyOpacity(color: string, alpha: number): string {
-  if (!color.startsWith('#')) return color
-  const h = color.length === 4
-    ? color.slice(1).split('').map(c => c + c).join('')
-    : color.slice(1)
-  const r = parseInt(h.slice(0, 2), 16)
-  const g = parseInt(h.slice(2, 4), 16)
-  const b = parseInt(h.slice(4, 6), 16)
-  return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
-}
 
 /**
  * Reads a CSS custom property from the live document root. Required for
@@ -275,38 +265,55 @@ export function ChartPanel() {
     return () => clearTimeout(t)
   }, [histErr])
 
-  // ── Auto-load most recent NY session on first mount (2026-05-17) ──────────
-  // User request: when the app opens outside RTH, the chart should default to
-  // the most recent COMPLETED NY trading session instead of staying on
-  // (potentially fake) live data. Guards:
-  //   • Fires at most ONCE per panel mount (autoLoadedRef latch).
-  //   • Skips if the user is already in a replay session — don't clobber.
-  //   • Skips during US equity RTH — live data is what the user wants then.
-  //   • Skips if there are no Alpaca credentials — the historical-bars
-  //     endpoint would just return the same "No Alpaca credentials" error
-  //     the user already saw in their 2026-05-17 02:52 recording. We log
-  //     and latch instead so the failed import doesn't repeat every render.
-  // Once latched, the user can still manually use the date picker / load
-  // button; this effect just provides a sensible default on cold start.
+  // ── Auto-load most recent NY session on first mount ───────────────────────
+  //   2026-05-17 origin; reworked 2026-05-25 to be REPLAY-FREE — see
+  //   docs/design/2026-05-25-offhours-chart-backfill.md.
+  // When the app opens outside US RTH, default the chart to the most recent
+  // COMPLETED NY session instead of (synthetic) live data. This fills the
+  // candle store DIRECTLY via window.satex.getHistoricalBars — it does NOT
+  // start a replay, so the user's chosen workspace (Quad/Trade/…) is never
+  // overridden and live order submission stays enabled. All the decision logic
+  // (fire-once, skip-in-replay, skip-RTH, skip-no-creds) lives in the
+  // unit-tested planLastSessionBackfill. The manual date-picker / load button
+  // still use the replay-based loadHistoricalDayForDate below — user-initiated
+  // review is allowed to enter the Replay workspace.
   const autoLoadedRef = useRef(false)
   useEffect(() => {
     if (autoLoadedRef.current) return
-    if (replayStatus === null) return           // wait for first status
-    if (inReplay) { autoLoadedRef.current = true; return }
-    if (isUsEquityMarketOpen()) { autoLoadedRef.current = true; return }
+    if (replayStatus === null) return    // wait for first status (so inReplay is accurate)
+    autoLoadedRef.current = true         // one attempt per mount
     let cancelled = false
     void (async () => {
       try {
-        const creds = await window.satex?.getCredentialsMasked()
+        const result = await planLastSessionBackfill({
+          symbol,
+          assetClass: entry?.assetClass,
+          inReplay,
+          isMarketOpen: isUsEquityMarketOpen,
+          mostRecentClosedSessionDate,
+          getCredentialsMasked: async () => window.satex?.getCredentialsMasked(),
+          fetchBars: async (req) => (await window.satex?.getHistoricalBars(req)) ?? { ok: false },
+        })
         if (cancelled) return
-        const hasCreds = !!(creds && (creds.paperConfigured || creds.liveConfigured))
-        if (!hasCreds) {
-          console.info('[chart] auto-load skipped — no Alpaca credentials')
-          autoLoadedRef.current = true
-          // Soft, dismissable nudge so the user understands why the chart is
-          // sitting on simulator data instead of a real session. We only show
-          // this once per session — a dismiss latches in sessionStorage so the
-          // banner doesn't follow the user around between workspace tabs.
+        if (result.action === 'backfilled') {
+          // One bulk update swaps the data in — no replay, no workspace
+          // takeover. The simulator feed keeps running underneath.
+          useMarketStore.getState().bulkReplaceCandles(symbol, result.bars)
+          if (entry?.assetClass === 'crypto') {
+            // Crypto returns a rolling 24h via fetchRecentCryptoBars — there
+            // is no "NY session" date to surface in the picker.
+            setHistInfo('Showing last 24h of crypto bars')
+          } else {
+            setHistDate(result.date)
+            setHistInfo(`Showing last NY session (${result.date}) · US market closed`)
+          }
+        } else if (result.action === 'skipped' && result.reason === 'no-creds' && entry?.assetClass !== 'crypto') {
+          // Soft, dismissable nudge so the user understands why the chart is on
+          // simulator data. Shown once per session — a dismiss latches in
+          // sessionStorage so it doesn't follow the user around between tabs.
+          // Skipped for crypto: it doesn't have NY-session semantics, and the
+          // simulator already streams crypto 24/7 (asset-class emit gate,
+          // 2026-05-26) so cold boots populate within a second.
           try {
             if (!sessionStorage.getItem('satex.chart.no-creds-dismissed')) {
               setHistInfo('Outside US market hours · simulated data only. Add Alpaca keys in Settings → Data Source to auto-load the last NY session.')
@@ -314,25 +321,20 @@ export function ChartPanel() {
           } catch { /* sessionStorage unavailable — show anyway */
             setHistInfo('Outside US market hours · simulated data only. Add Alpaca keys in Settings → Data Source to auto-load the last NY session.')
           }
-          return
         }
-        // Latch BEFORE the await so a re-render during loadHistoricalDayForDate
-        // doesn't queue a second auto-load.
-        autoLoadedRef.current = true
-        const date = mostRecentClosedSessionDate()
-        setHistDate(date)
-        await loadHistoricalDayForDate(date)
+        // 'market-open' / 'in-replay' / 'no-bars' are intentionally silent —
+        // live or replay data is already on screen, and a missing session just
+        // leaves the simulator feed in place.
       } catch (e) {
-        console.warn('[chart] auto-load failed:', e)
+        console.warn('[chart] auto-backfill failed:', e)
       }
     })()
     return () => { cancelled = true }
-    // `loadHistoricalDayForDate` intentionally omitted from deps — it
-    // recreates every render (closes over local state setters), and the
-    // autoLoadedRef latch guarantees we only fire once anyway. Adding it
-    // would loop. Same reasoning applies to `setHistDate`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inReplay, replayStatus])
+    // symbol drives a ChartPanel remount (key={symbol} in App.tsx), so the
+    // latch naturally resets per symbol and each gets one backfill attempt.
+    // entry?.assetClass is derived from symbol so it's already captured, but
+    // we list it explicitly to satisfy react-hooks/exhaustive-deps.
+  }, [inReplay, replayStatus, symbol, entry?.assetClass])
 
   /**
    * Load a previous calendar day into the chart via Phase 9.1 historical

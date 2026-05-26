@@ -90,24 +90,45 @@ export class MarketSimulator implements MarketDataSource {
    *  previous) keep the previous direction instead of dropping to neutral. */
   private lastSide  = new Map<string, TradeSide>()
 
-  constructor(seed?: number) {
+  /**
+   * @param seed             — deterministic RNG seed (omit for random)
+   * @param seedOverrides    — optional Map<symbol, price> from real-market
+   *                           snapshots (Task 3, 2026-05-26). When provided,
+   *                           the GBM walk starts at the override instead of
+   *                           the hardcoded UNIVERSE.seed. Non-finite or
+   *                           non-positive overrides are silently rejected
+   *                           (defense against a malformed Alpaca response
+   *                           poisoning the simulator's hot path — a 0
+   *                           override would also DoS Math.exp on log-return
+   *                           updates).
+   */
+  constructor(seed?: number, seedOverrides?: Map<string, number>) {
     this.rng = mulberry32(seed ?? randomSeed())
+    let overrideCount = 0
     for (const entry of UNIVERSE) {
       const drift  = (0.0001 + this.rng.next() * 0.0003) * (this.rng.next() > 0.5 ? 1 : -1)
       const sigma  = 0.0006 + this.rng.next() * 0.0012
       const nowSec = Math.floor(Date.now() / 1000)
       this.currentCandleStart = Math.floor(nowSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
+      const override = seedOverrides?.get(entry.symbol)
+      const startPrice = (typeof override === 'number' && Number.isFinite(override) && override > 0)
+        ? override
+        : entry.seed
+      if (startPrice !== entry.seed) overrideCount++
       this.states.set(entry.symbol, {
-        entry, price: entry.seed, prevClose: entry.seed,
+        entry, price: startPrice, prevClose: startPrice,
         drift, sigma, vwapNumer: 0, vwapVol: 0,
-        sparkline: new Array(SPARKLINE_LENGTH).fill(entry.seed),
-        bid: entry.seed - 0.05, ask: entry.seed + 0.05,
+        sparkline: new Array(SPARKLINE_LENGTH).fill(startPrice),
+        bid: startPrice - 0.05, ask: startPrice + 0.05,
         volume: 0,
-        currentCandle: { time: this.currentCandleStart, open: entry.seed, high: entry.seed, low: entry.seed, close: entry.seed, volume: 0 },
+        currentCandle: { time: this.currentCandleStart, open: startPrice, high: startPrice, low: startPrice, close: startPrice, volume: 0 },
         candles: [],
       })
     }
-    log.info('simulator initialized', { symbols: UNIVERSE.length })
+    log.info('simulator initialized', {
+      symbols: UNIVERSE.length,
+      ...(overrideCount > 0 ? { hydratedSeeds: overrideCount } : {}),
+    })
   }
 
   /** Cached market-open state so we only log on transition, not on every
@@ -126,6 +147,17 @@ export class MarketSimulator implements MarketDataSource {
       this.lastMarketOpenSeen = open
     }
     return open
+  }
+
+  /** Per-asset-class emission gate (2026-05-26). Crypto and futures trade
+   *  ~around the clock, so they keep emitting off-hours — the Quad/crypto panes
+   *  never go blank. Equities/indices stay frozen outside US RTH (no fictitious
+   *  movement, per the 2026-05-17 request); the chart shows their real last
+   *  session via the off-hours backfill instead. The SATEX_SIMULATOR_24_7
+   *  escape hatch (inside shouldEmit) still forces everything on. */
+  private shouldEmitFor(assetClass: string): boolean {
+    if (assetClass === 'crypto' || assetClass === 'future') return true
+    return this.shouldEmit()
   }
 
   start(): void {
@@ -179,14 +211,15 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private tick(): void {
-    // 2026-05-17 — freeze ticks outside US equity RTH. Without this, the
-    // simulator emits fictitious 20Hz movement while real markets are closed
-    // and the chart looks live. Bypassable via SATEX_SIMULATOR_24_7=true.
-    if (!this.shouldEmit()) return
+    // 2026-05-17 — freeze EQUITY ticks outside US RTH (no fictitious 20Hz
+    // movement while real markets are closed). 2026-05-26 — crypto + futures
+    // trade ~around the clock, so they keep emitting off-hours (per-symbol gate
+    // below); equities show their real last session via the chart's backfill.
     const batch: Quote[] = []
     const trades: Trade[] = []
     const now = Date.now()
     for (const s of this.states.values()) {
+      if (!this.shouldEmitFor(s.entry.assetClass)) continue
       const z = this.rng.nextGaussian()
       const dt = 1 / (TICK_HZ * 60)
       const lr = s.drift * dt + s.sigma * z * Math.sqrt(dt)
@@ -226,15 +259,14 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private rollCandle(): void {
-    // Same off-hours guard as tick() — when the market is closed we
-    // shouldn't roll new candles either, otherwise the candle history would
-    // grow with empty (open=high=low=close=lastPrice) bars timestamped
-    // outside RTH, again misleading the user.
-    if (!this.shouldEmit()) return
+    // Per-asset-class gate (see tick): crypto/futures roll new candles 24/7;
+    // equities/indices only during US RTH so off-hours history isn't padded
+    // with fake bars. Equities' real last session comes from the chart backfill.
     const nowSec = Math.floor(Date.now() / 1000)
     const bucket = Math.floor(nowSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
     if (bucket === this.currentCandleStart) return
     for (const [sym, s] of this.states) {
+      if (!this.shouldEmitFor(s.entry.assetClass)) continue
       const closed = { ...s.currentCandle }
       s.candles.push(closed)
       if (s.candles.length > 2000) s.candles.shift()

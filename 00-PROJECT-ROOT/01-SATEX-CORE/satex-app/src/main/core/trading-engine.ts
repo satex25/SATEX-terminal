@@ -38,7 +38,7 @@ import type {
   BaiduMaskedStatus, ObserverStats, LearnerStats, VaultStats, PatternWeight,
   VaultCheckpointRequest,
   ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
-  HistoricalImportRequest, HistoricalImportResult,
+  HistoricalImportRequest, HistoricalImportResult, HistoricalBarsRequest, HistoricalBarsResult,
   ClosedTrade, JournalTag, Trade,
 } from '@shared/types'
 import { shortId } from '../services/id-generator'
@@ -420,9 +420,19 @@ export class TradingEngine {
     // Market data source
     if (!useAlpaca) {
       const seed = env.rngSeed ?? undefined
-      this.market = new MarketSimulator(seed)
+      // Task 3 (2026-05-26): when creds ARE saved but env forces simulator mode,
+      // pull real Alpaca snapshots to seed the GBM walk. Without this the sim
+      // boots from the hardcoded UNIVERSE.seed values, which drift away from
+      // reality between releases (e.g. NVDA $965 is a pre-2024-split number).
+      // Best-effort with a 3s budget so a slow/unreachable Alpaca never stalls
+      // engine boot — falls back to UNIVERSE.seed silently on failure.
+      const seedOverrides = await this.hydrateSimulatorSeedsBestEffort()
+      this.market = new MarketSimulator(seed, seedOverrides)
       const reason = env.useSimulator ? 'env-forced' : 'no-credentials'
-      log.info('using simulator', { seed, reason, mode, hasStoredCreds: !!stored })
+      log.info('using simulator', {
+        seed, reason, mode, hasStoredCreds: !!stored,
+        ...(seedOverrides && seedOverrides.size > 0 ? { hydratedSeeds: seedOverrides.size } : {}),
+      })
     } else {
       const cfg: AlpacaConfig = {
         keyId, secretKey,
@@ -1391,6 +1401,26 @@ export class TradingEngine {
     return importer.import(req)
   }
 
+  /** Replay-free historical bars for the chart's off-hours backfill. Reuses the
+   *  same REST-only Alpaca fallback as importHistoricalDay so it works when the
+   *  engine booted in simulator mode but the user has since saved credentials.
+   *  Crucially this NEVER touches `this.replay`, `this.market`, wiring, or
+   *  `dataSource` — it is a pure read, so the chart can show the last NY session
+   *  without the Replay workspace taking over. */
+  async getHistoricalBars(req: HistoricalBarsRequest): Promise<HistoricalBarsResult> {
+    const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
+    const importer = new HistoricalImporter(alpaca)
+    // Asset-class dispatch (2026-05-26): crypto trades 24/7 so "last completed
+    // NY session date" doesn't apply — hit the v1beta3 crypto endpoint for the
+    // last 24h instead. The IPC contract is unchanged; we look the class up
+    // from UNIVERSE so the renderer doesn't need to know which feed runs.
+    const entry = findUniverseEntry(req.symbol.trim().toUpperCase())
+    if (entry?.assetClass === 'crypto') {
+      return importer.fetchRecentCryptoBars(req.symbol, req.timeframe ?? '1Min')
+    }
+    return importer.fetchDayBars(req.symbol, req.date, req.timeframe ?? '1Min')
+  }
+
   deleteReplaySession(sessionId: string): { ok: boolean; reason?: string } {
     if (this.replay && this.replay.snapshot().sessionId === sessionId) {
       return { ok: false, reason: 'Stop replay before deleting the active session.' }
@@ -1487,6 +1517,34 @@ export class TradingEngine {
     }
     log.info('historical-import: built REST-only AlpacaClient (engine in simulator mode)', { mode, feed: cfg.feed })
     return new AlpacaClient(cfg)
+  }
+
+  /** Task 3 (2026-05-26) — fetch real Alpaca snapshots so MarketSimulator can
+   *  start its GBM walk from realistic prices instead of the hardcoded
+   *  UNIVERSE.seed. Returns undefined when no creds are available (so the
+   *  simulator's log line can skip the noisy `hydratedSeeds: 0`). Bounded by
+   *  a 1 s race so the "boot critical path under 1s" invariant from the
+   *  2026-05-16 DB-compaction fix is preserved — typical Alpaca snapshot
+   *  latency is 100-300 ms so this rarely times out in practice. Partial
+   *  failures inside getLatestPrices are already swallowed there. */
+  private async hydrateSimulatorSeedsBestEffort(): Promise<Map<string, number> | undefined> {
+    const restClient = this.buildRestOnlyAlpacaClient()
+    if (!restClient) return undefined
+    const symbols = UNIVERSE.map(u => u.symbol)
+    const TIMEOUT_MS = 1_000
+    const hydrated = await Promise.race([
+      restClient.getLatestPrices(symbols).catch(err => {
+        log.warn('simulator seed hydration failed', { err: String(err) })
+        return new Map<string, number>()
+      }),
+      new Promise<Map<string, number>>(resolve =>
+        setTimeout(() => {
+          log.warn('simulator seed hydration timed out — using UNIVERSE.seed', { timeoutMs: TIMEOUT_MS })
+          resolve(new Map<string, number>())
+        }, TIMEOUT_MS),
+      ),
+    ])
+    return hydrated.size > 0 ? hydrated : undefined
   }
 
   /**
