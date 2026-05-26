@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   typecheck-and-test:
-    name: Typecheck + Unit tests
+    name: Gates (typecheck, lint, knip, tests)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The npm package lives in a nested workspace. Set defaults.run.working-directory
@@ -39,6 +39,12 @@ jobs:
 
       - name: Typecheck (main + renderer)
         run: npm run typecheck
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Dead-code audit (knip)
+        run: npm run knip
 
       - name: Vitest unit suite
         run: npm test
