@@ -20,6 +20,8 @@ import { applyOpacity } from '../lib/color'
 import { emaSeries, vwapSeries } from '../lib/chart-series'
 import { rsi } from '@shared/indicators'
 import { findUniverseEntry } from '@shared/constants'
+import { planLastSessionBackfill } from '../lib/chart-backfill'
+import { isUsEquityMarketOpen, mostRecentClosedSessionDate } from '@shared/market-hours'
 
 const readCssVar = (name: string): string =>
   typeof document !== 'undefined'
@@ -214,6 +216,35 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     s!.setData(series.map((v, i) => ({ time: candles[i]!.time as unknown, value: v })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles.length, opts.showVWAP, theme])
+
+  // ── Off-hours backfill — fill an empty pane with the last completed NY
+  //    session (replay-free, via getHistoricalBars). Equity/index only; futures
+  //    & crypto fall back to the live stream / "awaiting data". One attempt per
+  //    mount, applied only if the pane is STILL empty when bars arrive so a
+  //    concurrent live tick / engine reseed is never clobbered. Quad is hidden
+  //    while a replay is active, so inReplay is always false here.
+  const backfilledRef = useRef(false)
+  useEffect(() => {
+    if (backfilledRef.current || candles.length > 0) return
+    backfilledRef.current = true
+    let cancelled = false
+    void (async () => {
+      const result = await planLastSessionBackfill({
+        symbol,
+        inReplay: false,
+        isMarketOpen: isUsEquityMarketOpen,
+        mostRecentClosedSessionDate,
+        getCredentialsMasked: async () => window.satex?.getCredentialsMasked(),
+        fetchBars: async (req) => (await window.satex?.getHistoricalBars(req)) ?? { ok: false },
+      })
+      if (cancelled || result.action !== 'backfilled') return
+      if ((useMarketStore.getState().candles.get(symbol)?.length ?? 0) === 0) {
+        useMarketStore.getState().bulkReplaceCandles(symbol, result.bars)
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="bb-quad-pane">
