@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# SATEX strict pre-commit gate -- full typecheck + lint in satex-app.
+# Heavier checks (vitest + knip) run in CI on every PR. See AGENTS.md.
+# One-time per clone:  git config core.hooksPath .husky
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT/00-PROJECT-ROOT/01-SATEX-CORE/satex-app"
+
+echo "[pre-commit] typecheck..."
+npm run typecheck
+
+echo "[pre-commit] lint..."
+npm run lint
+
+echo "[pre-commit] gates green"

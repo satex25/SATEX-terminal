@@ -1,0 +1,5 @@
+# Keep shell hooks/scripts LF so they execute on every platform.
+# core.autocrlf=true would otherwise check them out as CRLF on Windows and
+# break the shebang. See .husky/pre-commit and AGENTS.md.
+.husky/** text eol=lf
+*.sh text eol=lf
