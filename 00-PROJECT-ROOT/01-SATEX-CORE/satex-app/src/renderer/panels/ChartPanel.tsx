@@ -21,6 +21,7 @@ import { useFeedStore } from '../stores/feedStore'
 import { isSyntheticFeed, SIM_BADGE_TOOLTIP } from '../lib/feed-status'
 import { emaColorForPeriod } from '../lib/ema-theme'
 import { planLastSessionBackfill } from '../lib/chart-backfill'
+import { applyOpacity } from '../lib/color'
 import { DeltaStrip } from '../components/DeltaStrip'
 import {
   emaSeries as computeEmaSeries,
@@ -91,18 +92,6 @@ const FIB_COLORS: Record<number, string> = {
   0.786: 'rgba(160,160,168,0.55)',
 }
 
-/** Convert a hex color to rgba(...) with the given alpha. Returns the input
- *  unchanged for non-hex strings (so an `rgba(...)` color can pass through). */
-function applyOpacity(color: string, alpha: number): string {
-  if (!color.startsWith('#')) return color
-  const h = color.length === 4
-    ? color.slice(1).split('').map(c => c + c).join('')
-    : color.slice(1)
-  const r = parseInt(h.slice(0, 2), 16)
-  const g = parseInt(h.slice(2, 4), 16)
-  const b = parseInt(h.slice(4, 6), 16)
-  return `rgba(${r},${g},${b},${alpha.toFixed(2)})`
-}
 
 /**
  * Reads a CSS custom property from the live document root. Required for
