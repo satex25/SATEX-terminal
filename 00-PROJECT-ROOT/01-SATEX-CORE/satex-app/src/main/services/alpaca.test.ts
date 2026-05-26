@@ -226,3 +226,59 @@ describe('AlpacaClient.getCryptoBars — /v1beta3/crypto/us/bars (2026-05-26)', 
       .rejects.toThrow(/429/)
   })
 })
+
+describe('AlpacaClient — WS 406 connection-limit cooldown (2026-05-26)', () => {
+  function cooldownUntilOf(client: AlpacaClient): number {
+    return (client as unknown as { connectionLimitCooldownUntil: number }).connectionLimitCooldownUntil
+  }
+
+  it('equity 406 sets connectionLimitCooldownUntil ~60s in the future (regression)', () => {
+    const client = new AlpacaClient(dummyCfg)
+    const before = Date.now()
+    fireEquity(client, { T: 'error', code: 406, msg: 'connection limit' })
+    const cooldown = cooldownUntilOf(client)
+    expect(cooldown).toBeGreaterThanOrEqual(before + 59_000)
+    expect(cooldown).toBeLessThanOrEqual(Date.now() + 60_500)
+  })
+
+  it('equity error with a non-406 code leaves the cooldown at 0', () => {
+    const client = new AlpacaClient(dummyCfg)
+    fireEquity(client, { T: 'error', code: 401, msg: 'auth failed' })
+    expect(cooldownUntilOf(client)).toBe(0)
+  })
+
+  it('crypto 406 ALSO sets the shared cooldown (the fix this commit lands)', () => {
+    const client = new AlpacaClient(dummyCfg)
+    const before = Date.now()
+    fireCrypto(client, { T: 'error', code: 406, msg: 'connection limit' })
+    const cooldown = cooldownUntilOf(client)
+    expect(cooldown).toBeGreaterThanOrEqual(before + 59_000)
+    expect(cooldown).toBeLessThanOrEqual(Date.now() + 60_500)
+  })
+
+  it('crypto error with a non-406 code does NOT set the cooldown', () => {
+    const client = new AlpacaClient(dummyCfg)
+    fireCrypto(client, { T: 'error', code: 401, msg: 'auth failed' })
+    expect(cooldownUntilOf(client)).toBe(0)
+  })
+
+  it('crypto 406 followed by an equity 406 keeps the LATER cooldown (max, not overwrite)', () => {
+    // Both branches write to the same field unconditionally with now+60s.
+    // The "max" property is preserved by the later call having a higher
+    // timestamp; assert the field strictly advances rather than getting
+    // stuck on the earlier value.
+    const client = new AlpacaClient(dummyCfg)
+    fireCrypto(client, { T: 'error', code: 406, msg: 'connection limit' })
+    const first = cooldownUntilOf(client)
+    // sleep equivalent — bump wall clock by faking
+    const later = first + 50  // arbitrary advance
+    vi.spyOn(Date, 'now').mockReturnValue(later)
+    try {
+      fireEquity(client, { T: 'error', code: 406, msg: 'connection limit' })
+      const second = cooldownUntilOf(client)
+      expect(second).toBeGreaterThan(first)
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+})

@@ -13,6 +13,7 @@ import type { AlpacaTradeUpdate, Candle, OrderRequest, Position } from '@shared/
 import { ALPACA_PAPER_HOST, findUniverseEntry } from '@shared/constants'
 import { isLive } from './live-mode'
 import { createLogger } from './logger'
+import { ALPACA_RECONNECT, computeReconnectDelay } from './alpaca-reconnect'
 
 const log = createLogger('alpaca')
 
@@ -114,6 +115,11 @@ export class AlpacaClient {
   private subscribed = new Set<string>()
   private reconnectTimer: NodeJS.Timeout | null = null
   private acctReconnectTimer: NodeJS.Timeout | null = null
+  /** Crypto WS reconnect timer guard (2026-05-26). Pre-fix, crypto's onclose
+   *  scheduled a bare setTimeout without tracking the handle, so a flaky
+   *  close+close sequence could schedule overlapping reconnects (every other
+   *  fix this file has — equity, account — already guards with a timer ref). */
+  private cryptoReconnectTimer: NodeJS.Timeout | null = null
   private tickListeners        = new Set<TickHandler>()
   private tradeUpdateListeners = new Set<TradeUpdateHandler>()
   private connected        = false
@@ -134,12 +140,10 @@ export class AlpacaClient {
    *  server reports code 406 (connection-limit exceeded) so an orphan socket on
    *  the server side has time to time out before we try to grab the slot. */
   private connectionLimitCooldownUntil = 0
-  private static MIN_BACKOFF_MS    = 1_000
-  private static MAX_BACKOFF_MS    = 30_000
   private static STALE_THRESHOLD_MS = 60_000   // force reconnect if no msg in 60s
-  /** Cooldown applied when the Alpaca stream reports code 406 (connection
-   *  limit). Long enough for a stuck server-side socket to drop. */
-  private static CONNECTION_LIMIT_COOLDOWN_MS = 60_000
+  // Reconnect-backoff + 406-cooldown timing lives in ALPACA_RECONNECT
+  // (alpaca-reconnect.ts); kept there as a pure module so all three feeds
+  // share one source of truth and the math is unit-testable.
   /** S1-3 — per-key REST rate limiter. Trading + data endpoints share the
    *  same 200/min budget, so one bucket gates both `rest()` and `getBars()`. */
   private readonly rateLimiter = new AlpacaRateLimiter()
@@ -364,25 +368,24 @@ export class AlpacaClient {
 
   /**
    * Reconnect with exponential backoff: 1s, 2s, 4s, 8s, 16s, then capped at
-   * MAX_BACKOFF_MS. Reset on successful auth. This is the difference between
-   * politely waiting out an Alpaca blip and storming them with thousands of
-   * connect attempts during an outage.
+   * MAX_BACKOFF_MS. Reset on successful auth. Honors a 406 cooldown so we
+   * don't storm back through a slot we just lost. Delay math lives in the
+   * pure `computeReconnectDelay` helper — same math for all three feeds.
    */
   private scheduleReconnect(symbols: string[]): void {
     if (this.reconnectTimer) return
-    const backoff = Math.min(
-      AlpacaClient.MAX_BACKOFF_MS,
-      AlpacaClient.MIN_BACKOFF_MS * Math.pow(2, this.reconnectAttempts),
-    )
-    // Honor a connection-limit cooldown (code 406) — wait whichever is longer
-    // so we don't immediately storm back through a slot we just lost.
-    const cooldown = Math.max(0, this.connectionLimitCooldownUntil - Date.now())
-    const delay = Math.max(backoff, cooldown)
+    const nowMs = Date.now()
+    const delay = computeReconnectDelay({
+      attempts: this.reconnectAttempts,
+      cooldownUntilMs: this.connectionLimitCooldownUntil,
+      nowMs,
+    })
+    const cooldownMs = Math.max(0, this.connectionLimitCooldownUntil - nowMs)
     this.reconnectAttempts++
     log.info('scheduling market WS reconnect', {
       attempt: this.reconnectAttempts,
       delayMs: delay,
-      ...(cooldown > 0 ? { cooldownMs: cooldown } : {}),
+      ...(cooldownMs > 0 ? { cooldownMs } : {}),
     })
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -431,9 +434,9 @@ export class AlpacaClient {
       // WS to the IEX feed per account. Pile-driving reconnects makes it worse;
       // apply a long cooldown so the orphan socket can time out server-side.
       if (code === 406) {
-        this.connectionLimitCooldownUntil = Date.now() + AlpacaClient.CONNECTION_LIMIT_COOLDOWN_MS
-        log.warn('alpaca connection limit hit — cooling down', {
-          cooldownMs: AlpacaClient.CONNECTION_LIMIT_COOLDOWN_MS,
+        this.connectionLimitCooldownUntil = Date.now() + ALPACA_RECONNECT.CONNECTION_LIMIT_COOLDOWN_MS
+        log.warn('alpaca connection limit hit (equity) — cooling down', {
+          cooldownMs: ALPACA_RECONNECT.CONNECTION_LIMIT_COOLDOWN_MS,
         })
       }
       return
@@ -506,23 +509,37 @@ export class AlpacaClient {
     ws.onclose = (ev) => {
       log.warn('crypto WS closed', { code: ev.code })
       this.cryptoWs = null
+      if (this.cryptoReconnectTimer) return  // already scheduled — avoid stacking timers on rapid close+close
       // 2026-05-18 — exponential backoff matching the equity feed (1s, 2s,
       // 4s, 8s, 16s, capped at MAX_BACKOFF_MS). Pre-fix was a fixed 5s
       // retry that would storm an unreachable endpoint at 12 req/min for
-      // the duration of an outage. Counter is reset on successful subscribe
-      // in onCryptoDataMsg.
-      const backoff = Math.min(
-        AlpacaClient.MAX_BACKOFF_MS,
-        AlpacaClient.MIN_BACKOFF_MS * Math.pow(2, this.cryptoReconnectAttempts),
-      )
+      // the duration of an outage. 2026-05-26 — extracted to a shared helper
+      // + now honors the 406 cooldown set by onCryptoDataMsg. Counter resets
+      // on successful subscribe in onCryptoDataMsg.
+      const nowMs = Date.now()
+      const delay = computeReconnectDelay({
+        attempts: this.cryptoReconnectAttempts,
+        cooldownUntilMs: this.connectionLimitCooldownUntil,
+        nowMs,
+      })
+      const cooldownMs = Math.max(0, this.connectionLimitCooldownUntil - nowMs)
       this.cryptoReconnectAttempts++
-      log.info('scheduling crypto WS reconnect', { attempt: this.cryptoReconnectAttempts, delayMs: backoff })
-      setTimeout(() => { void this.connectCryptoStream(symbols) }, backoff).unref?.()
+      log.info('scheduling crypto WS reconnect', {
+        attempt: this.cryptoReconnectAttempts,
+        delayMs: delay,
+        ...(cooldownMs > 0 ? { cooldownMs } : {}),
+      })
+      this.cryptoReconnectTimer = setTimeout(() => {
+        this.cryptoReconnectTimer = null
+        void this.connectCryptoStream(symbols)
+      }, delay)
+      this.cryptoReconnectTimer.unref?.()
     }
     ws.onerror = (e) => log.error('crypto WS error', { err: String(e) })
   }
 
   disconnectCryptoStream(): void {
+    if (this.cryptoReconnectTimer) { clearTimeout(this.cryptoReconnectTimer); this.cryptoReconnectTimer = null }
     try { this.cryptoWs?.close() } catch { /* ignore */ }
     this.cryptoWs = null
     this.cryptoSubscribed.clear()
@@ -540,6 +557,18 @@ export class AlpacaClient {
     if (m['T'] === 'error') {
       const code = Number(m['code'] ?? 0)
       log.warn('crypto stream error from server', { code, msg: m['msg'] })
+      // 2026-05-26 — crypto WS now honors the same 406 cooldown the equity
+      // feed has had since v0.4.2. Without it, a connection-limit error on
+      // crypto would burn through the exponential backoff inside the 60s
+      // orphan-socket window and keep the limit pinned. The cooldownUntil
+      // field is shared (Alpaca counts orphan sockets per-account), so a 406
+      // on either feed slows BOTH reconnect schedules.
+      if (code === 406) {
+        this.connectionLimitCooldownUntil = Date.now() + ALPACA_RECONNECT.CONNECTION_LIMIT_COOLDOWN_MS
+        log.warn('alpaca connection limit hit (crypto) — cooling down', {
+          cooldownMs: ALPACA_RECONNECT.CONNECTION_LIMIT_COOLDOWN_MS,
+        })
+      }
       return
     }
     if (m['T'] === 'subscription') {
@@ -598,17 +627,20 @@ export class AlpacaClient {
       this.accountConnected = false; this.accountWs = null
       if (this.acctReconnectTimer) return
       // 2026-05-18 — exponential backoff matching equity + crypto feeds.
-      // Counter resets on successful authorize in onAccountMsg.
-      const backoff = Math.min(
-        AlpacaClient.MAX_BACKOFF_MS,
-        AlpacaClient.MIN_BACKOFF_MS * Math.pow(2, this.accountReconnectAttempts),
-      )
+      // Counter resets on successful authorize in onAccountMsg. Reads the
+      // shared cooldownUntil — a 406 on the data WS slows account-WS retries
+      // too (single account-wide orphan-socket budget on Alpaca's side).
+      const delay = computeReconnectDelay({
+        attempts: this.accountReconnectAttempts,
+        cooldownUntilMs: this.connectionLimitCooldownUntil,
+        nowMs: Date.now(),
+      })
       this.accountReconnectAttempts++
-      log.info('scheduling account WS reconnect', { attempt: this.accountReconnectAttempts, delayMs: backoff })
+      log.info('scheduling account WS reconnect', { attempt: this.accountReconnectAttempts, delayMs: delay })
       this.acctReconnectTimer = setTimeout(() => {
         this.acctReconnectTimer = null
         void this.connectAccountStream()
-      }, backoff)
+      }, delay)
     }
     ws.onerror = (e) => log.error('account WS error', { err: String(e) })
   }
