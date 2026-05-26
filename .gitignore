@@ -99,12 +99,16 @@ tmp/
 .tmp_*
 *.mp4
 *.mov
-"Recording *"
-"Screenshot *"
+Recording *
+Screenshot *
 Untitled.base
 
 # Archived cruft — kept on disk for reference, never committed
 RUBBISH/
+
+# Dropped reference material (not SATEX source) -- see the declined in-app
+# agent-runtime directive; this is the jim-schwoebel/awesome_ai_agents README catalog.
+awesome_ai_agents-main/
 
 # Obsidian vault config — workspace-local, never shared. The markdown notes in
 # Vault/ stay tracked; the .obsidian/ app-config dir does not.
