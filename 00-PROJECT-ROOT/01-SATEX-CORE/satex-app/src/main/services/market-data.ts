@@ -128,6 +128,17 @@ export class MarketSimulator implements MarketDataSource {
     return open
   }
 
+  /** Per-asset-class emission gate (2026-05-26). Crypto and futures trade
+   *  ~around the clock, so they keep emitting off-hours — the Quad/crypto panes
+   *  never go blank. Equities/indices stay frozen outside US RTH (no fictitious
+   *  movement, per the 2026-05-17 request); the chart shows their real last
+   *  session via the off-hours backfill instead. The SATEX_SIMULATOR_24_7
+   *  escape hatch (inside shouldEmit) still forces everything on. */
+  private shouldEmitFor(assetClass: string): boolean {
+    if (assetClass === 'crypto' || assetClass === 'future') return true
+    return this.shouldEmit()
+  }
+
   start(): void {
     if (this.tickTimer) return
     const tickMs = Math.floor(1000 / TICK_HZ)
@@ -179,14 +190,15 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private tick(): void {
-    // 2026-05-17 — freeze ticks outside US equity RTH. Without this, the
-    // simulator emits fictitious 20Hz movement while real markets are closed
-    // and the chart looks live. Bypassable via SATEX_SIMULATOR_24_7=true.
-    if (!this.shouldEmit()) return
+    // 2026-05-17 — freeze EQUITY ticks outside US RTH (no fictitious 20Hz
+    // movement while real markets are closed). 2026-05-26 — crypto + futures
+    // trade ~around the clock, so they keep emitting off-hours (per-symbol gate
+    // below); equities show their real last session via the chart's backfill.
     const batch: Quote[] = []
     const trades: Trade[] = []
     const now = Date.now()
     for (const s of this.states.values()) {
+      if (!this.shouldEmitFor(s.entry.assetClass)) continue
       const z = this.rng.nextGaussian()
       const dt = 1 / (TICK_HZ * 60)
       const lr = s.drift * dt + s.sigma * z * Math.sqrt(dt)
@@ -226,15 +238,14 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private rollCandle(): void {
-    // Same off-hours guard as tick() — when the market is closed we
-    // shouldn't roll new candles either, otherwise the candle history would
-    // grow with empty (open=high=low=close=lastPrice) bars timestamped
-    // outside RTH, again misleading the user.
-    if (!this.shouldEmit()) return
+    // Per-asset-class gate (see tick): crypto/futures roll new candles 24/7;
+    // equities/indices only during US RTH so off-hours history isn't padded
+    // with fake bars. Equities' real last session comes from the chart backfill.
     const nowSec = Math.floor(Date.now() / 1000)
     const bucket = Math.floor(nowSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
     if (bucket === this.currentCandleStart) return
     for (const [sym, s] of this.states) {
+      if (!this.shouldEmitFor(s.entry.assetClass)) continue
       const closed = { ...s.currentCandle }
       s.candles.push(closed)
       if (s.candles.length > 2000) s.candles.shift()
