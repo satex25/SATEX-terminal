@@ -111,8 +111,8 @@ export class MarketSimulator implements MarketDataSource {
       const nowSec = Math.floor(Date.now() / 1000)
       this.currentCandleStart = Math.floor(nowSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
       const override = seedOverrides?.get(entry.symbol)
-      const startPrice = (Number.isFinite(override) && (override as number) > 0)
-        ? (override as number)
+      const startPrice = (typeof override === 'number' && Number.isFinite(override) && override > 0)
+        ? override
         : entry.seed
       if (startPrice !== entry.seed) overrideCount++
       this.states.set(entry.symbol, {

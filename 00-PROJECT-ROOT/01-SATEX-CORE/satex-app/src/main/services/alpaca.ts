@@ -339,8 +339,8 @@ export class AlpacaClient {
     }
     for (const [sym, snap] of Object.entries(data.snapshots ?? {})) {
       const trade = snap.latestTrade?.p
-      if (Number.isFinite(trade) && (trade as number) > 0) {
-        out.set(sym, trade as number); continue
+      if (typeof trade === 'number' && Number.isFinite(trade) && trade > 0) {
+        out.set(sym, trade); continue
       }
       const bp = snap.latestQuote?.bp ?? 0
       const ap = snap.latestQuote?.ap ?? 0
@@ -363,8 +363,8 @@ export class AlpacaClient {
     for (const [pair, t] of Object.entries(data.trades ?? {})) {
       const base = pair.split('/')[0] ?? pair
       const price = t.p
-      if (Number.isFinite(price) && (price as number) > 0) {
-        out.set(base, price as number)
+      if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
+        out.set(base, price)
       }
     }
   }

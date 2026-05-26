@@ -1523,13 +1523,15 @@ export class TradingEngine {
    *  start its GBM walk from realistic prices instead of the hardcoded
    *  UNIVERSE.seed. Returns undefined when no creds are available (so the
    *  simulator's log line can skip the noisy `hydratedSeeds: 0`). Bounded by
-   *  a 3 s race so an unreachable / slow Alpaca never stalls engine boot;
-   *  partial failures inside getLatestPrices are already swallowed there. */
+   *  a 1 s race so the "boot critical path under 1s" invariant from the
+   *  2026-05-16 DB-compaction fix is preserved — typical Alpaca snapshot
+   *  latency is 100-300 ms so this rarely times out in practice. Partial
+   *  failures inside getLatestPrices are already swallowed there. */
   private async hydrateSimulatorSeedsBestEffort(): Promise<Map<string, number> | undefined> {
     const restClient = this.buildRestOnlyAlpacaClient()
     if (!restClient) return undefined
     const symbols = UNIVERSE.map(u => u.symbol)
-    const TIMEOUT_MS = 3_000
+    const TIMEOUT_MS = 1_000
     const hydrated = await Promise.race([
       restClient.getLatestPrices(symbols).catch(err => {
         log.warn('simulator seed hydration failed', { err: String(err) })
