@@ -33,3 +33,24 @@ export function vwapSeries(candles: readonly Candle[]): number[] {
     return vv === 0 ? typ : pv / vv
   })
 }
+
+/** Returns candles with STRICTLY ASCENDING, UNIQUE `time` — what
+ *  lightweight-charts `setData` requires. A same-time candle collapses to the
+ *  latest (last-wins); a candle whose time goes backwards is dropped as stale.
+ *
+ *  The market store never sorts/dedupes its candle array (live append and bulk
+ *  backfill both trust their source), so a single duplicate-second or
+ *  out-of-order bar — e.g. an off-hours-backfill/live overlap — would otherwise
+ *  throw "data must be asc ordered by time" and crash the pane. ChartPanel is
+ *  immune because it bucket-aggregates before plotting; the Quad panes render
+ *  raw 1s candles, so they sanitize here. */
+export function toAscendingUniqueCandles(candles: readonly Candle[]): Candle[] {
+  const out: Candle[] = []
+  for (const c of candles) {
+    const last = out[out.length - 1]
+    if (!last || c.time > last.time) out.push(c)
+    else if (c.time === last.time) out[out.length - 1] = c // same second -> latest wins
+    // else c.time < last.time -> stale / out-of-order -> drop
+  }
+  return out
+}

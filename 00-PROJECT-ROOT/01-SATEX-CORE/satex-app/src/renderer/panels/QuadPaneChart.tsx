@@ -17,7 +17,7 @@ import { useChartOpts } from '../hooks/useChartOpts'
 import { useThemeStore } from '../stores/themeStore'
 import { candlestickColors } from '../lib/quad-chart-theme'
 import { applyOpacity } from '../lib/color'
-import { emaSeries, vwapSeries } from '../lib/chart-series'
+import { emaSeries, vwapSeries, toAscendingUniqueCandles } from '../lib/chart-series'
 import { rsi } from '@shared/indicators'
 import { findUniverseEntry } from '@shared/constants'
 import { planLastSessionBackfill } from '../lib/chart-backfill'
@@ -64,19 +64,28 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
 
   const entry  = findUniverseEntry(symbol)
   const dp     = entry?.dp ?? 2
-  const hasData = candles.length > 0
+
+  // Sanitize the candle series for the chart path: lightweight-charts setData
+  // requires strictly-ascending, unique `time`. The market store doesn't
+  // enforce that — live append and bulk backfill both trust their source —
+  // so a single duplicate-second or out-of-order bar (e.g. an off-hours-
+  // backfill/live overlap) would throw "data must be asc ordered by time"
+  // and crash the pane. ChartPanel is immune because it bucket-aggregates;
+  // the Quad panes render raw 1s candles, so they sanitize here.
+  const chartCandles = useMemo(() => toAscendingUniqueCandles(candles), [candles])
+  const hasData = chartCandles.length > 0
 
   // Header stats — memoized so a 30k-bar series isn't reduced every render.
   // Reduce loop (not Math.max(...spread)) to avoid stack overflow on big arrays.
-  const closes = useMemo(() => candles.map(c => c.close), [candles])
+  const closes = useMemo(() => chartCandles.map(c => c.close), [chartCandles])
   const rsi14  = useMemo(() => (closes.length ? rsi(closes, 14) : 50), [closes])
   const stats  = useMemo(() => {
     let h = -Infinity, l = Infinity, v = 0
-    for (const c of candles) { if (c.high > h) h = c.high; if (c.low < l) l = c.low; v += c.volume }
-    return { hi: candles.length ? h : 0, lo: candles.length ? l : 0, vol: v }
-  }, [candles])
-  const last  = hasData ? candles[candles.length - 1]! : null
-  const first = hasData ? candles[0]! : null
+    for (const c of chartCandles) { if (c.high > h) h = c.high; if (c.low < l) l = c.low; v += c.volume }
+    return { hi: chartCandles.length ? h : 0, lo: chartCandles.length ? l : 0, vol: v }
+  }, [chartCandles])
+  const last  = hasData ? chartCandles[chartCandles.length - 1]! : null
+  const first = hasData ? chartCandles[0]! : null
   const chg   = last && first ? last.close - first.close : 0
   const pct   = first && first.close !== 0 ? (chg / first.close) * 100 : 0
 
@@ -144,26 +153,26 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
   // ── bulk setData on bar-count change; fitContent once on first data ─────────
   useEffect(() => {
     const s = candleRef.current as { setData: (d: unknown) => void } | null
-    if (!s || candles.length === 0) return
+    if (!s || chartCandles.length === 0) return
     try {
-      s.setData(candles.map(c => ({ time: c.time as unknown, open: c.open, high: c.high, low: c.low, close: c.close })))
+      s.setData(chartCandles.map(c => ({ time: c.time as unknown, open: c.open, high: c.high, low: c.low, close: c.close })))
       if (!fittedRef.current && chartRef.current) {
         ;(chartRef.current as { timeScale: () => { fitContent: () => void } }).timeScale().fitContent()
         fittedRef.current = true
       }
     } catch { /* stale ref between mount and first paint */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles.length])
+  }, [chartCandles.length])
 
   // ── in-flight ratchet — paint the live price onto the last bar ──────────────
   useEffect(() => {
     const s = candleRef.current as { update: (d: unknown) => void } | null
-    if (!s || candles.length === 0 || quoteLast == null) return
+    if (!s || chartCandles.length === 0 || quoteLast == null) return
     try {
-      const bar = candles[candles.length - 1]!
+      const bar = chartCandles[chartCandles.length - 1]!
       s.update({ time: bar.time as unknown, open: bar.open, high: Math.max(bar.high, quoteLast), low: Math.min(bar.low, quoteLast), close: quoteLast })
     } catch { /* ignore */ }
-  }, [quoteLast, candles])
+  }, [quoteLast, chartCandles])
 
   // ── theme-reactive candle colors ────────────────────────────────────────────
   useEffect(() => {
@@ -182,7 +191,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     for (const [p, s] of map) {
       if (!periods.includes(p)) { try { chart.removeSeries(s) } catch { /* ignore */ } map.delete(p) }
     }
-    if (candles.length === 0) return
+    if (chartCandles.length === 0) return
     for (const p of periods) {
       let s = map.get(p) as { setData: (d: unknown) => void; applyOptions: (o: unknown) => void } | undefined
       if (!s) {
@@ -192,17 +201,17 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
         s.applyOptions({ color: emaTokenColor(p) })
       }
       const series = emaSeries(closes, p)
-      s!.setData(series.map((v, i) => ({ time: candles[i]!.time as unknown, value: v })))
+      s!.setData(series.map((v, i) => ({ time: chartCandles[i]!.time as unknown, value: v })))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles.length, emaPeriods, opts.showEMA9, opts.showEMA21, theme])
+  }, [chartCandles.length, emaPeriods, opts.showEMA9, opts.showEMA21, theme])
 
   // ── VWAP overlay ────────────────────────────────────────────────────────────
   useEffect(() => {
     const chart = chartRef.current as { addSeries: (t: unknown, o: unknown) => unknown; removeSeries: (s: unknown) => void } | null
     const lwc = lwcRef.current as { LineSeries: unknown } | null
     if (!chart || !lwc) return
-    if (!opts.showVWAP || candles.length === 0) {
+    if (!opts.showVWAP || chartCandles.length === 0) {
       if (vwapRef.current) { try { chart.removeSeries(vwapRef.current) } catch { /* ignore */ } vwapRef.current = null }
       return
     }
@@ -214,10 +223,10 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     } else {
       s.applyOptions({ color: applyOpacity(accent, 0.5) })
     }
-    const series = vwapSeries(candles)
-    s!.setData(series.map((v, i) => ({ time: candles[i]!.time as unknown, value: v })))
+    const series = vwapSeries(chartCandles)
+    s!.setData(series.map((v, i) => ({ time: chartCandles[i]!.time as unknown, value: v })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles.length, opts.showVWAP, theme])
+  }, [chartCandles.length, opts.showVWAP, theme])
 
   // ── Off-hours backfill — fill an empty pane with real bars from Alpaca:
   //    equity/index → the last completed NY session (1Min, RTH window);
