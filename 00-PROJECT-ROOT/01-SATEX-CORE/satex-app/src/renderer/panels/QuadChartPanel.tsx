@@ -13,6 +13,7 @@ import { useIndicatorStore } from '../stores/indicatorStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { UNIVERSE } from '@shared/constants'
 import { QuadPaneChart } from './QuadPaneChart'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 
 export function QuadChartPanel() {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
@@ -50,7 +51,19 @@ export function QuadChartPanel() {
           <button type="button" className="bb-quad-restore" onClick={() => setExpandedIdx(null)}>↤ RESTORE QUAD</button>
         </div>
         <div className="bb-quad-focus-canvas">
-          <QuadPaneChart key={sym} symbol={sym} emaPeriods={emaPeriods} />
+          <ErrorBoundary key={sym} fallback={
+            <div className="bb-quad-pane">
+              <div className="bb-quad-pane-head">
+                <span className="bb-qp-sym">{sym}</span>
+                <span className="bb-qp-exch">— pane error —</span>
+              </div>
+              <div className="bb-quad-pane-canvas">
+                <div className="bb-quad-pane-empty">component recovered; see console</div>
+              </div>
+            </div>
+          }>
+            <QuadPaneChart key={sym} symbol={sym} emaPeriods={emaPeriods} />
+          </ErrorBoundary>
         </div>
       </div>
     )
@@ -61,7 +74,19 @@ export function QuadChartPanel() {
       {syms.map((sym, i) => (
         <div key={`cell-${i}`} className={`bb-quad-cell bb-quad-cell-${i}`}>
           {/* Keyed by symbol so a swap remounts a fresh, isolated chart. */}
-          <QuadPaneChart key={sym} symbol={sym} emaPeriods={emaPeriods} />
+          <ErrorBoundary key={sym} fallback={
+            <div className="bb-quad-pane">
+              <div className="bb-quad-pane-head">
+                <span className="bb-qp-sym">{sym}</span>
+                <span className="bb-qp-exch">— pane error —</span>
+              </div>
+              <div className="bb-quad-pane-canvas">
+                <div className="bb-quad-pane-empty">component recovered; see console</div>
+              </div>
+            </div>
+          }>
+            <QuadPaneChart key={sym} symbol={sym} emaPeriods={emaPeriods} />
+          </ErrorBoundary>
           {/* Hover-revealed actions: expand to focus, or swap the symbol. */}
           <div className="bb-quad-cell-actions">
             <button
