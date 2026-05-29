@@ -920,13 +920,27 @@ export class TradingEngine {
         return { ok: false, reason: String(err) }
       }
     } else {
-      const fillPrice = quote?.last ?? req.limitPrice ?? 0
-      // Simulator path: fill == reference quote by construction, so slippage
-      // is exactly 0 bps. Stamp it explicitly so the journal shows the value
-      // rather than null.
-      const ef = this.entryFeatures.get(order.id)
-      if (ef) ef.entrySlippageBps = 0
-      setTimeout(() => this.om.fillOrder(order.id, fillPrice), 50)
+      // Simulator path: route fill through the OM's slippage model.
+      // - With ZeroSlippageModel (default), fillPrice == quote.last and
+      //   entrySlippageBps stamps to 0 — preserves pre-2026-05-29 behavior.
+      // - With a real model (Fixed-bps, SpreadHalfPlusImpact) the fill
+      //   reflects realistic friction; entrySlippageBps captures the actual
+      //   delta in bps so the journal mirrors a live-Alpaca fill.
+      // - When the quote is missing we cannot run a model — fall back to the
+      //   prior behavior (fill at limitPrice or 0, zero slippage stamp).
+      if (quote) {
+        const slip = this.om.getSlippageModel().fill(req, { quote })
+        const ef = this.entryFeatures.get(order.id)
+        if (ef && quote.last > 0) {
+          ef.entrySlippageBps = (slip.fillPrice - quote.last) / quote.last * 10_000
+        }
+        setTimeout(() => this.om.fillOrder(order.id, slip.fillPrice), slip.delayMs)
+      } else {
+        const fillPrice = req.limitPrice ?? 0
+        const ef = this.entryFeatures.get(order.id)
+        if (ef) ef.entrySlippageBps = 0
+        setTimeout(() => this.om.fillOrder(order.id, fillPrice), 50)
+      }
     }
 
     return { ok: true, orderId: order.id }
