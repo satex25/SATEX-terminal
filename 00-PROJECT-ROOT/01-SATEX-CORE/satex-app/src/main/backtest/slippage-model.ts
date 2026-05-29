@@ -41,3 +41,18 @@ export class ZeroSlippageModel implements SlippageModel {
     return { fillPrice: ctx.quote.last, delayMs: 50 }
   }
 }
+
+/** Constant N-bps friction model. Buys lift ask side by N bps; sells hit bid
+ *  side by N bps. Cheap, deterministic, useful as a default for backtests
+ *  before a per-symbol calibration model is built. */
+export class FixedBpsSlippageModel implements SlippageModel {
+  readonly name = 'fixed-bps'
+  constructor(private readonly bps: number) {
+    if (bps < 0) throw new Error(`FixedBpsSlippageModel: bps must be >= 0 (got ${bps})`)
+  }
+  fill(req: OrderRequest, ctx: SlippageContext): SlippageFill {
+    const drift = ctx.quote.last * (this.bps / 10_000)
+    const fillPrice = req.side === 'buy' ? ctx.quote.last + drift : ctx.quote.last - drift
+    return { fillPrice, delayMs: 50 }
+  }
+}
