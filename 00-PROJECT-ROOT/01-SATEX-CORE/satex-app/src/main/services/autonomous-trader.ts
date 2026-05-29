@@ -200,26 +200,27 @@ export class AutonomousTrader {
     const qty = Math.max(1, Math.floor(targetNotional / quote.last))
     const notional = qty * quote.last
 
-    // ATR-based bracket stops. Buy: stop below entry, TP above. Sell-short
-    // mirror would require Alpaca short support — paper supports it but for
-    // v1 we only auto-enter longs.
-    if (side === 'sell') {
-      // Skip bearish signals — we don't auto-short in v1.
-      this.recordDecision({
-        id: shortId('ad'), symbol, approved: false,
-        reason: 'bearish — short side not auto-traded in v1',
-        confidence: decision.confidence, size: 0, riskReward: 0, createdAt: Date.now(),
-      })
-      this.cooldowns.set(symbol, Date.now() + this.config.cooldownMs)
-      return
-    }
-
-    const stopLoss   = round2(quote.last - ind.atr14 * this.config.stopAtrMult)
-    const takeProfit = round2(quote.last + ind.atr14 * this.config.takeProfitAtrMult)
-    const riskReward = (takeProfit - quote.last) / Math.max(0.01, quote.last - stopLoss)
+    // ATR-based bracket stops, side-aware.
+    //   Long  (buy):  stop BELOW entry,  TP ABOVE entry  — winning move is up.
+    //   Short (sell): stop ABOVE entry,  TP BELOW entry  — winning move is down.
+    // Reward:risk ratio is symmetric across sides by construction —
+    // takeProfitAtrMult / stopAtrMult on both. G-9 (Phase B 2026-05-29)
+    // closed the long-only carve-out; Alpaca paper supports shorts on
+    // margin, and isLiveCapitalRouted() above still gates real-capital flow.
+    const atrStop   = ind.atr14 * this.config.stopAtrMult
+    const atrTarget = ind.atr14 * this.config.takeProfitAtrMult
+    const stopLoss   = side === 'buy'
+      ? round2(quote.last - atrStop)
+      : round2(quote.last + atrStop)
+    const takeProfit = side === 'buy'
+      ? round2(quote.last + atrTarget)
+      : round2(quote.last - atrTarget)
+    const riskDist   = Math.abs(quote.last - stopLoss)
+    const rewardDist = Math.abs(takeProfit - quote.last)
+    const riskReward = rewardDist / Math.max(0.01, riskDist)
 
     const req: OrderRequest = {
-      symbol, side: 'buy', type: 'market', quantity: qty,
+      symbol, side, type: 'market', quantity: qty,
       stopLoss, takeProfit, source: 'autonomous',
     }
     const result = await this.deps.submitOrder(req, { signalConfidence: decision.confidence })
