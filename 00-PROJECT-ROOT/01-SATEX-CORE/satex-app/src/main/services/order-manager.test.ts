@@ -10,6 +10,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { OrderManager, type OrderValidationContext } from './order-manager'
+import { FixedBpsSlippageModel, SpreadHalfPlusImpactModel } from '../backtest/slippage-model'
 import type { OrderRequest, StrategySignal } from '../../shared/types'
 import type { AccountSnapshot } from '../../shared/broker/account-syncer'
 
@@ -463,5 +464,31 @@ describe('OrderManager — syncFromSnapshot (F.1 L1.A Task 1.7)', () => {
     om.syncFromSnapshot(snap)
     expect(om.getAccount().dailyPnl).toBeCloseTo(-2_000)
   })
+})
 
+describe('OrderManager — slippage model injection (G-11, 2026-05-29)', () => {
+  it('defaults to ZeroSlippageModel when no model is provided (backwards compatible)', () => {
+    const om = new OrderManager(100_000)
+    expect(om.getSlippageModel().name).toBe('zero')
+  })
+
+  it('accepts an injected FixedBpsSlippageModel', () => {
+    const fixed = new FixedBpsSlippageModel(5)
+    const om = new OrderManager(100_000, fixed)
+    expect(om.getSlippageModel().name).toBe('fixed-bps')
+    expect(om.getSlippageModel()).toBe(fixed) // exact reference
+  })
+
+  it('accepts an injected SpreadHalfPlusImpactModel', () => {
+    const spread = new SpreadHalfPlusImpactModel({ impactCoef: 0.0001 })
+    const om = new OrderManager(100_000, spread)
+    expect(om.getSlippageModel().name).toBe('spread-half-impact')
+  })
+
+  it('resetToPaper() does NOT change the slippage model', () => {
+    const fixed = new FixedBpsSlippageModel(5)
+    const om = new OrderManager(100_000, fixed)
+    om.resetToPaper(50_000)
+    expect(om.getSlippageModel()).toBe(fixed)
+  })
 })

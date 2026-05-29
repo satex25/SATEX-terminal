@@ -48,6 +48,8 @@ export interface OrderValidationContext {
 }
 import { orderId } from './id-generator'
 import { createLogger } from './logger'
+import type { SlippageModel } from '../backtest/slippage-model'
+import { ZeroSlippageModel } from '../backtest/slippage-model'
 
 const log = createLogger('order-manager')
 
@@ -64,8 +66,14 @@ export class OrderManager {
   private killChangeCb?: KillSwitchChangeCallback
   private sessionStartEquity: number
   private isMarketOpen = false
+  /** Pluggable slippage model — drives the simulator-path fill price in
+   *  trading-engine.submitOrder. Default = ZeroSlippageModel, which fills at
+   *  exactly `quote.last` (pre-2026-05-29 behavior). Injected here so the
+   *  same OM instance can be reused under backtest with a realistic model. */
+  private slippageModel: SlippageModel
 
-  constructor(startingEquity = DEFAULT_EQUITY) {
+  constructor(startingEquity = DEFAULT_EQUITY, slippageModel?: SlippageModel) {
+    this.slippageModel = slippageModel ?? new ZeroSlippageModel()
     this.sessionStartEquity = startingEquity
     this.account = {
       equity:           startingEquity,
@@ -78,8 +86,13 @@ export class OrderManager {
       killSwitchArmed:  false,
       sessionStartedAt: Date.now(),
     }
-    log.info('order manager initialized', { startingEquity })
+    log.info('order manager initialized', { startingEquity, slippageModel: this.slippageModel.name })
   }
+
+  /** Inspection helper used by the trading-engine simulator path AND by
+   *  backtest runners. Returns the currently-installed slippage model so
+   *  callers can compute fills without holding their own reference. */
+  getSlippageModel(): SlippageModel { return this.slippageModel }
 
   // ── Public state ────────────────────────────────────────────────────────────
   getAccount(): Account    { return { ...this.account, openPositions: Array.from(this.positions.values()) } }
