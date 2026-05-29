@@ -56,3 +56,37 @@ export class FixedBpsSlippageModel implements SlippageModel {
     return { fillPrice, delayMs: 50 }
   }
 }
+
+export interface SpreadHalfPlusImpactConfig {
+  /** Coefficient on the sqrt-of-notional impact term. Tunable per symbol
+   *  family; 0.0001 is a reasonable default for US mid-cap equities. Pass
+   *  0 to disable impact and get pure spread-crossing fills. */
+  impactCoef: number
+  /** Synthetic fallback spread (bps) when the quote lacks bid/ask. */
+  fallbackSpreadBps?: number
+}
+
+/** Spread-half-plus-sqrt-impact model. Crosses half the spread, plus a
+ *  sqrt($notional/$10k) × impactCoef multiplier on quote.last for size.
+ *  Standard "square-root law" market-impact form used in execution research.
+ *  Sells mirror buys around quote.last. Falls back to a synthetic spread
+ *  (default 1bp) when the quote has no usable bid/ask. */
+export class SpreadHalfPlusImpactModel implements SlippageModel {
+  readonly name = 'spread-half-impact'
+  private readonly fallbackSpreadBps: number
+  constructor(private readonly cfg: SpreadHalfPlusImpactConfig) {
+    this.fallbackSpreadBps = cfg.fallbackSpreadBps ?? 1
+  }
+  fill(req: OrderRequest, ctx: SlippageContext): SlippageFill {
+    const { quote } = ctx
+    const halfSpread = (quote.bid > 0 && quote.ask > quote.bid)
+      ? (quote.ask - quote.bid) / 2
+      : quote.last * (this.fallbackSpreadBps / 10_000) / 2
+    const notional = quote.last * req.quantity
+    const impactFrac = Math.sqrt(notional / 10_000) * this.cfg.impactCoef
+    const impactPrice = quote.last * impactFrac
+    const drift = halfSpread + impactPrice
+    const fillPrice = req.side === 'buy' ? quote.last + drift : quote.last - drift
+    return { fillPrice, delayMs: 50 }
+  }
+}

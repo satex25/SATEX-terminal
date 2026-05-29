@@ -5,7 +5,7 @@
  * matched inputs.
  */
 import { describe, expect, it } from 'vitest'
-import { FixedBpsSlippageModel, ZeroSlippageModel } from './slippage-model'
+import { FixedBpsSlippageModel, SpreadHalfPlusImpactModel, ZeroSlippageModel } from './slippage-model'
 import type { OrderRequest, Quote } from '@shared/types'
 
 function quote(last: number, overrides?: Partial<Quote>): Quote {
@@ -62,5 +62,43 @@ describe('FixedBpsSlippageModel', () => {
   })
   it('reports name = "fixed-bps"', () => {
     expect(new FixedBpsSlippageModel(5).name).toBe('fixed-bps')
+  })
+})
+
+describe('SpreadHalfPlusImpactModel', () => {
+  it('crosses half the spread for both sides when impact term is zero', () => {
+    // spread = 0.10 → half = 0.05. quote.last = 100 (midpoint by convention).
+    const m = new SpreadHalfPlusImpactModel({ impactCoef: 0 })
+    const q = quote(100, { bid: 99.95, ask: 100.05 })
+    expect(m.fill(buy(),  { quote: q }).fillPrice).toBeCloseTo(100.05, 6)
+    expect(m.fill(sell(), { quote: q }).fillPrice).toBeCloseTo( 99.95, 6)
+  })
+
+  it('adds sqrt-notional impact above half-spread', () => {
+    // impactCoef = 0.0001. buy 10_000 shares at 100 = $1M notional.
+    // impactFrac = sqrt(1_000_000 / 10_000) × 0.0001 = sqrt(100) × 0.0001 = 10 × 0.0001 = 0.001
+    // impactPrice = 100 × 0.001 = 0.10. half-spread = 0.05. total drift = 0.15.
+    const m = new SpreadHalfPlusImpactModel({ impactCoef: 0.0001 })
+    const q = quote(100, { bid: 99.95, ask: 100.05 })
+    const fp = m.fill(buy(10_000), { quote: q }).fillPrice
+    expect(fp).toBeCloseTo(100.15, 4)
+  })
+
+  it('falls back to synthetic 1bp spread when bid/ask are missing', () => {
+    const m = new SpreadHalfPlusImpactModel({ impactCoef: 0 })
+    const q = quote(100, { bid: 0, ask: 0 })
+    // 1bp spread on $100 = $0.01 wide → half = $0.005
+    expect(m.fill(buy(), { quote: q }).fillPrice).toBeCloseTo(100.005, 6)
+  })
+
+  it('reports name = "spread-half-impact"', () => {
+    expect(new SpreadHalfPlusImpactModel({ impactCoef: 0 }).name).toBe('spread-half-impact')
+  })
+
+  it('respects custom fallbackSpreadBps', () => {
+    const m = new SpreadHalfPlusImpactModel({ impactCoef: 0, fallbackSpreadBps: 10 })
+    const q = quote(100, { bid: 0, ask: 0 })
+    // 10bp spread on $100 = $0.10 wide → half = $0.05
+    expect(m.fill(buy(), { quote: q }).fillPrice).toBeCloseTo(100.05, 6)
   })
 })
