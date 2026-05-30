@@ -435,3 +435,191 @@ describe('OrderManager — slippage model injection (G-11, 2026-05-29)', () => {
     expect(om.getSlippageModel()).toBe(fixed)
   })
 })
+
+// ─── Tier-1 (D.8) — Topstep funded-account gates 9-13 ─────────────────────
+import { TOPSTEP_50K_XFA } from '@shared/funded/topstep-50k-xfa'
+import type { MacroEvent } from '@shared/types'
+
+describe('OrderManager — Tier-1 Topstep gates (D.8)', () => {
+  function fundedCtx(over?: Partial<OrderValidationContext>): OrderValidationContext {
+    return {
+      refPrice: 100,
+      refPriceAge: 100,
+      liveMode: false,
+      notionalCap: 1_000_000,
+      assetClass: 'equity',
+      fundedProfile: TOPSTEP_50K_XFA,
+      fundedMll: 48_000,
+      worstCaseLossDollar: 0,
+      currentPositionQty: 0,
+      macroEvents: [],
+      nowMs: Date.parse('2026-05-29T15:00:00Z'), // 11am ET, before cutoff
+      ...over,
+    }
+  }
+
+  describe('Gate 9 — trailing MaxDD', () => {
+    it('passes when worst-case loss keeps equity above MLL', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({ worstCaseLossDollar: 1_000 })
+      expect(om.validate(baseBuy(), ctx).ok).toBe(true)
+    })
+
+    it('rejects when worst-case loss would breach MLL', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({ worstCaseLossDollar: 2_500 })
+      const r = om.validate(baseBuy(), ctx)
+      expect(r.ok).toBe(false)
+      expect(r.gate).toBe('funded-mll')
+    })
+  })
+
+  describe('Gate 10 — news blackout', () => {
+    const nowMs = Date.parse('2026-05-29T13:30:00Z')
+    function evt(offsetSec: number, impact: 'high' | 'med' = 'high'): MacroEvent {
+      return {
+        id: 'cpi', label: 'US CPI', cons: '+0.2%', actual: '—', impact,
+        tsUtc: new Date(nowMs + offsetSec * 1000).toISOString(),
+      }
+    }
+
+    it('passes when no events are in the ±60s window', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({ nowMs, macroEvents: [evt(300)] })
+      expect(om.validate(baseBuy(), ctx).ok).toBe(true)
+    })
+
+    it('rejects when a high-impact event is inside the window', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({ nowMs, macroEvents: [evt(30)] })
+      const r = om.validate(baseBuy(), ctx)
+      expect(r.ok).toBe(false)
+      expect(r.gate).toBe('funded-blackout')
+      expect(r.reason).toContain('CPI')
+    })
+
+    it('ignores med-impact events for the Topstep profile (high-only blackout)', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({ nowMs, macroEvents: [evt(30, 'med')] })
+      expect(om.validate(baseBuy(), ctx).ok).toBe(true)
+    })
+  })
+
+  describe('Gate 11 — max contracts', () => {
+    it('AAPL (unlisted) → buy 1 → OK at default cap', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      expect(om.validate(baseBuy({ symbol: 'AAPL', quantity: 1 }), fundedCtx()).ok).toBe(true)
+    })
+
+    it('AAPL → buy 2 → REJECT (default cap = 1)', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const r = om.validate(baseBuy({ symbol: 'AAPL', quantity: 2 }), fundedCtx())
+      expect(r.ok).toBe(false)
+      expect(r.gate).toBe('funded-max-contracts')
+    })
+
+    it('ES (cap 5) → buy 5 → OK', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      expect(om.validate(baseBuy({ symbol: 'ES', quantity: 5 }), fundedCtx()).ok).toBe(true)
+    })
+
+    it('ES → buy 6 → REJECT', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      expect(om.validate(baseBuy({ symbol: 'ES', quantity: 6 }), fundedCtx()).gate).toBe('funded-max-contracts')
+    })
+  })
+
+  describe('Gate 12 — post-EOD-flat', () => {
+    it('rejects new BUY entries after 4:10 PM ET', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({ nowMs: Date.parse('2026-05-29T20:15:00Z') })
+      const r = om.validate(baseBuy({ symbol: 'ES' }), ctx)
+      expect(r.ok).toBe(false)
+      expect(r.gate).toBe('funded-eod')
+    })
+
+    it('allows closing SELL (long → exit) after the cutoff', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({
+        nowMs: Date.parse('2026-05-29T20:15:00Z'),
+        currentPositionQty: 3,
+      })
+      expect(om.validate(baseSell({ symbol: 'ES', quantity: 3 }), ctx).ok).toBe(true)
+    })
+
+    it('rejects new SELL (short opening) after the cutoff', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const ctx = fundedCtx({
+        nowMs: Date.parse('2026-05-29T20:15:00Z'),
+        currentPositionQty: 0,
+      })
+      const r = om.validate(baseSell({ symbol: 'ES', quantity: 1 }), ctx)
+      expect(r.ok).toBe(false)
+      expect(r.gate).toBe('funded-eod')
+    })
+  })
+
+  describe('Gate 13 — allowed asset class', () => {
+    it('equity allowed (overlay default)', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      expect(om.validate(baseBuy(), fundedCtx({ assetClass: 'equity' })).ok).toBe(true)
+    })
+
+    it('index rejected (not in Topstep overlay list)', () => {
+      const om = new OrderManager(50_000)
+      om.setMarketOpen(true)
+      const r = om.validate(baseBuy(), fundedCtx({ assetClass: 'index' }))
+      expect(r.ok).toBe(false)
+      expect(r.gate).toBe('funded-asset-class')
+    })
+  })
+
+  describe('No-profile bypass', () => {
+    it('skips every Tier-1 gate when fundedProfile is undefined', () => {
+      const om = new OrderManager(100_000)
+      om.setMarketOpen(true)
+      const ctx: OrderValidationContext = {
+        refPrice: 100, refPriceAge: 100, liveMode: false,
+        notionalCap: 1_000_000, assetClass: 'index', // index would trip Gate 13 if profile set
+      }
+      // AAPL qty=2 — would trip funded-max-contracts (default cap=1) if
+      // profile were attached, but with no profile every Tier-1 gate is
+      // inert. Index asset class would trip Gate 13. Neither fires here.
+      expect(om.validate(baseBuy({ symbol: 'AAPL', quantity: 2 }), ctx).ok).toBe(true)
+    })
+  })
+})
+
+describe('OrderManager — cancelAllOrders + flattenAllPositions', () => {
+  it('cancelAllOrders cancels every pending order and reports the count', () => {
+    const om = new OrderManager(100_000)
+    om.createOrder({ symbol: 'NVDA', side: 'buy', type: 'market', quantity: 1 })
+    om.createOrder({ symbol: 'AAPL', side: 'buy', type: 'market', quantity: 1 })
+    const n = om.cancelAllOrders()
+    expect(n).toBe(2)
+    for (const o of om.getOrders()) expect(o.status).toBe('canceled')
+  })
+
+  it('flattenAllPositions market-closes every open position', () => {
+    const om = new OrderManager(100_000)
+    const buy = om.createOrder({ symbol: 'NVDA', side: 'buy', type: 'market', quantity: 10 })
+    om.fillOrder(buy.id, 100)
+    expect(om.getAccount().openPositions).toHaveLength(1)
+    const n = om.flattenAllPositions(() => ({ last: 102 }))
+    expect(n).toBe(1)
+    expect(om.getAccount().openPositions).toHaveLength(0)
+  })
+})
