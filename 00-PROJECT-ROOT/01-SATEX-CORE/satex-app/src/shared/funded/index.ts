@@ -5,8 +5,9 @@
 import { TOPSTEP_50K_XFA } from './topstep-50k-xfa'
 import type { FundedAccountProfile } from './types'
 
-export * from './types'
-export { TOPSTEP_50K_XFA }
+// Consumers import types directly from `@shared/funded/types` and the
+// preset constant from its source file. This barrel only exposes the
+// runtime registry API.
 
 const REGISTRY: Record<string, FundedAccountProfile> = {
   [TOPSTEP_50K_XFA.id]: TOPSTEP_50K_XFA,

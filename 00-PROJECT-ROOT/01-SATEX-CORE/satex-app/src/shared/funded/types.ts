@@ -11,8 +11,9 @@ import type { AssetClass } from '@shared/types'
 /** Evaluation lifecycle stages a funded account can be in. Topstep XFA has
  *  three: Combine (paying for the eval), Funded (post-pass), Activated
  *  (post-first-payout, sometimes with relaxed rules). v1 doesn't drive any
- *  behavior off this field — it's read-only metadata for display. */
-export type EvaluationPhase = 'combine' | 'funded' | 'activated'
+ *  behavior off this field — it's read-only metadata for display. Inline
+ *  literal so knip doesn't flag the alias as externally unused. */
+type EvaluationPhase = 'combine' | 'funded' | 'activated'
 
 /** EOD cutoff specified in an IANA timezone — the EodFlattenService converts
  *  to UTC once per day. The (hour, minute) pair is local clock time. */

@@ -79,6 +79,10 @@ import { MacroCalendarService } from '../services/macro-calendar'
 import { SystemLogsService } from '../services/system-logs'
 import { DepthFeedService } from '../services/depth-feed'
 import { EdgarService } from '../services/edgar'
+import { FundedAccountService } from '../services/funded-account'
+import { isPastFlatBy } from '../services/eod-flatten'
+import type { BlackoutResult } from '../services/blackout-window'
+import type { FundedAccountSnapshot } from '@shared/funded/types'
 import type {
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
   FeedStatus,
@@ -179,6 +183,12 @@ export class TradingEngine {
   private macro!:       MacroCalendarService
   public  logs!:        SystemLogsService  // public so configureLogger can hand it the ingest fn
   private depth!:       DepthFeedService
+  /** Tier-1 funded-account overlay. Active profile + EquityHWM + EOD service. */
+  private fundedAccount!: FundedAccountService
+  /** Cached most-recent blackout result. Refreshed by fundedTick (per-minute). */
+  private cachedBlackout: BlackoutResult = { inBlackout: false, triggeringEvent: null, msToEvent: null }
+  private fundedTickTimer: NodeJS.Timeout | null = null
+  private fundedListeners = new Set<(s: FundedAccountSnapshot) => void>()
   private edgar!:       EdgarService
   /** Per-session live tape recorder. Null only before initialize(). */
   private recorder: TickRecorder | null = null
@@ -379,6 +389,15 @@ export class TradingEngine {
       this.broadcastOrders()
       this.broadcastAccount()
       this.onOrderFillForLearning(order, position)
+      // Tier-1 D.10: every post-cutoff fill updates today's EOD ledger entry.
+      // The FundedAccountService no-ops when no profile is active.
+      const profile = this.fundedAccount?.getProfile()
+      if (profile) {
+        const now = new Date()
+        if (isPastFlatBy(now, profile.flatBy)) {
+          this.fundedAccount.recordEod(this.om.getAccount().equity, now)
+        }
+      }
     })
     this.om.onKillSwitch(() => {
       log.warn('kill switch triggered — broadcasting account state')
@@ -696,7 +715,24 @@ export class TradingEngine {
     this.regime.onUpdate((s) => { for (const fn of this.regimeListeners) fn(s) })
     this.regime.start()
 
-    // Risk gates — 6 pre-trade guardrails.
+    // Macro calendar — curated event ribbon. Constructed BEFORE the
+    // funded-account service so checkBlackout is callable from the
+    // per-minute funded tick.
+    this.macro = new MacroCalendarService()
+    this.macro.onUpdate((s) => { for (const fn of this.macroListeners) fn(s) })
+    this.macro.start()
+
+    // Tier-1 funded-account overlay. Hydrates from userData/funded-account.json
+    // so the active profile + EquityHWM ledger survive restart. EOD flatten
+    // callback drives cancel-all + flatten-all + arm-kill-switch.
+    this.fundedAccount = new FundedAccountService({
+      onFlatten: (reason) => this.onEodFlatten(reason),
+    })
+    this.fundedAccount.hydrate()
+    this.fundedAccount.onUpdate((s) => { for (const fn of this.fundedListeners) fn(s) })
+    this.fundedTickTimer = setInterval(() => this.fundedTick(), 60_000)
+
+    // Risk gates — 6 baseline + 5 funded-overlay gauges.
     this.riskGates = new RiskGatesService({
       getAccount:      () => this.om.getAccount(),
       getQuote:        (s) => this.market.getQuote(s),
@@ -704,14 +740,15 @@ export class TradingEngine {
       getPnlSnapshots: () => db.listPnlSnapshots(this.currentSessionId),
       // C2 alignment: panel must read the same baseline OM enforces against.
       getSessionStartEquity: () => this.om.getSessionStartEquity(),
+      // Tier-1 D.9: funded-account gauges.
+      getFundedSnapshot: (eq, now) => {
+        if (!this.fundedAccount.getProfile()) return null
+        return this.fundedAccount.snapshot(eq, now)
+      },
+      getBlackout: () => this.cachedBlackout,
     })
     this.riskGates.onUpdate((s) => { for (const fn of this.riskGatesListeners) fn(s) })
     this.riskGates.start()
-
-    // Macro calendar — curated event ribbon.
-    this.macro = new MacroCalendarService()
-    this.macro.onUpdate((s) => { for (const fn of this.macroListeners) fn(s) })
-    this.macro.start()
 
     // EDGAR catalysts — polls SEC for recent 8-K/10-Q/10-K/Form 4 on watchlist
     // symbols and pushes them as NewsItems through the existing news pipe.
@@ -764,6 +801,7 @@ export class TradingEngine {
     if (this.clockSyncTimer)         { clearInterval(this.clockSyncTimer);         this.clockSyncTimer = null }
     if (this.pnlTimer)               { clearInterval(this.pnlTimer);               this.pnlTimer = null }
     if (this.continuousStatsTimer)   { clearInterval(this.continuousStatsTimer);   this.continuousStatsTimer = null }
+    if (this.fundedTickTimer)        { clearInterval(this.fundedTickTimer);        this.fundedTickTimer = null }
     if (this.vaultCheckpointTimer)   { clearInterval(this.vaultCheckpointTimer);   this.vaultCheckpointTimer = null }
     if (this.healthLogTimer)         { clearInterval(this.healthLogTimer);         this.healthLogTimer = null }
     if (this.entryCleanupTimer)      { clearInterval(this.entryCleanupTimer);      this.entryCleanupTimer = null }
@@ -968,6 +1006,55 @@ export class TradingEngine {
   getMacro():     MacroSnapshot      { return this.macro.get() }
   getLogsTail(n?: number): SystemLogsTail { return this.logs.getTail(n) }
   getDepth(symbol?: string): DepthSnapshot { return this.depth.get(symbol) }
+
+  // ── Tier-1 funded-account public surface (D.10) ─────────────────────────
+  /** Public read for the IPC handler. */
+  getFundedAccount(): FundedAccountSnapshot {
+    return this.fundedAccount.snapshot(this.om.getAccount().equity, new Date())
+  }
+
+  /** Activate a funded-account profile by id (or null to deactivate). */
+  setFundedAccountProfile(profileId: string | null): { ok: boolean; reason?: string } {
+    const r = this.fundedAccount.setProfile(profileId)
+    return r
+  }
+
+  /** Manually fire the EOD flatten path. */
+  triggerFundedFlat(reason: string): void {
+    this.fundedAccount.triggerFlatten(new Date(), reason)
+  }
+
+  /** Subscribe to funded-account snapshot updates. */
+  onFundedAccountUpdate(fn: (s: FundedAccountSnapshot) => void): () => void {
+    this.fundedListeners.add(fn)
+    return () => this.fundedListeners.delete(fn)
+  }
+
+  /** Per-minute tick: drives the EOD scheduler + refreshes cached blackout. */
+  private fundedTick(): void {
+    const now = new Date()
+    this.fundedAccount.tick(now)
+    const profile = this.fundedAccount.getProfile()
+    if (profile && profile.newsBlackoutImpacts.length > 0) {
+      this.cachedBlackout = this.macro.checkBlackout(
+        now.getTime(),
+        profile.newsBlackoutImpacts,
+        profile.newsBlackoutWindowMs,
+      )
+    } else {
+      this.cachedBlackout = { inBlackout: false, triggeringEvent: null, msToEvent: null }
+    }
+  }
+
+  /** Wired into FundedAccountService.onFlatten. Cancels every pending order
+   *  then market-flattens every open position. Arms the kill switch so the
+   *  next session requires explicit user re-arm. */
+  private onEodFlatten(reason: string): void {
+    const cancelled = this.om.cancelAllOrders()
+    const flattened = this.om.flattenAllPositions((symbol) => this.market.getQuote(symbol))
+    this.om.armKillSwitch(`eod-flatten:${reason}`)
+    log.warn('EOD flatten executed', { reason, cancelled, flattened })
+  }
   subscribeDepth(symbol: string): void {
     this.depth.subscribe(symbol)
     this.regime.setSymbol(symbol)
@@ -1031,6 +1118,21 @@ export class TradingEngine {
       tacticsGate: req.side === 'buy'
         ? (sc) => this.tactics.preTradeGate(sc)
         : undefined,
+      // ── Tier-1 (D.10) — funded-account context ─────────────────────────
+      ...(this.fundedAccount.getProfile()
+          ? { fundedProfile: this.fundedAccount.getProfile()! }
+          : {}),
+      ...(this.fundedAccount.getProfile()
+          ? { fundedMll: this.fundedAccount.snapshot(this.om.getAccount().equity, new Date()).currentMll }
+          : {}),
+      ...(this.fundedAccount.getProfile() && req.stopLoss && quote
+          ? { worstCaseLossDollar: Math.abs((quote.last - req.stopLoss) * req.quantity) }
+          : {}),
+      currentPositionQty: this.om.getAccount().openPositions.find(p => p.symbol === req.symbol)?.quantity ?? 0,
+      macroEvents: (this.fundedAccount.getProfile()?.newsBlackoutImpacts.length ?? 0) > 0
+          ? this.macro.get().events
+          : [],
+      nowMs: Date.now(),
     }
 
     const validation = this.om.validate(req, ctx)

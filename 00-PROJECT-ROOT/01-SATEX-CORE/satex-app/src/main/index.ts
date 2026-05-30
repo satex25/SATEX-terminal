@@ -20,6 +20,7 @@ import {
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq, HistoricalBarsReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
   WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
+  FundedAccountSetProfileReq, FundedAccountTriggerFlatReq,
 } from '@shared/ipc-schemas'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
@@ -588,6 +589,7 @@ function wireBlackBoxEvents(): void {
   engine.onMacroUpdate((s)     => push(IPC.MACRO_UPDATE,      s))
   engine.onLogsTail((s)        => push(IPC.LOGS_TAIL,         s))
   engine.onDepthUpdate((s)     => push(IPC.DEPTH_UPDATE,      s))
+  engine.onFundedAccountUpdate((s) => push(IPC.FUNDED_ACCOUNT_UPDATE, s))
 }
 
 /** Wire after engine.initialize() — autonomous trader is only built then. */
@@ -981,6 +983,12 @@ function registerIpcHandlers(): void {
   register(IPC.LOGS_GET,        ()                                       => engine.getLogsTail())
   register(IPC.DEPTH_GET,       validated(OptionalSymbolReq, (symbol)    => engine.getDepth(symbol)))
   register(IPC.DEPTH_SUBSCRIBE, validated(SymbolOnlyReq,     (symbol)    => { engine.subscribeDepth(symbol); return { ok: true } }))
+
+  // ── Tier-1 (D.10, 2026-05-29) — funded-account compliance overlay ──────
+  register(IPC.FUNDED_ACCOUNT_GET,          () => engine.getFundedAccount())
+  register(IPC.FUNDED_ACCOUNT_SET_PROFILE,  validated(FundedAccountSetProfileReq,  ({ profileId }) => engine.setFundedAccountProfile(profileId)))
+  register(IPC.FUNDED_ACCOUNT_CLEAR,        () => engine.setFundedAccountProfile(null))
+  register(IPC.FUNDED_ACCOUNT_TRIGGER_FLAT, validated(FundedAccountTriggerFlatReq, ({ reason }) => { engine.triggerFundedFlat(reason); return { ok: true as const } }))
 
   // ── B9 (2026-05-19) — CSP violation report sink ─────────────────────────────
   // Receives the renderer's `securitypolicyviolation` events, validates the

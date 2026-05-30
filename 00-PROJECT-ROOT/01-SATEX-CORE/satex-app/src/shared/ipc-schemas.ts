@@ -299,3 +299,16 @@ export const SubsecondPrefsSetReq = z.object({
   bucketMs: z.union([z.literal(250), z.literal(500)]),
 }).strict()
 export type SubsecondPrefsSetReq = z.infer<typeof SubsecondPrefsSetReq>
+
+// ── Tier-1 (D.10, 2026-05-29) — funded-account compliance overlay ──────────
+/** Set-profile request — payload is the profile id (or null to deactivate). */
+export const FundedAccountSetProfileReq = z.object({
+  profileId: z.string().min(1).max(64).nullable(),
+}).strict()
+export type FundedAccountSetProfileReq = z.infer<typeof FundedAccountSetProfileReq>
+
+/** Trigger-flat request — caller-supplied reason for the journal. */
+export const FundedAccountTriggerFlatReq = z.object({
+  reason: z.string().min(1).max(120),
+}).strict()
+export type FundedAccountTriggerFlatReq = z.infer<typeof FundedAccountTriggerFlatReq>
