@@ -407,6 +407,47 @@ export class RiskGatesService {
         : `T-${Math.floor(ms / 60_000)}m to ${profile.flatBy.hour}:${String(profile.flatBy.minute).padStart(2, '0')}`
     }
 
+    // ── Tier-1 D-2 — payout-rule advisory gauges ───────────────────────────
+    let consistencyPct = 0
+    let consistencyStatus: RiskGateStatus = 'OK'
+    let consistencyValue = 'n/a · no profile'
+    let profitTargetPct = 0
+    let profitTargetStatus: RiskGateStatus = 'OK'
+    let profitTargetValue = 'n/a · no profile'
+    let minDaysPct = 0
+    let minDaysStatus: RiskGateStatus = 'OK'
+    let minDaysValue = 'n/a · no profile'
+    let phaseValue = 'n/a · no profile'
+
+    if (fundedSnap?.active && fundedSnap.profile) {
+      const profile = fundedSnap.profile
+      const pm = fundedSnap.payoutMetrics
+
+      const consistencyTarget = profile.consistencyMaxDayFraction
+      if (consistencyTarget > 0) {
+        consistencyPct = Math.min(1, pm.consistencyRatio / consistencyTarget)
+        consistencyStatus = pm.consistencyOk ? statusForPct(consistencyPct, 0.7, 0.95) : 'BREACH'
+        consistencyValue = `${(pm.consistencyRatio * 100).toFixed(0)}% of profit · cap ${(consistencyTarget * 100).toFixed(0)}%`
+      } else {
+        consistencyValue = `${(pm.consistencyRatio * 100).toFixed(0)}% · not enforced (Combine)`
+      }
+
+      profitTargetPct = pm.profitTargetProgress
+      profitTargetStatus = pm.profitTargetReached ? 'OK' : 'WATCH'
+      profitTargetValue = `$${Math.round(pm.totalProfit).toLocaleString()} / $${profile.profitTarget.toLocaleString()} (${Math.round(profitTargetPct * 100)}%)`
+
+      const minDays = profile.minTradingDays
+      if (minDays > 0) {
+        minDaysPct = Math.min(1, pm.tradingDaysCount / minDays)
+        minDaysStatus = pm.minDaysSatisfied ? 'OK' : 'WATCH'
+        minDaysValue = `${pm.tradingDaysCount} / ${minDays} required`
+      } else {
+        minDaysValue = `${pm.tradingDaysCount} days · no minimum`
+      }
+
+      phaseValue = `${pm.phase.toUpperCase()}${pm.profitTargetReached ? ' · target hit' : ''}`
+    }
+
     const gates: RiskGate[] = [
       { key: 'DAILY_LOSS_LIMIT', label: 'DAILY LOSS LIMIT',  pct: dailyLossPct,  status: dailyLossStatus, value: dailyLossValue },
       { key: 'POSITION_COUNT',   label: 'POSITION COUNT',    pct: posPct,        status: posStatus,       value: posValue },
@@ -420,6 +461,11 @@ export class RiskGatesService {
       { key: 'NEWS_BLACKOUT',    label: 'NEWS BLACKOUT',     pct: newsBlackoutPct,  status: newsBlackoutStatus,  value: newsBlackoutValue },
       { key: 'MAX_CONTRACTS',    label: 'MAX CONTRACTS',     pct: maxContractsPct,  status: maxContractsStatus,  value: maxContractsValue },
       { key: 'EOD_COUNTDOWN',    label: 'EOD COUNTDOWN',     pct: eodCountdownPct,  status: eodCountdownStatus,  value: eodCountdownValue },
+      // ── Tier-1 D-2 payout-rule advisory gauges ──────────────────────────
+      { key: 'CONSISTENCY',      label: 'CONSISTENCY',       pct: consistencyPct,   status: consistencyStatus,   value: consistencyValue },
+      { key: 'PROFIT_TARGET',    label: 'PROFIT TARGET',     pct: profitTargetPct,  status: profitTargetStatus,  value: profitTargetValue },
+      { key: 'MIN_TRADING_DAYS', label: 'MIN TRADING DAYS',  pct: minDaysPct,       status: minDaysStatus,       value: minDaysValue },
+      { key: 'EVAL_PHASE',       label: 'EVAL PHASE',        pct: 0,                status: 'OK',                value: phaseValue },
     ]
 
     let okCount = 0, watchCount = 0, breachCount = 0

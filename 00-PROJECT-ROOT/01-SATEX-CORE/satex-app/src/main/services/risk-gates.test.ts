@@ -133,6 +133,8 @@ import { RiskGatesService } from './risk-gates'
 import { TOPSTEP_50K_XFA } from '@shared/funded/topstep-50k-xfa'
 import type { FundedAccountSnapshot } from '@shared/funded/types'
 
+import { EMPTY_PAYOUT_METRICS } from '@shared/funded/payout-metrics'
+
 describe('RiskGatesService — Tier-1 display gates', () => {
   function makeFundedSnap(over?: Partial<FundedAccountSnapshot>): FundedAccountSnapshot {
     return {
@@ -141,7 +143,7 @@ describe('RiskGatesService — Tier-1 display gates', () => {
       mllBuffer: 2_500,
       today: '2026-05-29',
       msToFlatBy: 4 * 3600_000,
-      ledger: [], computedAt: Date.now(),
+      ledger: [], payoutMetrics: EMPTY_PAYOUT_METRICS, computedAt: Date.now(),
       ...over,
     }
   }
@@ -166,16 +168,20 @@ describe('RiskGatesService — Tier-1 display gates', () => {
     })
   }
 
-  it('emits all 11 gates (6 existing + 5 new)', () => {
+  it('emits all 15 gates (6 baseline + 5 Tier-1 + 4 Tier-1 D-2)', () => {
     const svc = build()
     const snap = svc.get()
-    expect(snap.gates).toHaveLength(11)
+    expect(snap.gates).toHaveLength(15)
     const keys = snap.gates.map(g => g.key)
     expect(keys).toContain('TRAILING_MAXDD')
     expect(keys).toContain('MLL_BUFFER')
     expect(keys).toContain('NEWS_BLACKOUT')
     expect(keys).toContain('MAX_CONTRACTS')
     expect(keys).toContain('EOD_COUNTDOWN')
+    expect(keys).toContain('CONSISTENCY')
+    expect(keys).toContain('PROFIT_TARGET')
+    expect(keys).toContain('MIN_TRADING_DAYS')
+    expect(keys).toContain('EVAL_PHASE')
   })
 
   it('TRAILING_MAXDD pct reflects buffer used / drawdown allowance', () => {
@@ -241,9 +247,76 @@ describe('RiskGatesService — Tier-1 display gates', () => {
       getFundedSnapshot: () => null,
     })
     const snap = svc.get()
-    for (const key of ['TRAILING_MAXDD', 'MLL_BUFFER', 'NEWS_BLACKOUT', 'MAX_CONTRACTS', 'EOD_COUNTDOWN'] as const) {
+    for (const key of [
+      'TRAILING_MAXDD', 'MLL_BUFFER', 'NEWS_BLACKOUT', 'MAX_CONTRACTS', 'EOD_COUNTDOWN',
+      'CONSISTENCY', 'PROFIT_TARGET', 'MIN_TRADING_DAYS', 'EVAL_PHASE',
+    ] as const) {
       const g = snap.gates.find(g2 => g2.key === key)!
       expect(g.value).toContain('n/a')
     }
+  })
+
+  // ─── Tier-1 D-2 — payout gauge behavior ─────────────────────────────────
+  describe('Tier-1 D-2 — payout gauges', () => {
+    it('PROFIT_TARGET shows progress against the profile target', () => {
+      const snap = build({ fundedSnap: makeFundedSnap({
+        payoutMetrics: { ...EMPTY_PAYOUT_METRICS,
+          totalProfit: 1500, profitTargetProgress: 0.5,
+          phase: 'combine',
+        },
+      }) }).get()
+      const pt = snap.gates.find(g => g.key === 'PROFIT_TARGET')!
+      expect(pt.pct).toBe(0.5)
+      expect(pt.value).toContain('1,500')
+      expect(pt.value).toContain('3,000')
+      expect(pt.value).toContain('50%')
+    })
+
+    it('PROFIT_TARGET status flips to OK once the target is reached', () => {
+      const snap = build({ fundedSnap: makeFundedSnap({
+        payoutMetrics: { ...EMPTY_PAYOUT_METRICS,
+          totalProfit: 3500, profitTargetProgress: 1, profitTargetReached: true,
+          phase: 'combine',
+        },
+      }) }).get()
+      const pt = snap.gates.find(g => g.key === 'PROFIT_TARGET')!
+      expect(pt.status).toBe('OK')
+    })
+
+    it('CONSISTENCY is informational when profile.consistencyMaxDayFraction is 0 (Combine)', () => {
+      const snap = build({ fundedSnap: makeFundedSnap({
+        payoutMetrics: { ...EMPTY_PAYOUT_METRICS,
+          consistencyRatio: 0.4, consistencyOk: true, phase: 'combine',
+        },
+      }) }).get()
+      const c = snap.gates.find(g => g.key === 'CONSISTENCY')!
+      expect(c.value).toContain('not enforced')
+      expect(c.status).toBe('OK')
+    })
+
+    it('MIN_TRADING_DAYS displays count vs minimum when minimum > 0', () => {
+      // Topstep XFA has minTradingDays=0, so override profile.
+      const stricter = { ...TOPSTEP_50K_XFA, minTradingDays: 5 }
+      const snap = build({ fundedSnap: makeFundedSnap({
+        profile: stricter,
+        payoutMetrics: { ...EMPTY_PAYOUT_METRICS,
+          tradingDaysCount: 3, minDaysSatisfied: false, phase: 'combine',
+        },
+      }) }).get()
+      const m = snap.gates.find(g => g.key === 'MIN_TRADING_DAYS')!
+      expect(m.value).toContain('3 / 5')
+      expect(m.status).toBe('WATCH')
+    })
+
+    it('EVAL_PHASE shows the current phase + target-hit badge', () => {
+      const snap = build({ fundedSnap: makeFundedSnap({
+        payoutMetrics: { ...EMPTY_PAYOUT_METRICS,
+          phase: 'funded', profitTargetReached: true,
+        },
+      }) }).get()
+      const e = snap.gates.find(g => g.key === 'EVAL_PHASE')!
+      expect(e.value).toContain('FUNDED')
+      expect(e.value).toContain('target hit')
+    })
   })
 })
