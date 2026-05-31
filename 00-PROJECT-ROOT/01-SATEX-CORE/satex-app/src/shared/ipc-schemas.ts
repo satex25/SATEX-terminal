@@ -299,3 +299,9 @@ export const FundedAccountTriggerFlatReq = z.object({
   reason: z.string().min(1).max(120),
 }).strict()
 export type FundedAccountTriggerFlatReq = z.infer<typeof FundedAccountTriggerFlatReq>
+
+/** Tier-1 D-2 — manually advance evaluation phase. */
+export const FundedAccountAdvancePhaseReq = z.object({
+  phase: z.enum(['combine', 'funded', 'activated']),
+}).strict()
+export type FundedAccountAdvancePhaseReq = z.infer<typeof FundedAccountAdvancePhaseReq>

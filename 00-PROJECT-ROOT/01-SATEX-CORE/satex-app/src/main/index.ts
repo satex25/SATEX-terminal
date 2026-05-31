@@ -20,7 +20,7 @@ import {
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq, HistoricalBarsReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
   WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
-  FundedAccountSetProfileReq, FundedAccountTriggerFlatReq,
+  FundedAccountSetProfileReq, FundedAccountTriggerFlatReq, FundedAccountAdvancePhaseReq,
 } from '@shared/ipc-schemas'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
@@ -973,6 +973,7 @@ function registerIpcHandlers(): void {
   register(IPC.FUNDED_ACCOUNT_SET_PROFILE,  validated(FundedAccountSetProfileReq,  ({ profileId }) => engine.setFundedAccountProfile(profileId)))
   register(IPC.FUNDED_ACCOUNT_CLEAR,        () => engine.setFundedAccountProfile(null))
   register(IPC.FUNDED_ACCOUNT_TRIGGER_FLAT, validated(FundedAccountTriggerFlatReq, ({ reason }) => { engine.triggerFundedFlat(reason); return { ok: true as const } }))
+  register(IPC.FUNDED_ACCOUNT_ADVANCE_PHASE, validated(FundedAccountAdvancePhaseReq, ({ phase }) => engine.advanceFundedPhase(phase)))
 
   // ── B9 (2026-05-19) — CSP violation report sink ─────────────────────────────
   // Receives the renderer's `securitypolicyviolation` events, validates the

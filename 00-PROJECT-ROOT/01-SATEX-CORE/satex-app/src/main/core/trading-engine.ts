@@ -860,6 +860,11 @@ export class TradingEngine {
     this.fundedAccount.triggerFlatten(new Date(), reason)
   }
 
+  /** Tier-1 D-2 — manually advance the evaluation phase. */
+  advanceFundedPhase(phase: 'combine' | 'funded' | 'activated'): { ok: boolean; reason?: string } {
+    return this.fundedAccount.advancePhase(phase)
+  }
+
   /** Subscribe to funded-account snapshot updates. */
   onFundedAccountUpdate(fn: (s: FundedAccountSnapshot) => void): () => void {
     this.fundedListeners.add(fn)
@@ -1984,6 +1989,9 @@ export class TradingEngine {
       if (this.closedTrades.length > TradingEngine.CLOSED_TRADES_CAP) {
         this.closedTrades.splice(0, this.closedTrades.length - TradingEngine.CLOSED_TRADES_CAP)
       }
+      // Tier-1 D-2: feed the daily-PnL ledger for consistency / profit-target /
+      // min-trading-days trackers. No-ops without an active funded profile.
+      this.fundedAccount.recordClosedTrade(ct)
       for (const l of this.tradeClosedListeners) l(ct)
     }
 

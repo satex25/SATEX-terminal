@@ -10,9 +10,12 @@ import type {
   FundedAccountProfile, FundedAccountSnapshot, EquityHwmLedgerEntry, FlatByConfig,
 } from '@shared/funded/types'
 import { getProfile as registryGet } from '@shared/funded'
+import { computePayoutMetrics, EMPTY_PAYOUT_METRICS, type DailyPnlEntry } from '@shared/funded/payout-metrics'
+import type { ClosedTrade } from '@shared/types'
 import { EquityHWMService, tradingDayKey } from './equity-hwm'
 import { EodFlattenService } from './eod-flatten'
 import { FundedAccountStore } from './funded-account-store'
+import { DailyPnlLedger } from './daily-pnl-ledger'
 import { createLogger } from './logger'
 
 const log = createLogger('funded-account')
@@ -34,6 +37,8 @@ export class FundedAccountService {
   private readonly hwm: EquityHWMService
   private readonly eod: EodFlattenService
   private readonly store: FundedAccountStore
+  private readonly pnlLedger: DailyPnlLedger
+  private dailyEntries: DailyPnlEntry[] = []
   private listeners = new Set<FundedAccountListener>()
 
   constructor(private readonly deps: FundedAccountDeps) {
@@ -46,6 +51,28 @@ export class FundedAccountService {
       getFlatBy: (): FlatByConfig | null => this.profile?.flatBy ?? null,
       onFlat: (reason) => this.deps.onFlatten(reason),
     })
+    this.pnlLedger = new DailyPnlLedger({
+      getTimezone: () => this.profile?.flatBy.tz ?? null,
+      persist: (entries) => { this.dailyEntries = entries; this.persistAll() },
+    })
+  }
+
+  /** Tier-1 D-2 — record realized PnL for the consistency / profit-target /
+   *  min-days trackers. No-op without an active profile. */
+  recordClosedTrade(trade: ClosedTrade): void {
+    this.pnlLedger.recordClosedTrade(trade)
+    this.broadcast()
+  }
+
+  /** Manual evaluation phase transition. Topstep's eval is decided
+   *  server-side; this just reflects what the user tells us. */
+  advancePhase(target: 'combine' | 'funded' | 'activated'): { ok: boolean; reason?: string } {
+    if (!this.profile) return { ok: false, reason: 'no active profile' }
+    this.profile = { ...this.profile, phase: target }
+    this.persistAll()
+    log.warn('funded-account phase advanced', { phase: target })
+    this.broadcast()
+    return { ok: true }
   }
 
   /** Restore active profile + ledger from disk. Idempotent. */
@@ -58,9 +85,20 @@ export class FundedAccountService {
       }
     }
     this.hwm.hydrate(stored.ledger)
+    // Tier-1 D-2: restore manual phase override AFTER profile resolution.
+    if (this.profile && stored.activePhase && ['combine', 'funded', 'activated'].includes(stored.activePhase)) {
+      this.profile = { ...this.profile, phase: stored.activePhase as 'combine' | 'funded' | 'activated' }
+    }
+    // Tier-1 D-2: restore daily P&L ledger.
+    if (stored.dailyPnl && stored.dailyPnl.length > 0) {
+      this.pnlLedger.hydrate(stored.dailyPnl)
+      this.dailyEntries = stored.dailyPnl
+    }
     log.info('funded-account hydrated', {
       profile: this.profile?.id ?? null,
       ledgerEntries: stored.ledger.length,
+      dailyEntries: stored.dailyPnl?.length ?? 0,
+      phase: this.profile?.phase ?? null,
     })
   }
 
@@ -70,6 +108,8 @@ export class FundedAccountService {
       this.profile = null
       this.hwm.reset()
       this.eod.reset()
+      this.pnlLedger.reset()
+      this.dailyEntries = []
       this.persist(this.hwm.getLedger())
       log.warn('funded-account deactivated')
       this.broadcast()
@@ -110,7 +150,7 @@ export class FundedAccountService {
         active: false, profile: null,
         highestEodBalance: 0, currentMll: 0, mllLocked: false, mllBuffer: 0,
         today: tradingDayKey(now, 'America/New_York'),
-        msToFlatBy: 0, ledger: [], computedAt: now.getTime(),
+        msToFlatBy: 0, ledger: [], payoutMetrics: EMPTY_PAYOUT_METRICS, computedAt: now.getTime(),
       }
     }
     const mll = this.hwm.computeMll(this.profile)
@@ -124,6 +164,7 @@ export class FundedAccountService {
       today: tradingDayKey(now, this.profile.flatBy.tz),
       msToFlatBy: this.eod.msToFlatBy(now),
       ledger: this.hwm.getLedger(),
+      payoutMetrics: computePayoutMetrics(this.pnlLedger.getEntries(), this.profile),
       computedAt: now.getTime(),
     }
   }
@@ -143,8 +184,16 @@ export class FundedAccountService {
   private persist(ledger: EquityHwmLedgerEntry[]): void {
     this.store.save({
       activeProfileId: this.profile?.id ?? null,
+      activePhase: this.profile?.phase ?? null,
       ledger,
+      dailyPnl: this.dailyEntries,
       updatedAt: Date.now(),
     })
+  }
+
+  /** Snapshot the full state via the EquityHWM ledger pathway. Called when
+   *  phase advances or daily PnL ledger mutates. */
+  private persistAll(): void {
+    this.persist(this.hwm.getLedger())
   }
 }

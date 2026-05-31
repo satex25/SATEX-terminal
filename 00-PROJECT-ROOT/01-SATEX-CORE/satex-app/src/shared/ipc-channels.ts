@@ -253,6 +253,9 @@ export const IPC = {
   FUNDED_ACCOUNT_TRIGGER_FLAT: 'satex:funded:triggerFlat',
   /** Push (main → renderer): broadcast on every funded snapshot change. */
   FUNDED_ACCOUNT_UPDATE:       'satex:funded:update',
+  /** Invoke (renderer → main, { phase: 'combine'|'funded'|'activated' }):
+   *  manually advance the evaluation phase. Tier-1 D-2. */
+  FUNDED_ACCOUNT_ADVANCE_PHASE: 'satex:funded:advancePhase',
 } as const
 
 // Runtime array kept solely for the PushChannel type derivation below — the

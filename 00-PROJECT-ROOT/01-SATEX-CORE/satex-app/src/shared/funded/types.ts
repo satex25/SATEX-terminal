@@ -115,5 +115,24 @@ export interface FundedAccountSnapshot {
   msToFlatBy: number
   /** Ledger of every recorded EOD balance, oldest first. */
   ledger: EquityHwmLedgerEntry[]
+  /** Tier-1 Phase D-2 — payout-time rule metrics (advisory, never block orders). */
+  payoutMetrics: PayoutMetrics
   computedAt: number
+}
+
+/** Payout-time rule metrics. Source-of-truth implementation in
+ *  `@shared/funded/payout-metrics`. Inlined here (un-exported) so the
+ *  snapshot type avoids a circular import; consumers needing the named
+ *  type import it from payout-metrics directly. */
+interface PayoutMetrics {
+  totalProfit: number
+  largestProfitableDay: number
+  consistencyRatio: number
+  consistencyOk: boolean
+  profitTargetProgress: number
+  profitTargetReached: boolean
+  tradingDaysCount: number
+  minDaysSatisfied: boolean
+  phase: string
+  dailyHistory: Array<{ date: string; realizedPnl: number; tradeCount: number; updatedAt: number }>
 }
