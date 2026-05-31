@@ -20,11 +20,12 @@
  */
 import { randomUUID } from 'node:crypto'
 import { computeSnapshot } from '@shared/indicators'
+import { computeMultiTimeframe } from '@shared/indicators-mtf'
 import type { AssetClass, Candle, ClosedTrade, OrderRequest, Quote } from '@shared/types'
 import { computeMetrics } from '@shared/backtest/metrics'
 import type { BacktestConfig, BacktestReport, EquityPoint } from '@shared/backtest/types'
 import type { SlippageModel } from './slippage-model'
-import type { Strategy } from './strategy'
+import type { Strategy, StrategySnapshot } from './strategy'
 
 interface OpenPos {
   ts: number
@@ -44,6 +45,10 @@ export interface BacktestRunInput {
   /** Used for Sharpe/Sortino annualization. Default = 252 × 6.5 × 60 = 98280
    *  (1-minute equity bars). Daily bars: pass 252. */
   periodsPerYear?: number
+  /** Tier-2 E.2 — when true, attach a `multiTimeframe` snapshot to every
+   *  StrategySnapshot. Adds O(bars × timeframes) work per decide call;
+   *  default false so Phase-C BrainStrategy back-tests keep their speed. */
+  withMultiTimeframe?: boolean
 }
 
 export class BacktestRunner {
@@ -100,7 +105,14 @@ export class BacktestRunner {
           timestamp: tsMs,
         }
 
-        const signal = this.strategy.decide({ ts: tsMs, symbol: this.config.symbol, quote, indicators })
+        const snap: StrategySnapshot = { ts: tsMs, symbol: this.config.symbol, quote, indicators }
+        if (input.withMultiTimeframe) {
+          snap.multiTimeframe = computeMultiTimeframe(
+            this.config.symbol,
+            candles.slice(Math.max(0, i - 199), i + 1),
+          )
+        }
+        const signal = this.strategy.decide(snap)
         if (signal) {
           const equityNow = startingEquity + realizedPnl
           const targetNotional = equityNow * notionalPct
