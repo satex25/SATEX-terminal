@@ -11,6 +11,7 @@ import { isUsEquityMarketOpen } from '@shared/market-hours'
 import { shortId } from './id-generator'
 import { mulberry32, randomSeed, type Rng } from './rng'
 import { createLogger } from './logger'
+import type { MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 
 /** Power-user escape hatch: set SATEX_SIMULATOR_24_7=true to keep the
  *  simulator emitting fake ticks around the clock for off-hours testing.
@@ -24,26 +25,7 @@ function simulatorBypassMarketHours(): boolean {
 
 const log = createLogger('simulator')
 
-export type Unsub = () => void
-export interface MarketDataSource {
-  start(): void
-  stop(): void
-  onQuotes(fn: (quotes: Quote[]) => void): Unsub
-  onCandle(fn: (symbol: string, candle: Candle, isNew: boolean) => void): Unsub
-  /** Optional bulk-snapshot stream — fires once per symbol with the full
-   *  candle history when a source has a "warmed up" moment (currently only
-   *  ReplaySource after seek). LiveMarket and MarketSimulator don't
-   *  implement this; subscribers must tolerate the listener never firing. */
-  onBulkCandlesReplace?(fn: (symbol: string, candles: Candle[]) => void): Unsub
-  onNews(fn: (item: NewsItem) => void): Unsub
-  /** P0-1 Footprint — per-trade event stream. MarketSimulator infers from
-   *  tick direction; LiveMarket forwards Alpaca SIP trades when entitled;
-   *  ReplaySource is a no-op today (historical import doesn't carry side). */
-  onTrades(fn: (trades: Trade[]) => void): Unsub
-  getQuote(symbol: string): Quote | undefined
-  getAllQuotes(): Quote[]
-  getCandles(symbol: string, limit?: number): Candle[]
-}
+export type { MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 
 interface SymbolState {
   entry: UniverseEntry
