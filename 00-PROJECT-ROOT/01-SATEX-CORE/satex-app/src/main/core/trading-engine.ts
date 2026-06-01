@@ -69,6 +69,11 @@ import { FundedAccountService } from '../services/funded-account'
 import { isPastFlatBy } from '../services/eod-flatten'
 import type { BlackoutResult } from '../services/blackout-window'
 import type { FundedAccountSnapshot } from '@shared/funded/types'
+import { buildAutonomousEnsemble, extractRegimeKey } from '../services/autonomous-strategy'
+import { computeMultiTimeframe } from '@shared/indicators-mtf'
+import type { StrategyEnsemble } from '../backtest/strategies/ensemble'
+import type { StrategySignal } from '@shared/types'
+import type { StrategySnapshot } from '../backtest/strategy'
 import type {
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
   FeedStatus,
@@ -151,6 +156,9 @@ export class TradingEngine {
   private macro!:       MacroCalendarService
   public  logs!:        SystemLogsService  // public so configureLogger can hand it the ingest fn
   private depth!:       DepthFeedService
+  /** Tier-2 ensemble — Momentum + MeanReversion + Breakout routed by
+   *  regime, with BrainStrategy as the always-available fallback. */
+  private ensemble!: StrategyEnsemble
   /** Tier-1 funded-account overlay. Active profile + EquityHWM + EOD service. */
   private fundedAccount!: FundedAccountService
   /** Cached most-recent blackout result. Refreshed by fundedTick (per-minute). */
@@ -552,6 +560,12 @@ export class TradingEngine {
     // ── Autonomous paper trader (Phase C, 2026-05-13) ─────────────────────────
     // Created in stopped state. User must explicitly enable via the toggle.
     // Refuses to submit when live capital is routed — paper-only by policy.
+    // Tier-2 — production strategy ensemble. Reads regime + multi-tf +
+    // depth and routes to Momentum / MeanReversion / Breakout (with the
+    // existing Brain wrapped as the always-available fallback so the
+    // engine never goes 100% silent on an unknown regime).
+    this.ensemble = buildAutonomousEnsemble(this.brain)
+
     this.autonomous = new AutonomousTrader({
       getWatchlist:  () => db.getWatchlist(),
       getQuote:      (s) => this.market.getQuote(s),
@@ -559,6 +573,10 @@ export class TradingEngine {
       getAccount:    () => this.om.getAccount(),
       isLiveCapitalRouted: () => getAlpacaMode() === 'live' || isLive(),
       getDecision:   (s) => this.getAiDecision(s),
+      // Tier-2 ensemble-driven entry. The trader prefers this over the
+      // legacy getDecision path; getDecision stays available for the
+      // AIInsightsPanel's rationale display.
+      getSignal:     (s) => this.computeEnsembleSignal(s),
       submitOrder:   (req, opts) => this.submitOrder(req, opts),
     })
     this.autonomous.onStatus((s)   => { for (const fn of this.autonomousStatusListeners)   fn(s) })
@@ -863,6 +881,44 @@ export class TradingEngine {
   /** Tier-1 D-2 — manually advance the evaluation phase. */
   advanceFundedPhase(phase: 'combine' | 'funded' | 'activated'): { ok: boolean; reason?: string } {
     return this.fundedAccount.advancePhase(phase)
+  }
+
+  /** Tier-2 — compute a StrategySignal via the regime-routed ensemble.
+   *  Returns null when the ensemble (and its Brain fallback) abstain;
+   *  the AutonomousTrader records that as a rejected decision.
+   *
+   *  Builds the full StrategySnapshot at call-time from live services:
+   *    - quote/candles from the active market source
+   *    - multi-timeframe indicators (1m/5m/15m/1h)
+   *    - regime, with the "STATE · SESSION LIQUIDITY" label translated
+   *      to the bare STATE routing key
+   *    - L2 depth from the depth feed (when available)
+   *
+   *  Defensive against partial wiring during init — if any service
+   *  isn't ready yet, returns null and lets the fallback path kick in
+   *  next cycle. */
+  private async computeEnsembleSignal(symbol: string): Promise<StrategySignal | null> {
+    const quote = this.market?.getQuote(symbol)
+    if (!quote || quote.last <= 0) return null
+    const candles = this.market.getCandles(symbol, 200)
+    if (candles.length < 50) return null
+
+    const indicators = computeSnapshot(symbol, candles)
+    const mtf = computeMultiTimeframe(symbol, candles)
+    const regimeSnap = this.regime?.get?.() ?? null
+    const routingKey = extractRegimeKey(regimeSnap)
+    const depthSnap  = this.depth?.get?.(symbol) ?? null
+
+    const snap: StrategySnapshot = {
+      ts: quote.timestamp || Date.now(),
+      symbol, quote, indicators,
+      multiTimeframe: mtf,
+      ...(regimeSnap && routingKey
+        ? { regime: { ...regimeSnap, state: routingKey } }
+        : {}),
+      ...(depthSnap ? { depth: depthSnap } : {}),
+    }
+    return this.ensemble.decide(snap)
   }
 
   /** Subscribe to funded-account snapshot updates. */

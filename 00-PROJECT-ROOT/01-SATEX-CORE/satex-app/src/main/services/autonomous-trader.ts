@@ -18,7 +18,7 @@
  */
 import type {
   Account, AiDecision, AutonomousDecision, AutonomousStatus,
-  IndicatorSnapshot, OrderRequest, Quote,
+  IndicatorSnapshot, OrderRequest, Quote, StrategySignal,
 } from '@shared/types'
 import { createLogger } from './logger'
 import { AUTONOMOUS_DEFAULTS, DEFAULT_STOP_VOLATILITY_MULT, DEFAULT_TAKE_PROFIT_VOLATILITY_MULT } from '@shared/constants'
@@ -68,6 +68,13 @@ export interface AutonomousDeps {
   isLiveCapitalRouted: () => boolean
   getDecision:  (symbol: string) => Promise<AiDecision>
   submitOrder:  (req: OrderRequest, opts?: { signalConfidence?: number }) => Promise<{ ok: boolean; orderId?: string; reason?: string }>
+  /** Tier-2 follow-up — optional ensemble-driven signal. When present,
+   *  takes precedence over getDecision. Returning null = strategy
+   *  abstains; the trader records it as a rejected decision (same UX
+   *  shape as a below-threshold AiDecision). The signal''s stopLossHint
+   *  / takeProfitHint are used verbatim — the trader does NOT re-derive
+   *  ATR-based brackets in this path. */
+  getSignal?:   (symbol: string) => Promise<StrategySignal | null>
 }
 
 type DecisionListener = (d: AutonomousDecision) => void
@@ -174,25 +181,79 @@ export class AutonomousTrader {
     const ind = this.deps.getIndicators(symbol)
     if (!ind || ind.atr14 <= 0) return  // need ATR to size bracket stops
 
-    let decision: AiDecision
-    try { decision = await this.deps.getDecision(symbol) }
-    catch (e) { log.debug('decide failed', { symbol, err: String(e) }); return }
+    // Tier-2 ensemble path takes precedence when wired in. The legacy
+    // getDecision path stays as the fallback so older callers (and the
+    // existing test suite) keep working unchanged.
+    //
+    //   New path: deps.getSignal returns a StrategySignal with explicit
+    //             stop-loss / take-profit / side. The trader uses them
+    //             verbatim — no ATR re-derivation.
+    //   Old path: deps.getDecision returns an AiDecision (bias +
+    //             confidence). The trader builds ATR-based brackets and
+    //             maps bias → side.
+    let plannedSide: 'buy' | 'sell'
+    let plannedStop: number
+    let plannedTp:   number
+    let plannedConfidence: number
+    let plannedSetup:      string
 
-    this.status.signalsFired++
-
-    // Confidence + direction gates
-    if (decision.bias === 'neutral' || decision.confidence < this.config.confidenceThreshold) {
-      this.recordDecision({
-        id: shortId('ad'), symbol, approved: false,
-        reason: `${decision.bias} · confidence ${(decision.confidence * 100).toFixed(0)}% < ${(this.config.confidenceThreshold * 100).toFixed(0)}%`,
-        confidence: decision.confidence, size: 0, riskReward: 0, createdAt: Date.now(),
-      })
-      this.cooldowns.set(symbol, Date.now() + this.config.cooldownMs)
-      return
+    if (this.deps.getSignal) {
+      let sig: StrategySignal | null
+      try { sig = await this.deps.getSignal(symbol) }
+      catch (e) { log.debug('getSignal failed', { symbol, err: String(e) }); return }
+      this.status.signalsFired++
+      if (!sig) {
+        this.recordDecision({
+          id: shortId('ad'), symbol, approved: false,
+          reason: 'strategy abstained',
+          confidence: 0, size: 0, riskReward: 0, createdAt: Date.now(),
+        })
+        this.cooldowns.set(symbol, Date.now() + this.config.cooldownMs)
+        return
+      }
+      if (sig.confidence < this.config.confidenceThreshold) {
+        this.recordDecision({
+          id: shortId('ad'), symbol, approved: false,
+          reason: `${sig.setup} · confidence ${(sig.confidence * 100).toFixed(0)}% < ${(this.config.confidenceThreshold * 100).toFixed(0)}%`,
+          confidence: sig.confidence, size: 0, riskReward: 0, createdAt: Date.now(),
+        })
+        this.cooldowns.set(symbol, Date.now() + this.config.cooldownMs)
+        return
+      }
+      plannedSide       = sig.action
+      plannedStop       = round2(sig.stopLossHint)
+      plannedTp         = round2(sig.takeProfitHint)
+      plannedConfidence = sig.confidence
+      plannedSetup      = sig.setup
+    } else {
+      let decision: AiDecision
+      try { decision = await this.deps.getDecision(symbol) }
+      catch (e) { log.debug('decide failed', { symbol, err: String(e) }); return }
+      this.status.signalsFired++
+      if (decision.bias === 'neutral' || decision.confidence < this.config.confidenceThreshold) {
+        this.recordDecision({
+          id: shortId('ad'), symbol, approved: false,
+          reason: `${decision.bias} · confidence ${(decision.confidence * 100).toFixed(0)}% < ${(this.config.confidenceThreshold * 100).toFixed(0)}%`,
+          confidence: decision.confidence, size: 0, riskReward: 0, createdAt: Date.now(),
+        })
+        this.cooldowns.set(symbol, Date.now() + this.config.cooldownMs)
+        return
+      }
+      plannedSide       = decision.bias === 'bullish' ? 'buy' : 'sell'
+      plannedConfidence = decision.confidence
+      plannedSetup      = 'autonomous'
+      // ATR-based bracket stops, side-aware. Long: stop BELOW / TP ABOVE.
+      const atrStop   = ind.atr14 * this.config.stopAtrMult
+      const atrTarget = ind.atr14 * this.config.takeProfitAtrMult
+      plannedStop = plannedSide === 'buy'
+        ? round2(quote.last - atrStop)
+        : round2(quote.last + atrStop)
+      plannedTp = plannedSide === 'buy'
+        ? round2(quote.last + atrTarget)
+        : round2(quote.last - atrTarget)
     }
 
-    // Build order
-    const side = decision.bias === 'bullish' ? 'buy' as const : 'sell' as const
+    // Common build + submit + record path.
     const targetNotional = Math.max(
       this.config.minNotional,
       Math.min(this.config.maxNotional, account.equity * this.config.notionalPct),
@@ -200,44 +261,30 @@ export class AutonomousTrader {
     const qty = Math.max(1, Math.floor(targetNotional / quote.last))
     const notional = qty * quote.last
 
-    // ATR-based bracket stops, side-aware.
-    //   Long  (buy):  stop BELOW entry,  TP ABOVE entry  — winning move is up.
-    //   Short (sell): stop ABOVE entry,  TP BELOW entry  — winning move is down.
-    // Reward:risk ratio is symmetric across sides by construction —
-    // takeProfitAtrMult / stopAtrMult on both. G-9 (Phase B 2026-05-29)
-    // closed the long-only carve-out; Alpaca paper supports shorts on
-    // margin, and isLiveCapitalRouted() above still gates real-capital flow.
-    const atrStop   = ind.atr14 * this.config.stopAtrMult
-    const atrTarget = ind.atr14 * this.config.takeProfitAtrMult
-    const stopLoss   = side === 'buy'
-      ? round2(quote.last - atrStop)
-      : round2(quote.last + atrStop)
-    const takeProfit = side === 'buy'
-      ? round2(quote.last + atrTarget)
-      : round2(quote.last - atrTarget)
-    const riskDist   = Math.abs(quote.last - stopLoss)
-    const rewardDist = Math.abs(takeProfit - quote.last)
+    const riskDist   = Math.abs(quote.last - plannedStop)
+    const rewardDist = Math.abs(plannedTp - quote.last)
     const riskReward = rewardDist / Math.max(0.01, riskDist)
 
     const req: OrderRequest = {
-      symbol, side, type: 'market', quantity: qty,
-      stopLoss, takeProfit, source: 'autonomous',
+      symbol, side: plannedSide, type: 'market', quantity: qty,
+      stopLoss: plannedStop, takeProfit: plannedTp,
+      source: plannedSetup === 'autonomous' ? 'autonomous' : `autonomous-${plannedSetup}`,
     }
-    const result = await this.deps.submitOrder(req, { signalConfidence: decision.confidence })
+    const result = await this.deps.submitOrder(req, { signalConfidence: plannedConfidence })
     if (result.ok) {
       this.status.approvedCount++
       this.recordDecision({
         id: shortId('ad'), symbol, approved: true,
-        reason: `confidence ${(decision.confidence * 100).toFixed(0)}% · ${qty} sh · RR ${riskReward.toFixed(1)}`,
-        confidence: decision.confidence, size: notional, riskReward, createdAt: Date.now(),
+        reason: `${plannedSetup} · confidence ${(plannedConfidence * 100).toFixed(0)}% · ${qty} sh · RR ${riskReward.toFixed(1)}`,
+        confidence: plannedConfidence, size: notional, riskReward, createdAt: Date.now(),
       })
-      log.info('autonomous entry submitted', { symbol, qty, notional, riskReward: riskReward.toFixed(2) })
+      log.info('autonomous entry submitted', { symbol, setup: plannedSetup, qty, notional, riskReward: riskReward.toFixed(2) })
     } else {
       this.status.rejectedCount++
       this.recordDecision({
         id: shortId('ad'), symbol, approved: false,
         reason: result.reason ?? 'submission rejected',
-        confidence: decision.confidence, size: notional, riskReward, createdAt: Date.now(),
+        confidence: plannedConfidence, size: notional, riskReward, createdAt: Date.now(),
       })
       log.debug('autonomous entry rejected', { symbol, reason: result.reason })
     }

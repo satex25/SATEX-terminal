@@ -144,3 +144,109 @@ describe('AutonomousTrader — neutral / low-confidence still vetoed', () => {
     expect(fx.submitted).toHaveLength(0)
   })
 })
+
+// ─── Tier-2 ensemble path ────────────────────────────────────────────────
+import type { StrategySignal } from '@shared/types'
+
+function buildSignalFixture(signal: StrategySignal | null) {
+  const submitted: OrderRequest[] = []
+  const deps: AutonomousDeps = {
+    getWatchlist: () => ['NVDA'],
+    getQuote: () => makeQuote(),
+    getIndicators: () => makeInd(),
+    getAccount: () => makeAccount(),
+    isLiveCapitalRouted: () => false,
+    // Legacy path must not be invoked when getSignal is wired.
+    getDecision: async () => {
+      throw new Error('getDecision should not be called when getSignal is wired')
+    },
+    submitOrder: async (req) => {
+      submitted.push(req)
+      return { ok: true, orderId: 'ord-test' }
+    },
+    getSignal: async () => signal,
+  }
+  return { trader: new AutonomousTrader(deps), submitted }
+}
+
+describe('AutonomousTrader — getSignal (Tier-2 ensemble path)', () => {
+  it('uses the strategy signal verbatim (stops + TP from signal, NOT ATR-derived)', async () => {
+    const sig: StrategySignal = {
+      setup: 'momentum', symbol: 'NVDA', action: 'buy',
+      confidence: 0.8,
+      stopLossHint: 95.5,
+      takeProfitHint: 108.5,
+      atrHint: 2,
+      createdAt: 0,
+    }
+    const fx = buildSignalFixture(sig)
+    await driveTryOne(fx.trader, 'NVDA', makeAccount())
+
+    expect(fx.submitted).toHaveLength(1)
+    const req = fx.submitted[0]!
+    expect(req.side).toBe('buy')
+    expect(req.stopLoss).toBe(95.5)
+    expect(req.takeProfit).toBe(108.5)
+    expect(req.source).toBe('autonomous-momentum')
+  })
+
+  it('records a rejection when the strategy abstains (returns null)', async () => {
+    const fx = buildSignalFixture(null)
+    await driveTryOne(fx.trader, 'NVDA', makeAccount())
+    expect(fx.submitted).toHaveLength(0)
+    const recent = fx.trader.getRecent()
+    expect(recent).toHaveLength(1)
+    expect(recent[0]!.approved).toBe(false)
+    expect(recent[0]!.reason).toContain('abstained')
+  })
+
+  it('records a rejection when the signal confidence is below threshold', async () => {
+    const fx = buildSignalFixture({
+      setup: 'breakout', symbol: 'NVDA', action: 'sell',
+      confidence: 0.05,
+      stopLossHint: 103, takeProfitHint: 94,
+      atrHint: 2, createdAt: 0,
+    })
+    await driveTryOne(fx.trader, 'NVDA', makeAccount())
+    expect(fx.submitted).toHaveLength(0)
+    const recent = fx.trader.getRecent()
+    expect(recent[0]!.reason).toContain('breakout')
+    expect(recent[0]!.reason).toContain('5%')
+  })
+
+  it('does not call getDecision when getSignal is wired', async () => {
+    // buildSignalFixture''s getDecision throws — reaching the end without
+    // throwing proves the legacy path is NOT executed.
+    const sig: StrategySignal = {
+      setup: 'momentum', symbol: 'NVDA', action: 'buy',
+      confidence: 0.7,
+      stopLossHint: 99, takeProfitHint: 105,
+      atrHint: 2, createdAt: 0,
+    }
+    const fx = buildSignalFixture(sig)
+    await driveTryOne(fx.trader, 'NVDA', makeAccount())
+    expect(fx.submitted).toHaveLength(1)
+  })
+
+  it('passes short-side signal through with mirrored brackets', async () => {
+    const fx = buildSignalFixture({
+      setup: 'mean-reversion', symbol: 'NVDA', action: 'sell',
+      confidence: 0.6,
+      stopLossHint: 105,
+      takeProfitHint: 92,
+      atrHint: 2, createdAt: 0,
+    })
+    await driveTryOne(fx.trader, 'NVDA', makeAccount())
+    const req = fx.submitted[0]!
+    expect(req.side).toBe('sell')
+    expect(req.stopLoss).toBe(105)
+    expect(req.takeProfit).toBe(92)
+    expect(req.source).toBe('autonomous-mean-reversion')
+  })
+
+  it('signalsFired increments even when strategy abstains', async () => {
+    const fx = buildSignalFixture(null)
+    await driveTryOne(fx.trader, 'NVDA', makeAccount())
+    expect(fx.trader.getStatus().signalsFired).toBe(1)
+  })
+})
