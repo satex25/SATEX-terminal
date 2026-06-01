@@ -12,17 +12,27 @@
  *      access token). Calls the OpenAI-compatible chat-completions endpoint
  *      at aistudio.baidu.com. Falls back gracefully when the key is missing.
  */
-import type { AiDecision, IndicatorSnapshot, Quote, OrderSide, BrainParameter } from '@shared/types'
+import type { AiDecision, DepthSnapshot, IndicatorSnapshot, Quote, OrderSide, BrainParameter } from '@shared/types'
 import { getBaiduKey } from './credential-store'
 import * as db from './persistence'
 import { createLogger } from './logger'
 
 const log = createLogger('brain')
 
-const FEATURE_KEYS = ['ema_stack', 'rsi_mid', 'vwap_side', 'trend_strength', 'atr_norm'] as const
+// ── Feature set (Tier-2 E.9: added microstructure features) ───────────────
+const FEATURE_KEYS = [
+  'ema_stack', 'rsi_mid', 'vwap_side', 'trend_strength', 'atr_norm',
+  // Tier-2 E.9 — L2 depth signal. Defaults to 0 when no depth available.
+  'depth_imbalance',   // (bidSize - askSize) / (bidSize + askSize) at top
+  'microprice_dev',    // (microprice - last) / last in bps, clipped to [-1,1]
+] as const
 type FeatureKey = (typeof FEATURE_KEYS)[number]
 
-interface Features { ema_stack: number; rsi_mid: number; vwap_side: number; trend_strength: number; atr_norm: number }
+interface Features {
+  ema_stack: number; rsi_mid: number; vwap_side: number;
+  trend_strength: number; atr_norm: number;
+  depth_imbalance: number; microprice_dev: number;
+}
 
 const DEFAULT_WEIGHTS: Record<FeatureKey, number> = {
   ema_stack:      0.40,
@@ -30,6 +40,8 @@ const DEFAULT_WEIGHTS: Record<FeatureKey, number> = {
   vwap_side:      0.20,
   trend_strength: 0.15,
   atr_norm:      -0.10,    // higher volatility → lower confidence
+  depth_imbalance: 0.15,
+  microprice_dev:  0.10,
 }
 const BIAS_KEY = 'bias_intercept'
 const LR = 0.02          // learning rate
@@ -38,7 +50,10 @@ const SAMPLE_FLOOR = 5   // min samples before treating learned weight as prefer
 export class Brain {
   private weights: Record<FeatureKey, number> = { ...DEFAULT_WEIGHTS }
   private bias = 0
-  private sampleSize: Record<FeatureKey, number> = { ema_stack: 0, rsi_mid: 0, vwap_side: 0, trend_strength: 0, atr_norm: 0 }
+  private sampleSize: Record<FeatureKey, number> = {
+    ema_stack: 0, rsi_mid: 0, vwap_side: 0, trend_strength: 0, atr_norm: 0,
+    depth_imbalance: 0, microprice_dev: 0,
+  }
   private biasSampleSize = 0
 
   initialize(): void {
@@ -55,13 +70,37 @@ export class Brain {
     log.info('brain loaded', { weights: this.weights, bias: this.bias })
   }
 
-  features(quote: Quote, ind: IndicatorSnapshot): Features {
+  features(quote: Quote, ind: IndicatorSnapshot, depth?: DepthSnapshot): Features {
     const emaStack      = ind.ema9 > ind.ema21 && ind.ema21 > ind.ema50 ? 1 : ind.ema9 < ind.ema21 && ind.ema21 < ind.ema50 ? -1 : 0
     const rsiMid        = (ind.rsi14 - 50) / 50  // [-1, +1]
     const vwapSide      = quote.last > ind.vwap ? 1 : -1
     const trendStrength = Math.max(-1, Math.min(1, ind.trendStrength))
     const atrNorm       = Math.max(0, Math.min(1, ind.atr14 / Math.max(0.01, quote.last) * 50))
-    return { ema_stack: emaStack, rsi_mid: rsiMid, vwap_side: vwapSide, trend_strength: trendStrength, atr_norm: atrNorm }
+
+    // ── Tier-2 E.9 — L2 microstructure features ────────────────────────────
+    let depthImbalance = 0
+    let micropriceDev  = 0
+    if (depth && depth.bids?.length && depth.asks?.length) {
+      const bidTop = depth.bids[0]!
+      const askTop = depth.asks[0]!
+      const totSize = bidTop.size + askTop.size
+      if (totSize > 0) {
+        depthImbalance = (bidTop.size - askTop.size) / totSize
+        // microprice — size-weighted mid (heavier book side pulls mid toward
+        // the OPPOSITE side, predicting next tick direction).
+        const microprice = (bidTop.p * askTop.size + askTop.p * bidTop.size) / totSize
+        if (quote.last > 0) {
+          const dev = (microprice - quote.last) / quote.last * 10_000
+          micropriceDev = Math.max(-1, Math.min(1, dev / 50)) // clip ±50bps → ±1
+        }
+      }
+    }
+
+    return {
+      ema_stack: emaStack, rsi_mid: rsiMid, vwap_side: vwapSide,
+      trend_strength: trendStrength, atr_norm: atrNorm,
+      depth_imbalance: depthImbalance, microprice_dev: micropriceDev,
+    }
   }
 
   scoreLocal(f: Features): number {
