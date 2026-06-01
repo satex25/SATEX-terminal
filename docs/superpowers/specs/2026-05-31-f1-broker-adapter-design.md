@@ -89,20 +89,22 @@ export interface OrderAck {
 }
 
 export type OrderEvent =
-  | { type: 'ACK';          orderId: string; clientOrderId: string; timestamp: number }
-  | { type: 'PARTIAL_FILL'; orderId: string; clientOrderId: string; filled: number; price: number; timestamp: number }
-  | { type: 'FILL';         orderId: string; clientOrderId: string; filled: number; avgPrice: number; timestamp: number }
-  | { type: 'REJECT';       orderId: string; clientOrderId: string; reason: string; timestamp: number }
-  | { type: 'CANCEL';       orderId: string; clientOrderId: string; timestamp: number }
-  | { type: 'EXPIRE';       orderId: string; clientOrderId: string; timestamp: number }
+  | { execType: 'ACK';          orderId: string; clientOrderId: string; timestamp: number }
+  | { execType: 'PARTIAL_FILL'; orderId: string; clientOrderId: string; filled: number; price: number; timestamp: number }
+  | { execType: 'FILL';         orderId: string; clientOrderId: string; filled: number; avgPrice: number; timestamp: number }
+  | { execType: 'REJECT';       orderId: string; clientOrderId: string; reason: string; timestamp: number }
+  | { execType: 'CANCEL';       orderId: string; clientOrderId: string; timestamp: number }
+  | { execType: 'EXPIRE';       orderId: string; clientOrderId: string; timestamp: number }
 ```
 
 **Semantics:**
 
 - `submit()` returns the broker's `OrderAck` on success or **throws `BrokerError`** on ack-time failure (auth lost, validation failure, rate limit, etc.). Throws are reserved for failures BEFORE the broker has accepted the order.
 - Anything that happens AFTER acceptance — fill, partial fill, cancel, reject (broker-side post-ack), expire — flows through `onUpdate`. The engine subscribes once at session boot and routes events to the existing `OrderManager.fillOrder` / `rejectOrder` / `cancelOrder` methods by `clientOrderId`.
-- Discriminator field is `type`, matches FIX `ExecType` semantics (0 = New / 1 = Partial / 2 = Fill / 4 = Canceled / 8 = Rejected / C = Expired) so production-experienced engineers don't need to learn a private vocabulary.
-- Engine submits with a freshly-generated UUID `clientOrderId` for every retry. The adapter's `submit()` SHOULD return the existing `OrderAck` if the broker already saw this ID (broker-side idempotency); MUST not double-submit. If the broker doesn't support client-side ID idempotency, the adapter MUST track in-flight client IDs locally and short-circuit duplicate submissions.
+- Discriminator field is `execType` (matches the FIX ExecType field name used by institutional execution systems). String values are the human-readable enum (`'ACK'` / `'PARTIAL_FILL'` / etc.) — the FIX wire-protocol numeric codes (0 / 1 / 2 / 4 / 8 / C) are documented in the mapping comment but NOT used as discriminator values, so call sites read as `if (e.execType === 'FILL')` rather than `if (e.execType === '2')`. Mapping: `ACK ↔ FIX 0 (New)` · `PARTIAL_FILL ↔ FIX 1` · `FILL ↔ FIX 2` · `CANCEL ↔ FIX 4` · `REJECT ↔ FIX 8` · `EXPIRE ↔ FIX C`.
+- **`clientOrderId` contract.** REQUIRED on every `submit()`. The id MUST be opaque (not reverse-engineerable from order metadata), globally unique across the session lifetime, and never reused. UUIDv4 via `crypto.randomUUID()` is the default implementation; alternatives (UUIDv7 for DB-index locality, `nanoid()`, any 128-bit CSPRNG output) are acceptable provided the contract holds.
+- Engine submits with a freshly-generated `clientOrderId` for every retry. The adapter's `submit()` SHOULD return the existing `OrderAck` if the broker already saw this ID (broker-side idempotency); MUST not double-submit. If the broker doesn't support client-side ID idempotency, the adapter MUST track in-flight client IDs locally and short-circuit duplicate submissions.
+- **Rate limiting.** Broker-side rate-limit responses surface as `BrokerError({ code: 'RATE_LIMIT', retryable: true })` from `submit()`. The engine's existing circuit-breaker pattern handles backoff + retry; persistent rate-limit failures arm the kill switch. No interface-level concurrency counter on `BrokerSession` — position-count guardrails live in `OrderManager.validate` (Gate 4) where they already enforce against `MAX_OPEN_POSITIONS`. Adding a parallel counter on the session would duplicate that responsibility and create races on the read-modify-write path.
 
 ---
 
