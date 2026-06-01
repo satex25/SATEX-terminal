@@ -12,10 +12,12 @@ import type { StrategySignal } from '@shared/types'
 
 /** Regime key — mirrors RegimeSnapshot.state which is a free-form string.
  *  Callers configure exact-match routes; mapping a richer RegimeSnapshot
- *  to ensemble keys is the production-wiring layer's responsibility. */
-export type RegimeKey = string
+ *  to ensemble keys is the production-wiring layer's responsibility.
+ *  Internal-only — consumers use inline string literals on EnsembleConfig
+ *  entries, so no external import of this alias is needed. */
+type RegimeKey = string
 
-export interface EnsembleRoute {
+interface EnsembleRoute {
   regime: RegimeKey
   strategy: Strategy
 }

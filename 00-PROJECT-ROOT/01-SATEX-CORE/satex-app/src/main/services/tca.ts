@@ -8,7 +8,9 @@
  */
 import type { ClosedTrade } from '@shared/types'
 
-export interface TcaBucket {
+/** Bucket shape — internal-only. The TcaReport surface re-exports nested
+ *  buckets via index/lookup access; callers don't import this name directly. */
+interface TcaBucket {
   trades: number
   avgBps: number
   medianBps: number
