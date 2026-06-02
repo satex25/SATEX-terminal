@@ -18,6 +18,7 @@ import { getEnv } from '../services/env'
 import { evaluateDataSourceSwitch } from './data-source-guard'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
+import { AlpacaBrokerSession } from '../services/alpaca/broker-session'
 import { MarketSimulator, type MarketDataSource, type Unsub } from '../services/market-data'
 import { LiveMarket } from '../services/live-market'
 import { OrderManager, type OrderValidationContext } from '../services/order-manager'
@@ -128,6 +129,12 @@ interface EntryFeaturesValue {
 export class TradingEngine {
   private market!: MarketDataSource
   private alpaca:  AlpacaClient | null = null
+  /** BrokerSession umbrella — owns the equity + account WS lifecycle for live
+   *  Alpaca mode. Null in simulator/replay. F.1 migration (2026-06-02): the
+   *  engine now drives connect/disconnect via this rather than calling
+   *  market.start() + per-stream disconnect methods directly. Crypto WS is
+   *  still engine-owned (not part of LiveMarket / BrokerSession today). */
+  private session: AlpacaBrokerSession | null = null
   /** Dedicated AlpacaClient that ONLY handles the crypto WebSocket
    *  (wss://stream.data.alpaca.markets/v1beta3/crypto/us). Runs in parallel
    *  with the equity market source (simulator OR live IEX), so BTC/ETH stream
@@ -442,6 +449,7 @@ export class TradingEngine {
       }
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
+      this.session = AlpacaBrokerSession.create(this.alpaca, this.market)
       // Phase 3.2: wire bracket-fill learning — Alpaca pushes trade_updates for
       // server-side stop/TP fills that never round-trip through our OrderManager.
       this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
@@ -452,8 +460,14 @@ export class TradingEngine {
     // Wire data events (helper so we can re-wire on live↔replay swap)
     this.installMarketWiring(this.market)
 
-    // Start data
-    await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+    // Start data. Live mode goes through the BrokerSession (drives data.start
+    // + connectAccountStream + state observer); simulator has no session so
+    // we start the source directly.
+    if (this.session) {
+      await this.session.connect()
+    } else {
+      await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+    }
 
     // ── Tick recorder (Phase 9): captures live tape for later replay ────────
     this.recorder = new TickRecorder(this.currentSessionId)
@@ -1027,23 +1041,28 @@ export class TradingEngine {
         const positions = (await alpaca.getPositions()).map(p => AlpacaClient.toSatexPosition(p, Date.now()))
         // COMMIT (local, atomic).
         this.uninstallMarketWiring(); toreDown = true
-        try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+        await this.teardownSession()                  // tears down OLD session (data.stop + disconnectAccountStream + observer)
         this.alpaca = alpaca
         this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
         this.om.syncFromAlpaca({ equity: acct.equity, cash: acct.cash, buyingPower: acct.buyingPower }, positions)
         this.om.setSessionStartEquity(acct.equity)
         this.market = new LiveMarket(alpaca)
+        this.session = AlpacaBrokerSession.create(alpaca, this.market)
       } else {
         // → Simulator: no fallible prep; tear down + reset to a clean paper world.
         this.uninstallMarketWiring(); toreDown = true
-        try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+        await this.teardownSession()
         this.alpaca = null
         this.om.resetToPaper(DEFAULT_EQUITY)
         this.market = new MarketSimulator()
       }
       this.dataSource = target
       this.installMarketWiring(this.market)
-      await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      if (this.session) {
+        await this.session.connect()
+      } else {
+        await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      }
       this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
       this.regime?.resume()
       this.recorder?.resume()
@@ -1058,6 +1077,7 @@ export class TradingEngine {
       // fail) so the engine is never left source-less.
       if (toreDown) {
         this.alpaca = null
+        this.session = null
         this.om.resetToPaper(DEFAULT_EQUITY)
         this.market = new MarketSimulator()
         this.dataSource = 'simulator'
@@ -1084,10 +1104,8 @@ export class TradingEngine {
     if (!stored) return { ok: false, reason: `No stored credentials for ${mode} mode` }
     const env = getEnv()
     try {
-      this.alpaca?.disconnectMarketStream()
-      this.alpaca?.disconnectAccountStream()
       this.uninstallMarketWiring()
-      this.market?.stop?.()
+      await this.teardownSession()                    // tears down market + account WS + observer; falls back to market.stop() if no session
       const baseUrl = resolveBaseUrl(env.alpacaBaseUrl)
       const cfg: AlpacaConfig = {
         keyId: stored.keyId, secretKey: stored.secretKey,
@@ -1096,10 +1114,11 @@ export class TradingEngine {
       }
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
+      this.session = AlpacaBrokerSession.create(this.alpaca, this.market)
       // Phase 3.2: re-wire bracket-fill learning on every reconnect.
       this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
       this.installMarketWiring(this.market)
-      await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      await this.session.connect()
       // Re-attach recorder ingest.
       this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
       this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
@@ -1631,6 +1650,21 @@ export class TradingEngine {
   private uninstallMarketWiring(): void {
     for (const u of this.marketSubs) { try { u() } catch { /* ignore */ } }
     this.marketSubs = []
+  }
+
+  /** Tear down whichever data source is currently active. Prefers
+   *  `session.disconnect()` (drains in-flight orders via failUnacked,
+   *  stops the market, disconnects the account WS, releases the state
+   *  observer) when a session exists; falls back to a bare `market.stop()`
+   *  for simulator/replay paths that don't have one. Used by the data-feed
+   *  switch and reconnect paths. */
+  private async teardownSession(): Promise<void> {
+    if (this.session) {
+      try { await this.session.disconnect() } catch (e) { log.warn('session.disconnect failed during teardown', { err: String(e) }) }
+      this.session = null
+    } else {
+      try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+    }
   }
 
   private broadcastReplayStatus(): void {
