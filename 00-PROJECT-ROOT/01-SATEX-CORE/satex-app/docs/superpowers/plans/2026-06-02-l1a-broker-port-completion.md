@@ -67,6 +67,17 @@ If counts differ, the codebase moved underneath the plan — STOP and re-verify 
 
 L1.A involves four implementation decisions that the spec explicitly required surfacing rather than assuming. **All four must be signed off before Phase 1 starts.** Recommended defaults are given; the executor proposes, the human signs off.
 
+### ✅ Decisions locked (2026-06-02 by human sign-off)
+
+| ID | Decision | Locked value |
+|---|---|---|
+| **D1** | `onTradeUpdate` migration shape | **D1.A** — Engine handler refactored to consume canonical `OrderEvent` via `orders.onUpdate(fn)`. `onAlpacaTradeUpdate` replaced with `onOrderEvent`. AlpacaOrderRouter's translation layer already exists. |
+| **D2** | `clientOrderId` provenance | **D2.A** — Engine generates `clientOrderId = crypto.randomUUID()` immediately before `session.orders.submit(...)` and includes it in the OrderRequest. Engine-side `order.id` and `clientOrderId` are distinct. |
+| **D3** | Extend `MarketDataSource` with broker-data methods | **D3.A** — Add `getBars`, `getCryptoBars`, `getClock`, `isConnected`, `msSinceLastTick` to `MarketDataSource`. Implement on `LiveMarket` (delegate to `AlpacaClient`); safe defaults on `MarketSimulator` + `ReplaySource`. |
+| **D4** | `OrderManager.syncFromAlpaca` signature | **D4.A** — Add `syncFromSnapshot(snap: AccountSnapshot)` additively. Old `syncFromAlpaca(snap, positions)` stays as a thin forwarder during Phase 2; deleted in Phase 4.1 once Knip flags it. |
+
+**Phase 1 may now proceed.** Steps 0.1.1 / 0.2.1 / 0.3.1 / 0.4.1 (surface-to-human) are SATISFIED by this section. Steps 0.5.1 / 0.5.2 (amend + commit) are SATISFIED by the commit that lands this block.
+
 ### Task 0.1 — D1: `onTradeUpdate` migration shape
 
 The engine calls `this.alpaca.onTradeUpdate(u => this.onAlpacaTradeUpdate(u))` at three construction sites (cold-boot L455, data-feed switch L1046, reconnect L1119). `onAlpacaTradeUpdate` expects Alpaca's raw `trade_update` shape; `OrderRouter.onUpdate` emits the canonical `OrderEvent` union. Two options:
