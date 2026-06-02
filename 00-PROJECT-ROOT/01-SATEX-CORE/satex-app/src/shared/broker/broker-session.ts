@@ -33,8 +33,12 @@ export interface BrokerSession {
   connect(): Promise<void>
 
   /**
-   * Triggers REJECT events for any orders the broker hasn't acknowledged
-   * at the time of call. Already-acknowledged orders remain live broker-side.
+   * Triggers REJECT events for every order the session is still tracking
+   * as in-progress (acknowledged by broker, no terminal event seen yet).
+   * Broker-side orders are NOT canceled; reconciliation is the engine's
+   * responsibility via `account.getSnapshot()`.
+   *
+   * Delegates the synthetic-REJECT emission to `orders.failUnacked(reason)`.
    */
   disconnect(): Promise<void>
 

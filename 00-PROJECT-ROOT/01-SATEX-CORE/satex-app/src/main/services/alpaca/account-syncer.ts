@@ -16,22 +16,21 @@ import type { AccountSyncer, AccountSnapshot } from '@shared/broker/account-sync
 import type { Unsub } from '@shared/broker/market-data-source'
 import type { Position } from '@shared/types'
 
-/** The subset of AlpacaAccountSnapshot that getAccount() always returns. */
+/** The subset of AlpacaAccountSnapshot this syncer reads. Structural — any
+ *  type that has these fields satisfies it. */
 interface RawAccount {
   equity:      number
   cash:        number
   buyingPower: number
-  [key: string]: unknown
 }
 
-/** The subset of AlpacaPosition that getPositions() always returns. */
+/** The subset of AlpacaPosition this syncer reads. Structural. */
 interface RawPosition {
   symbol:        string
   qty:           number
   avgEntryPrice: number
   unrealizedPl:  number
   side:          'long' | 'short'
-  [key: string]: unknown
 }
 
 /** Minimal AlpacaClient surface consumed by this syncer. */

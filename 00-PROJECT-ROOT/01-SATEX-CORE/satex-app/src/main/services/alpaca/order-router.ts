@@ -40,8 +40,25 @@ export class AlpacaOrderRouter implements OrderRouter {
   private readonly inFlight = new Map<string, OrderAck>()
   /** brokerOrderId → clientOrderId. Lookup index for trade-update translation. */
   private readonly brokerToClient = new Map<string, string>()
+  /** Fan-out targets for both broker trade-updates and synthetic events
+   *  (e.g. failUnacked REJECT). Eager-subscribed at construction. */
+  private readonly updateListeners = new Set<(e: OrderEvent) => void>()
 
-  constructor(private readonly client: AlpacaClientShape) {}
+  constructor(private readonly client: AlpacaClientShape) {
+    this.client.onTradeUpdate((u) => {
+      const evt = this.translate(u)
+      if (!evt) return
+      this.fanout(evt)
+      if (
+        evt.execType === 'FILL' || evt.execType === 'CANCEL' ||
+        evt.execType === 'REJECT' || evt.execType === 'EXPIRE'
+      ) {
+        const cid = this.brokerToClient.get(u.orderId)
+        if (cid) this.inFlight.delete(cid)
+        this.brokerToClient.delete(u.orderId)
+      }
+    })
+  }
 
   async submit(req: OrderRequest & { clientOrderId: string }): Promise<OrderAck> {
     // Dedup BEFORE the REST call — a retry with the same clientOrderId
@@ -85,19 +102,33 @@ export class AlpacaOrderRouter implements OrderRouter {
   }
 
   onUpdate(fn: (event: OrderEvent) => void): Unsub {
-    return this.client.onTradeUpdate((u) => {
-      const evt = this.translate(u)
-      if (!evt) return
-      fn(evt)
-      if (
-        evt.execType === 'FILL' || evt.execType === 'CANCEL' ||
-        evt.execType === 'REJECT' || evt.execType === 'EXPIRE'
-      ) {
-        const cid = this.brokerToClient.get(u.orderId)
-        if (cid) this.inFlight.delete(cid)
-        this.brokerToClient.delete(u.orderId)
-      }
-    })
+    this.updateListeners.add(fn)
+    return () => { this.updateListeners.delete(fn) }
+  }
+
+  failUnacked(reason: string): void {
+    // Snapshot first, drain second, fanout third — so any listener that
+    // calls submit() during the fanout sees an empty cache and proceeds
+    // with a fresh entry.
+    const drained = Array.from(this.inFlight.values())
+    this.inFlight.clear()
+    this.brokerToClient.clear()
+    const timestamp = Date.now()
+    for (const ack of drained) {
+      this.fanout({
+        execType: 'REJECT',
+        orderId:       ack.brokerOrderId,
+        clientOrderId: ack.clientOrderId,
+        reason,
+        timestamp,
+      })
+    }
+  }
+
+  private fanout(evt: OrderEvent): void {
+    for (const fn of this.updateListeners) {
+      try { fn(evt) } catch { /* one bad listener must not break the fanout */ }
+    }
   }
 
   private translate(u: AlpacaTradeUpdate): OrderEvent | null {

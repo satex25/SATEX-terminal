@@ -55,4 +55,14 @@ export interface OrderRouter {
 
   /** Subscribe to all post-ack order events. Returns the unsubscribe handle. */
   onUpdate(fn: (event: OrderEvent) => void): Unsub
+
+  /**
+   * Synthesize a REJECT event for every order this router considers
+   * in-progress (acked by broker, no terminal event received yet) and
+   * clear the in-flight index. Broker-side orders are NOT canceled —
+   * callers must reconcile via AccountSyncer.
+   *
+   * Intended for use during session disconnect / failure.
+   */
+  failUnacked(reason: string): void
 }

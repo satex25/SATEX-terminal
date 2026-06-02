@@ -17,7 +17,7 @@
  * finite and the symbol is length-capped.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { AlpacaClient, type AlpacaTick, type AlpacaConfig } from './alpaca'
+import { AlpacaClient, type AlpacaConnectionState, type AlpacaTick, type AlpacaConfig } from './alpaca'
 
 const dummyCfg: AlpacaConfig = {
   keyId: 'k', secretKey: 's',
@@ -397,5 +397,67 @@ describe('AlpacaClient — WS 406 connection-limit cooldown (2026-05-26)', () =>
     } finally {
       vi.restoreAllMocks()
     }
+  })
+})
+
+describe('AlpacaClient — onConnectionStateChange event source (F.1 task A.6)', () => {
+  /** Cast-helper: poke private state + call private emit. The wire-up of
+   *  emit() at real WS open / close / reconnect-timer points is verified at
+   *  the AlpacaBrokerSession integration layer; here we pin the helper. */
+  type Internals = {
+    connected:            boolean
+    accountConnected:     boolean
+    reconnectTimer:       NodeJS.Timeout | null
+    acctReconnectTimer:   NodeJS.Timeout | null
+    cryptoReconnectTimer: NodeJS.Timeout | null
+    emitConnectionState:  () => void
+  }
+  const internals = (c: AlpacaClient): Internals => c as unknown as Internals
+
+  it('fires the listener with the current snapshot when state changes', () => {
+    const c = new AlpacaClient(dummyCfg)
+    const seen: AlpacaConnectionState[] = []
+    c.onConnectionStateChange(s => seen.push(s))
+    internals(c).connected = true
+    internals(c).emitConnectionState()
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toEqual({ equity: true, account: false, crypto: false, reconnecting: false })
+  })
+
+  it('dedups: two emits with identical state fire the listener only once', () => {
+    const c = new AlpacaClient(dummyCfg)
+    const seen: AlpacaConnectionState[] = []
+    c.onConnectionStateChange(s => seen.push(s))
+    internals(c).accountConnected = true
+    internals(c).emitConnectionState()
+    internals(c).emitConnectionState()              // same state
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.account).toBe(true)
+  })
+
+  it('reports reconnecting:true when any of the three reconnect timers is armed', () => {
+    const c = new AlpacaClient(dummyCfg)
+    const seen: AlpacaConnectionState[] = []
+    c.onConnectionStateChange(s => seen.push(s))
+    internals(c).acctReconnectTimer = setTimeout(() => { /* noop */ }, 99_999)
+    try {
+      internals(c).emitConnectionState()
+      expect(seen).toHaveLength(1)
+      expect(seen[0]?.reconnecting).toBe(true)
+    } finally {
+      clearTimeout(internals(c).acctReconnectTimer!)
+    }
+  })
+
+  it('unsub stops further notifications', () => {
+    const c = new AlpacaClient(dummyCfg)
+    const seen: AlpacaConnectionState[] = []
+    const off = c.onConnectionStateChange(s => seen.push(s))
+    internals(c).connected = true
+    internals(c).emitConnectionState()              // listener fires once
+    off()
+    internals(c).connected = false
+    internals(c).emitConnectionState()              // state changed but listener removed
+    expect(seen).toHaveLength(1)
   })
 })

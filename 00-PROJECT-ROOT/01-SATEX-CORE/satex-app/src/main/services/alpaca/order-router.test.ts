@@ -149,4 +149,65 @@ describe('AlpacaOrderRouter', () => {
     expect(c.submitted).toHaveLength(2)
     expect(ack2.brokerOrderId).toBe('broker-new')
   })
+
+  describe('failUnacked', () => {
+    it('is a no-op when there are no in-flight orders', () => {
+      const c = fakeClient()
+      const r = new AlpacaOrderRouter(c as never)
+      const events: OrderEvent[] = []
+      r.onUpdate(e => events.push(e))
+      r.failUnacked('whatever')
+      expect(events).toHaveLength(0)
+    })
+
+    it('emits a REJECT per in-flight order through the onUpdate fanout', async () => {
+      const c = fakeClient()
+      const r = new AlpacaOrderRouter(c as never)
+      const events: OrderEvent[] = []
+      r.onUpdate(e => events.push(e))
+
+      c.setNextResult({ id: 'broker-1', clientOrderId: 'cid-1', status: 'accepted', filledQty: 0, filledAvgPrice: null })
+      await r.submit(buyReq('cid-1'))
+      c.setNextResult({ id: 'broker-2', clientOrderId: 'cid-2', status: 'accepted', filledQty: 0, filledAvgPrice: null })
+      await r.submit(buyReq('cid-2'))
+
+      r.failUnacked('broker-session-disconnected')
+
+      const rejects = events.filter(e => e.execType === 'REJECT')
+      expect(rejects).toHaveLength(2)
+      const byCid = new Map(rejects.map(e => [e.clientOrderId, e]))
+      expect(byCid.get('cid-1')?.orderId).toBe('broker-1')
+      expect(byCid.get('cid-2')?.orderId).toBe('broker-2')
+      for (const r of rejects) {
+        expect((r as Extract<OrderEvent, { execType: 'REJECT' }>).reason).toBe('broker-session-disconnected')
+      }
+    })
+
+    it('clears inFlight: a post-drain submit with the same clientOrderId hits the wire', async () => {
+      const c = fakeClient()
+      const r = new AlpacaOrderRouter(c as never)
+      await r.submit(buyReq('cid-clr'))
+      expect(c.submitted).toHaveLength(1)
+
+      r.failUnacked('disconnect')
+
+      c.setNextResult({ id: 'broker-fresh', clientOrderId: 'cid-clr', status: 'accepted', filledQty: 0, filledAvgPrice: null })
+      const ack2 = await r.submit(buyReq('cid-clr'))
+      expect(c.submitted).toHaveLength(2)             // second submit went to the wire
+      expect(ack2.brokerOrderId).toBe('broker-fresh') // new broker id, not the cached pre-drain one
+    })
+
+    it('clears brokerToClient: a post-drain trade-update for a drained brokerOrderId resolves clientOrderId to ""', async () => {
+      const c = fakeClient()
+      const r = new AlpacaOrderRouter(c as never)
+      const events: OrderEvent[] = []
+      r.onUpdate(e => events.push(e))
+      await r.submit(buyReq('cid-ws'))
+      r.failUnacked('disconnect')                     // drains; emits REJECT with cid-ws
+      events.length = 0                               // ignore the drain event itself
+      c.pushTradeUpdate(tu('fill', 'broker-abc', { filledQty: 1, price: 100 }))
+      expect(events).toHaveLength(1)
+      expect(events[0]!.clientOrderId).toBe('')       // brokerToClient was cleared → fallback to ''
+    })
+  })
 })
