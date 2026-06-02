@@ -9,6 +9,32 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Added
 
+- **F.1 — BrokerAdapter abstraction + Alpaca reference implementation.** Lands the
+  broker-portability foundation for Phase F (Rithmic / Tradovate execution next). A
+  new `@shared/broker/` contract layer (`MarketDataSource`, `OrderRouter` +
+  `OrderEvent` + `OrderAck` + `failUnacked`, `AccountSyncer` + `AccountSnapshot`,
+  `SymbolResolver`, `BrokerError` + retryable taxonomy, and the `BrokerSession`
+  umbrella + `SessionState` 5-state lifecycle) is paired with four Alpaca
+  concretes under `main/services/alpaca/`: `AlpacaSymbolResolver` (equity
+  identity + crypto pair normalization), `AlpacaAccountSyncer` (REST pull),
+  `AlpacaOrderRouter` (caller-supplied UUIDv4 `clientOrderId`, **pre-REST
+  dedup** so retries never hit the wire twice, OrderEvent translation,
+  `failUnacked` drain), and `AlpacaBrokerSession` (composes the four facets +
+  state machine). `AlpacaClient` gains an additive
+  `onConnectionStateChange(fn)` event source — dedup'd snapshots emitted on
+  every WS open / close / reconnect-timer transition across all three feeds —
+  so the session can synthesize the 5 states honestly. `trading-engine.ts`
+  now drives the equity + account WS lifecycle through
+  `session.connect()` / `session.disconnect()` at all three construction
+  call-sites (cold boot, data-feed switch, reconnect). Behavior delta worth
+  noting: the live ⇄ simulator data-feed switch now also tears down the
+  account WS + emits REJECT via `failUnacked('broker-session-disconnected')`
+  for any in-flight orders — previously the account stream leaked silently on
+  switch-to-simulator. Engine usage of `this.alpaca.submitOrder` / `.getAccount`
+  / `.cancelOrder` (~30 call-sites) and crypto WS lifecycle are intentionally
+  out of scope this cut. Design + locked decisions:
+  `docs/superpowers/specs/2026-06-01-alpaca-broker-session-design.md`.
+
 - **Renderer frame-budget canary.** New opt-in Playwright E2E
   (`tests/e2e/renderer-perf.spec.ts`, gated by `SATEX_E2E_PERF=1`) boots the app under an
   isolated, offscreen simulator profile, switches to the Trade workspace, and drives the

@@ -33,6 +33,73 @@ Opt-in E2Es: `$env:SATEX_E2E_FEED='1'; npx playwright test tests/e2e/feed-switch
 (switch + rollback) and `tests/e2e/creds-persistence.spec.ts` (keys survive relaunch).
 Design: `docs/design/2026-05-24-data-feed-switch.md`.
 
+As of F.1 (2026-06-02), the live-side teardown of this switch goes through
+`AlpacaBrokerSession.disconnect()` — so live→sim now drains in-flight orders
+via `failUnacked('broker-session-disconnected')` and shuts the account WS,
+which the pre-F.1 path silently leaked.
+
+## BrokerSession umbrella (F.1, 2026-06-02)
+
+`@shared/broker/` defines the broker-agnostic execution contract that the
+trading engine talks to. `BrokerSession` composes four facets under one
+connect / disconnect lifecycle:
+
+| Facet | Interface | Alpaca concrete |
+|---|---|---|
+| Order routing | `OrderRouter` (submit / cancel / onUpdate / failUnacked) | `AlpacaOrderRouter` |
+| Market data | `MarketDataSource` (start / stop / on{Quotes,Candle,Trades,News}) | `LiveMarket` |
+| Account snapshot | `AccountSyncer` (getSnapshot / onUpdate) | `AlpacaAccountSyncer` |
+| Symbol mapping | `SymbolResolver` (toBrokerSymbol / toCanonical / isSupported) | `AlpacaSymbolResolver` |
+
+State machine — `SessionState`: `DISCONNECTED → CONNECTING → CONNECTED →
+RECONNECTING → FAILED`. The session subscribes to a new
+`AlpacaClient.onConnectionStateChange(fn)` event source — dedup'd snapshots
+emitted at every WS open / close / reconnect-timer transition across equity,
+account, and crypto feeds — and synthesizes SessionState from
+`{ equity, account, reconnecting }`. Crypto is informational only; it does
+not block trading-ready.
+
+Construction patterns:
+- **Production:** `AlpacaBrokerSession.create(client, market)` — wires the four
+  facets with the canonical Alpaca composition.
+- **Tests:** constructor takes the four facets via DI; see
+  `src/main/services/alpaca/broker-session.test.ts` for the fake shapes.
+
+Engine integration (`trading-engine.ts`):
+- `this.session: AlpacaBrokerSession | null` field; null in simulator / replay.
+- Three construction call-sites (cold-boot in `initialize`, data-feed switch
+  in `setDataSource`, reconnect in `reconnectAlpaca`) instantiate the
+  session and drive lifecycle via `session.connect()` / `session.disconnect()`.
+- `private teardownSession()` helper centralizes the session-or-fallback
+  teardown so the data-feed switch and reconnect paths share one tear-down
+  contract.
+- `OrderRouter.failUnacked(reason)` synthesizes a REJECT for every order the
+  router is still tracking as in-progress (acked, no terminal seen) and
+  clears the in-flight index. Broker-side orders are **not** canceled —
+  reconciliation is the engine's responsibility via `AccountSyncer`.
+- Out of scope for the initial cut (still using `this.alpaca.*` directly):
+  ~30 sites that call `submitOrder` / `getAccount` / `cancelOrder` /
+  `disconnectCryptoStream`, plus `shutdown()` (sync method; safe because
+  engine is tearing down anyway). Migrating those to the facets is a
+  follow-up pass — the abstraction's payoff is when Rithmic / Tradovate
+  land on the same interface.
+
+Design + locked decisions:
+`docs/superpowers/specs/2026-06-01-alpaca-broker-session-design.md`.
+
+Tests (F.1, +21 cases over the 402-baseline):
+- `src/main/services/alpaca/broker-session.test.ts` (13) — state machine,
+  idempotent connect, failure paths + orphan-WS cleanup, observer
+  transitions, disconnect drain.
+- `src/main/services/alpaca/order-router.test.ts` (+4) — `failUnacked`
+  fanout, post-condition cache clears, idempotency, re-submit behavior.
+- `src/main/services/alpaca.test.ts` (+4) — `onConnectionStateChange`
+  helper: fire-on-change, dedup, reconnecting flag, unsub.
+
+`AlpacaClient` retains its standalone surface (used directly by the engine
+where the abstraction hasn't been adopted yet); the session is purely
+additive over what was there before F.1.
+
 ## v0.4.4 — Sub-second crypto candles (2026-05-19)
 
 Commits riding into the v0.4.4 cut:
