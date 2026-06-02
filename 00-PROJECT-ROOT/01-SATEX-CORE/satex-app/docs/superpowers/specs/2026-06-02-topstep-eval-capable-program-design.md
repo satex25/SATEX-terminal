@@ -18,7 +18,7 @@ Master is at a release-candidate tag (v0.6.0 or v0.7.0 — decide at convergence
 3. Topstep $50K XFA `FundedAccountProfile` selectable in simulator. Multi-day deterministic simulator integration test passes: trailing-MaxDD HWM with Topstep lock, news blackout (MacroCalendar), IANA-tz-aware EOD flatten, max-contracts gate, allowed-asset-class gate, RiskGates 9-13. Renderer shows the five new gauges.
 4. `DailyPnlLedger` accumulates per-day P&L with timezone-aware day boundaries; payout-phase state machine visible in renderer when in funded phase.
 5. `StrategyEnsemble` regime-routes between Momentum, MeanReversion, Breakout strategies with fallback; `autonomous-trader` consumes it; regression framework runs against locked baseline; backtest CLI green on canned fixture.
-6. Second broker concrete (`RithmicBrokerSession.create()` OR `TradovateBrokerSession.create()` — see §7 open decision) instantiable and type-conforming to `OrderRouter` / `MarketDataSource` / `AccountSyncer` / `SymbolResolver`. Fake-harness conformance tests pass. **No live wiring crossed.**
+6. Second broker concrete `TradovateBrokerSession.create()` instantiable and type-conforming to `OrderRouter` / `MarketDataSource` / `AccountSyncer` / `SymbolResolver`. Fake-harness conformance tests pass. **No live wiring crossed.** (Rithmic deferred to a follow-up program — see §7 #1.)
 7. Opt-in `SATEX_E2E_PERF=1 npx playwright test renderer-perf.spec.ts` green against post-integration build (p50 ≤ 16ms, p95 ≤ 10ms). New hot paths instrumented with `perf.measure` (`ensemble:select`, `riskgates:snapshot`, `fundedaccount:snapshot`, `dailypnlledger:accumulate`). Budgets on the new tags optional.
 8. `dist/SATEX Setup <version>.exe` signed: `Get-AuthenticodeSignature` returns `Status: Valid`, `SignerCertificate` subject contains `SATEX Trading Systems`. Manual install verified, SmartScreen behavior matches cert type.
 9. `CHANGELOG.md` released-section entry written; `package.json` version bumped; release tag pushed.
@@ -92,7 +92,8 @@ master @ 5c9be27 (v0.5.0 RC, 374/374 green)
 #### L1.C — Strategies + ensemble + sizing + TCA + microstructure + regression
 - **Branch:** rebase commits `aba8bce` through `17478f5` (11 commits) onto post-L1.E master.
 - **Scope:** Multi-tf indicators, StrategySnapshot extension, MomentumStrategy, MeanReversionStrategy, BreakoutStrategy, StrategyEnsemble (regime-routed + fallback), VolatilityTargetSizing, TransactionCostAnalyzer, microstructure features (depth_imbalance + microprice_dev), regression framework (compareReports vs baseline), knip cleanup.
-- **Pre:** L1.E merged. (Code-only dependency is on L1.B's `Strategy` interface + `BacktestReport` types; chronological position in the cascaded stack puts L1.C after L1.E. Spec preserves chronological order to minimize rebase conflict surface — see §7 #4.)
+- **Pre (code dependency):** L1.B merged. L1.C imports `Strategy` interface + `BacktestReport` / `EquityPoint` / `Metrics` types from L1.B. **No code dependency on L1.D or L1.E.**
+- **Rebase position:** chronologically after L1.E in the cascaded stack. Spec preserves chronological order to minimize rebase conflict surface — see §7 #4. This is an ordering constraint for the rebase strategy, not a code dependency.
 - **Post:** Per-strategy unit tests pass; ensemble regime fixture tests pass; regression baseline locked; 4 gates green.
 - **Note:** pure strategy code — no broker surface touched — clean review.
 
@@ -110,17 +111,18 @@ master @ 5c9be27 (v0.5.0 RC, 374/374 green)
 - **Post:** Payout-phase state machine visible in renderer when in funded phase; phase transitions unit-tested; 4 gates green.
 
 #### L1.F — Tier-2 ensemble wired into autonomous-trader
-- **Branch:** rebase commit `95a4217` (1 commit) onto post-L1.E master, after L1.C lands.
+- **Branch:** rebase commit `95a4217` (1 commit) onto post-L1.C master.
 - **Scope:** `autonomous-trader` consumes `StrategyEnsemble`; replaces direct strategy reference.
-- **Pre:** L1.C merged (provides the ensemble) AND L1.E merged.
+- **Pre (code dependency):** L1.C merged — provides `StrategyEnsemble`.
+- **Pre (test prerequisite):** L1.E merged — the autonomous-loop integration test asserts end-to-end behavior including funded-account context; without L1.D + L1.E the fixture can't drive the funded path. Implicitly satisfied because L1.C lands chronologically after L1.E; documented here so the test gate is not misread as a code dependency.
 - **Post:** Autonomous trader uses ensemble in simulator; integration test green; 4 gates green.
 - **Trading-safety:** touches autonomous decision loop. **Explicit human PR sign-off required.**
 
-#### L1.G — Second broker adapter (Rithmic or Tradovate)
-- **Branch:** new, `feat/f2-second-broker-adapter` (named for whichever chosen).
-- **Scope:** Implement `OrderRouter`, `MarketDataSource`, `AccountSyncer`, `SymbolResolver`, plus `<Chosen>BrokerSession.create()` against the chosen wire protocol. Build against a fake harness conforming to the protocol; no live cert/sponsorship needed for code-ready done state. Unit tests + protocol conformance tests + integration test that swaps session at construction sites.
-- **Pre:** L1.F merged; **Rithmic-vs-Tradovate decision made** (see §7 #1).
-- **Post:** `<Chosen>BrokerSession.create()` exists; engine instantiates a non-Alpaca session without throwing; all four facets type-check against the same interfaces Alpaca uses; fake-harness conformance tests pass; 4 gates green.
+#### L1.G — Tradovate broker adapter
+- **Branch:** new, `feat/f2-tradovate-adapter`.
+- **Scope:** Implement `OrderRouter`, `MarketDataSource`, `AccountSyncer`, `SymbolResolver`, plus `TradovateBrokerSession.create()` against Tradovate's REST + WebSocket protocol. Build against a fake harness conforming to the wire protocol; no live API access (OAuth + account credentials) needed for code-ready done state. Unit tests + protocol conformance tests + integration test that swaps session at construction sites.
+- **Pre:** L1.F merged. (Tradovate decision settled per §7 #1.)
+- **Post:** `TradovateBrokerSession.create()` exists; engine instantiates a non-Alpaca session without throwing; all four facets type-check against the same `@shared/broker/` interfaces Alpaca uses; fake-harness conformance tests pass; 4 gates green.
 - **Trading-safety:** new order-routing surface — requires explicit human sign-off even though no live wiring is crossed.
 
 ### 5.2 Lane 2 — cert procurement
@@ -156,7 +158,7 @@ master @ 5c9be27 (v0.5.0 RC, 374/374 green)
 
 | # | Decision | Recommendation | Where settled |
 |---|---|---|---|
-| 1 | Rithmic vs Tradovate for L1.G | Tradovate (REST + WS, simpler to spec, no broker sponsorship needed, still Topstep-accepted). Memory cited "Rithmic first"; revisit because Tradovate accelerates code-ready. | Before L1.G design doc starts |
+| 1 | Rithmic vs Tradovate for L1.G | **DECIDED 2026-06-02: Tradovate.** REST + WebSocket protocol, no broker sponsorship required to spec/build, Topstep-accepted. Pivot cost to Rithmic later is zero (same `@shared/broker/` interfaces). Memory entry `project_phase_f_broker_port` updated; Rithmic deferred to a follow-up program. | Settled (this spec amendment) |
 | 2 | EV vs OV cert for L2.A | EV Sectigo (~$200/yr, instant SmartScreen reputation, USB token). Trade-off: signing workflow changes (token plug-in or cloud signing) | Before L2.B |
 | 3 | Crypto WS facet vs engine-owned | Engine-owned for now; document the boundary; revisit when a non-Alpaca broker adds crypto | In L1.A design |
 | 4 | Rebase split granularity | 5 sub-PRs by chronological grouping (L1.B/D/E/C/F) so gates stay green at each tip and review surface stays small | Standing recommendation in this spec |
@@ -167,7 +169,7 @@ master @ 5c9be27 (v0.5.0 RC, 374/374 green)
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Rebase conflicts in L1.B-L1.E because the cascaded stack was built when `trading-engine.ts` called `this.alpaca.submitOrder` etc. directly | medium | Rebase one sub-project at a time. Gates green at each tip. Where a rebased commit references `this.alpaca.X`, migrate to `this.session.<facet>.X` inline; reflect in the commit (small reword OK). If a rebased commit can't preserve semantics, split into "preserve original" + "facet migration" commits |
-| L1.G blocked by broker API access (Rithmic R-API requires sponsorship + SSL provisioning) | medium → low if Tradovate chosen | Fake-harness conformance. Code-ready does not require live access. If sponsorship blocks indefinitely, pivot concrete to Tradovate without changing spec |
+| L1.G live wiring blocked by Tradovate API access (OAuth + account credentials) — note this is a follow-up-program risk, not a code-ready risk | low | Fake-harness conformance proves protocol mapping. Code-ready does not require live access. Live wiring is a follow-up program |
 | `shutdown()` async migration in L1.A — current sync `this.alpaca.disconnect*`; `session.disconnect()` is async; Electron `before-quit` may not await | medium | Verify `before-quit` handler awaits the returned promise. If not, add explicit `event.preventDefault()` + `await` + `app.quit()` pattern. Cover with electron-launch test |
 | EV cert USB-token CI constraint | low | If EV chosen, defer GitHub-Actions signing pipeline (S1-9) until cloud signing or HSM-CI decided. L2.G stays out of scope |
 | Multi-day simulator integration test for L1.D is expensive | low | Use deterministic seeded simulator (`SATEX_SIMULATOR_24_7=true` already exists). Cap test wall-clock at <2 min using accelerated time. Run nightly, not on every PR |
@@ -198,7 +200,7 @@ Two further sub-projects already have design docs on remote branches:
 - `origin/docs/topstep-50k-plan` — Topstep $50K plan (informs L1.D)
 - `origin/docs/tier-2-alpha-plan` — Tier-2 alpha plan (informs L1.C + L1.F)
 
-L1.G (second broker adapter) will need its own design doc once the Rithmic-vs-Tradovate decision is made.
+L1.G (Tradovate adapter) will need its own design doc at L1.G start — Tradovate REST + WebSocket protocol mapping to the four `@shared/broker/` facets (`OrderRouter` / `MarketDataSource` / `AccountSyncer` / `SymbolResolver`).
 
 ## 12. Trading-safety perimeter — explicit
 
