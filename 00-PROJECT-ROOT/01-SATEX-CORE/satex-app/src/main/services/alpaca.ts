@@ -233,7 +233,7 @@ export class AlpacaClient {
     return { timestamp: String(r['timestamp']), isOpen: !!r['is_open'], nextOpen: String(r['next_open']), nextClose: String(r['next_close']) }
   }
 
-  async submitOrder(req: OrderRequest): Promise<OrderResult> {
+  async submitOrder(req: OrderRequest & { clientOrderId?: string }): Promise<OrderResult> {
     // Live-endpoint guard. Pre-2026-05-13 this was an unconditional hard-block
     // ("never submit if not paper"). Phase 4 lifts the block when — and ONLY
     // when — the user has armed the typed-phrase interlock via live-mode.ts.
@@ -255,6 +255,7 @@ export class AlpacaClient {
     const body: Record<string, unknown> = {
       symbol: req.symbol, qty: req.quantity, side: req.side, type: req.type, time_in_force: 'day'
     }
+    if (req.clientOrderId !== undefined) body['client_order_id'] = req.clientOrderId
     if (req.type === 'limit' && req.limitPrice !== undefined) body['limit_price'] = req.limitPrice
     if (req.stopLoss !== undefined) {
       body['order_class'] = 'bracket'
