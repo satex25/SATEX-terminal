@@ -37,7 +37,7 @@ import {
   REPLAY_DEFAULT_SPEED, REPLAY_MIN_SPEED, REPLAY_MAX_SPEED, REPLAY_TICK_HZ,
   type UniverseEntry,
 } from '@shared/constants'
-import type { Candle, NewsItem, Quote, TickTapeRow, Trade } from '@shared/types'
+import type { Candle, HistoricalTimeframe, NewsItem, Quote, TickTapeRow, Trade } from '@shared/types'
 import * as db from './persistence'
 import type { MarketClockSnapshot, MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 import { createLogger } from './logger'
@@ -295,8 +295,8 @@ export class ReplaySource implements MarketDataSource {
   }
 
   // ── F.1 L1.A: safe defaults (replay has no broker REST surface) ───────────
-  async getBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
-  async getCryptoBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getBars(_symbol: string, _tf: HistoricalTimeframe, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getCryptoBars(_symbol: string, _tf: HistoricalTimeframe, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
   async getClock(): Promise<MarketClockSnapshot> {
     return { isOpen: true, nextOpen: 0, nextClose: Number.MAX_SAFE_INTEGER }
   }

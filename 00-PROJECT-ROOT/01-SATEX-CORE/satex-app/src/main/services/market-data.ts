@@ -6,7 +6,7 @@
 import {
   SIMULATOR_CANDLE_INTERVAL_SEC, SPARKLINE_LENGTH, TICK_HZ, UNIVERSE, type UniverseEntry
 } from '@shared/constants'
-import type { Candle, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
+import type { Candle, HistoricalTimeframe, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
 import { isUsEquityMarketOpen } from '@shared/market-hours'
 import { shortId } from './id-generator'
 import { mulberry32, randomSeed, type Rng } from './rng'
@@ -181,8 +181,8 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   // ── F.1 L1.A: safe defaults (simulator has no broker REST surface) ────────
-  async getBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
-  async getCryptoBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getBars(_symbol: string, _tf: HistoricalTimeframe, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getCryptoBars(_symbol: string, _tf: HistoricalTimeframe, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
   async getClock(): Promise<MarketClockSnapshot> {
     return { isOpen: true, nextOpen: 0, nextClose: Number.MAX_SAFE_INTEGER }
   }
@@ -247,7 +247,7 @@ export class MarketSimulator implements MarketDataSource {
         size: vol, side: inferredSide, provenance: 'inferred',
       })
     }
-    this.lastTickAt = now
+    if (batch.length > 0) this.lastTickAt = now
     for (const l of this.quoteListeners) l(batch)
     if (trades.length > 0) for (const l of this.tradeListeners) l(trades)
   }

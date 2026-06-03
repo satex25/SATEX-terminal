@@ -196,4 +196,12 @@ describe('LiveMarket — broker-data delegates (F.1 L1.A)', () => {
     const lm2 = new LiveMarket(fakeAlpaca42, ['AAPL'])
     expect(lm2.msSinceLastTick()).toBe(42)
   })
+
+  it('getClock throws on unparseable broker dates', async () => {
+    const fakeAlpaca = {
+      getClock: async () => ({ isOpen: true, nextOpen: 'not-a-date', nextClose: 'also-bad', timestamp: '2026-06-02T00:00:00Z' }),
+    } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['AAPL'])
+    await expect(lm.getClock()).rejects.toThrow(/unparseable clock dates/)
+  })
 })

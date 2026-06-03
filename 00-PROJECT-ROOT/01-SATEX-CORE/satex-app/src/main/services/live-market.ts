@@ -103,11 +103,12 @@ export class LiveMarket implements MarketDataSource {
 
   async getClock(): Promise<MarketClockSnapshot> {
     const raw = await this.alpaca.getClock()
-    return {
-      isOpen:    raw.isOpen,
-      nextOpen:  new Date(raw.nextOpen).getTime(),
-      nextClose: new Date(raw.nextClose).getTime(),
+    const nextOpen  = new Date(raw.nextOpen).getTime()
+    const nextClose = new Date(raw.nextClose).getTime()
+    if (!Number.isFinite(nextOpen) || !Number.isFinite(nextClose)) {
+      throw new Error(`LiveMarket.getClock: unparseable clock dates from broker (nextOpen=${raw.nextOpen}, nextClose=${raw.nextClose})`)
     }
+    return { isOpen: raw.isOpen, nextOpen, nextClose }
   }
 
   isConnected(): boolean {

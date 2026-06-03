@@ -259,4 +259,11 @@ describe('ReplaySource — F.1 L1.A interface compliance', () => {
     const replay = new ReplaySource('test')
     expect(replay.isConnected()).toBe(true)
   })
+
+  it('msSinceLastTick returns 0 before any tick is emitted', () => {
+    // lastTickAt initialises to 0; msSinceLastTick guards on `lastTickAt > 0`
+    // and returns 0 when no tape row has been emitted yet.
+    const replay = new ReplaySource('test')
+    expect(replay.msSinceLastTick()).toBe(0)
+  })
 })
