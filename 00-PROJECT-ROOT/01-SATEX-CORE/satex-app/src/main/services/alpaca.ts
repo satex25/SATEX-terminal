@@ -9,7 +9,7 @@
  *   wss://stream.data.alpaca.markets/v2/{iex|sip}  — market data ticks
  *   wss://paper-api.alpaca.markets/stream           — trade_updates
  */
-import type { AlpacaTradeUpdate, Candle, OrderRequest, Position } from '@shared/types'
+import type { AlpacaTradeUpdate, Candle, OrderRequest } from '@shared/types'
 import { ALPACA_PAPER_HOST, findUniverseEntry } from '@shared/constants'
 import { isLive } from './live-mode'
 import { createLogger } from './logger'
@@ -102,6 +102,19 @@ class AlpacaRateLimiter {
   available(): number { this.refill(); return Math.floor(this.tokens) }
 }
 
+/**
+ * Connection snapshot for the BrokerSession umbrella (F.1 task A.6).
+ * Equity + account both true with `reconnecting:false` is the "trading
+ * ready" condition. Crypto is informational — a closed crypto feed does
+ * not block equity/account trading.
+ */
+export interface AlpacaConnectionState {
+  equity:       boolean
+  account:      boolean
+  crypto:       boolean
+  reconnecting: boolean
+}
+
 export class AlpacaClient {
   private cfg: AlpacaConfig
   private marketWs: WS | null = null
@@ -122,6 +135,12 @@ export class AlpacaClient {
   private cryptoReconnectTimer: NodeJS.Timeout | null = null
   private tickListeners        = new Set<TickHandler>()
   private tradeUpdateListeners = new Set<TradeUpdateHandler>()
+  private connectionStateListeners = new Set<(s: AlpacaConnectionState) => void>()
+  /** Last emitted state — used to dedup so call sites can fire emitConnectionState
+   *  liberally without worrying about identical notifications. */
+  private lastConnectionState: AlpacaConnectionState = {
+    equity: false, account: false, crypto: false, reconnecting: false,
+  }
   private connected        = false
   private accountConnected = false
   private lastDataMessageAt = 0
@@ -233,7 +252,7 @@ export class AlpacaClient {
     return { timestamp: String(r['timestamp']), isOpen: !!r['is_open'], nextOpen: String(r['next_open']), nextClose: String(r['next_close']) }
   }
 
-  async submitOrder(req: OrderRequest): Promise<OrderResult> {
+  async submitOrder(req: OrderRequest & { clientOrderId?: string }): Promise<OrderResult> {
     // Live-endpoint guard. Pre-2026-05-13 this was an unconditional hard-block
     // ("never submit if not paper"). Phase 4 lifts the block when — and ONLY
     // when — the user has armed the typed-phrase interlock via live-mode.ts.
@@ -255,6 +274,7 @@ export class AlpacaClient {
     const body: Record<string, unknown> = {
       symbol: req.symbol, qty: req.quantity, side: req.side, type: req.type, time_in_force: 'day'
     }
+    if (req.clientOrderId !== undefined) body['client_order_id'] = req.clientOrderId
     if (req.type === 'limit' && req.limitPrice !== undefined) body['limit_price'] = req.limitPrice
     if (req.stopLoss !== undefined) {
       body['order_class'] = 'bracket'
@@ -434,6 +454,7 @@ export class AlpacaClient {
     ws.onclose = (ev) => {
       log.warn('market WS closed', { code: ev.code })
       this.connected = false; this.marketWs = null
+      this.emitConnectionState()
       this.scheduleReconnect(symbols)
     }
     ws.onerror = (e) => log.error('market WS error', { err: String(e) })
@@ -445,6 +466,7 @@ export class AlpacaClient {
     try { this.marketWs?.close() } catch { /* ignore */ }
     this.marketWs = null; this.connected = false
     this.reconnectAttempts = 0
+    this.emitConnectionState()
   }
 
   /**
@@ -470,8 +492,10 @@ export class AlpacaClient {
     })
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
+      this.emitConnectionState()
       void this.connectMarketStream(symbols)
     }, delay)
+    this.emitConnectionState()
   }
 
   /**
@@ -503,7 +527,9 @@ export class AlpacaClient {
       this.startStaleWatchdog(symbols)
       log.info('market stream authenticated')
       this.marketWs?.send(JSON.stringify({ action: 'subscribe', trades: symbols, quotes: symbols, bars: symbols }))
-      this.subscribed = new Set(symbols); return
+      this.subscribed = new Set(symbols)
+      this.emitConnectionState()
+      return
     }
     // Error messages from Alpaca's stream protocol — surface them so we can
     // diagnose subscription/auth issues. Without this, a 1006 close right
@@ -590,6 +616,7 @@ export class AlpacaClient {
     ws.onclose = (ev) => {
       log.warn('crypto WS closed', { code: ev.code })
       this.cryptoWs = null
+      this.emitConnectionState()
       if (this.cryptoReconnectTimer) return  // already scheduled — avoid stacking timers on rapid close+close
       // 2026-05-18 — exponential backoff matching the equity feed (1s, 2s,
       // 4s, 8s, 16s, capped at MAX_BACKOFF_MS). Pre-fix was a fixed 5s
@@ -612,9 +639,11 @@ export class AlpacaClient {
       })
       this.cryptoReconnectTimer = setTimeout(() => {
         this.cryptoReconnectTimer = null
+        this.emitConnectionState()
         void this.connectCryptoStream(symbols)
       }, delay)
       this.cryptoReconnectTimer.unref?.()
+      this.emitConnectionState()
     }
     ws.onerror = (e) => log.error('crypto WS error', { err: String(e) })
   }
@@ -624,6 +653,7 @@ export class AlpacaClient {
     try { this.cryptoWs?.close() } catch { /* ignore */ }
     this.cryptoWs = null
     this.cryptoSubscribed.clear()
+    this.emitConnectionState()
   }
 
   private onCryptoDataMsg(m: Record<string, unknown>, symbols: string[]): void {
@@ -633,6 +663,7 @@ export class AlpacaClient {
       this.cryptoWs?.send(JSON.stringify({ action: 'subscribe', quotes: symbols, trades: symbols }))
       this.cryptoSubscribed = new Set(symbols)
       this.cryptoReconnectAttempts = 0  // 2026-05-18 — reset backoff on success
+      this.emitConnectionState()
       return
     }
     if (m['T'] === 'error') {
@@ -706,6 +737,7 @@ export class AlpacaClient {
     ws.onmessage = (ev) => { const f = frame(ev.data); if (f) for (const m of f) this.onAccountMsg(m as Record<string, unknown>) }
     ws.onclose = () => {
       this.accountConnected = false; this.accountWs = null
+      this.emitConnectionState()
       if (this.acctReconnectTimer) return
       // 2026-05-18 — exponential backoff matching equity + crypto feeds.
       // Counter resets on successful authorize in onAccountMsg. Reads the
@@ -720,8 +752,10 @@ export class AlpacaClient {
       log.info('scheduling account WS reconnect', { attempt: this.accountReconnectAttempts, delayMs: delay })
       this.acctReconnectTimer = setTimeout(() => {
         this.acctReconnectTimer = null
+        this.emitConnectionState()
         void this.connectAccountStream()
       }, delay)
+      this.emitConnectionState()
     }
     ws.onerror = (e) => log.error('account WS error', { err: String(e) })
   }
@@ -730,13 +764,16 @@ export class AlpacaClient {
     if (this.acctReconnectTimer) { clearTimeout(this.acctReconnectTimer); this.acctReconnectTimer = null }
     try { this.accountWs?.close() } catch { /* ignore */ }
     this.accountWs = null; this.accountConnected = false
+    this.emitConnectionState()
   }
 
   private onAccountMsg(m: Record<string, unknown>): void {
     if (m['stream'] === 'authorization') {
       this.accountConnected = true
       this.accountReconnectAttempts = 0  // 2026-05-18 — reset backoff on success
-      this.accountWs?.send(JSON.stringify({ action: 'listen', data: { streams: ['trade_updates'] } })); return
+      this.accountWs?.send(JSON.stringify({ action: 'listen', data: { streams: ['trade_updates'] } }))
+      this.emitConnectionState()
+      return
     }
     if (m['stream'] === 'trade_updates' && m['data'] && typeof m['data'] === 'object') {
       const d = m['data'] as Record<string, unknown>
@@ -755,10 +792,43 @@ export class AlpacaClient {
 
   onTradeUpdate(fn: TradeUpdateHandler): () => void { this.tradeUpdateListeners.add(fn); return () => this.tradeUpdateListeners.delete(fn) }
 
-  static toSatexPosition(p: AlpacaPosition, openedAt: number): Position {
-    return {
-      symbol: p.symbol, quantity: p.side === 'short' ? -Math.abs(p.qty) : Math.abs(p.qty),
-      avgPrice: p.avgEntryPrice, unrealizedPnl: p.unrealizedPl, realizedPnl: 0, openedAt,
+  /**
+   * Subscribe to changes in the connection-state snapshot. Fires whenever
+   * any of equity / account / crypto / reconnecting flips relative to the
+   * last emitted value. Dedup'd: identical state never re-fires.
+   *
+   * The BrokerSession umbrella (AlpacaBrokerSession) synthesizes SessionState
+   * from these snapshots — see F.1 design doc.
+   */
+  onConnectionStateChange(fn: (s: AlpacaConnectionState) => void): () => void {
+    this.connectionStateListeners.add(fn)
+    return () => { this.connectionStateListeners.delete(fn) }
+  }
+
+  /** Compute the current state from internal fields and notify listeners if
+   *  it differs from the last emitted snapshot. Safe to call liberally —
+   *  identical states are dropped. Call after every WS transition (open,
+   *  close, reconnect timer arm/fire, subscription change). */
+  private emitConnectionState(): void {
+    const curr: AlpacaConnectionState = {
+      equity:  this.connected,
+      account: this.accountConnected,
+      crypto:  this.isCryptoConnected,
+      reconnecting:
+        this.reconnectTimer       !== null ||
+        this.acctReconnectTimer   !== null ||
+        this.cryptoReconnectTimer !== null,
+    }
+    const last = this.lastConnectionState
+    if (
+      curr.equity       === last.equity &&
+      curr.account      === last.account &&
+      curr.crypto       === last.crypto &&
+      curr.reconnecting === last.reconnecting
+    ) return
+    this.lastConnectionState = curr
+    for (const fn of this.connectionStateListeners) {
+      try { fn(curr) } catch { /* one bad listener must not break the fanout */ }
     }
   }
 }

@@ -6,11 +6,12 @@
 import {
   SIMULATOR_CANDLE_INTERVAL_SEC, SPARKLINE_LENGTH, TICK_HZ, UNIVERSE, type UniverseEntry
 } from '@shared/constants'
-import type { Candle, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
+import type { Candle, HistoricalTimeframe, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
 import { isUsEquityMarketOpen } from '@shared/market-hours'
 import { shortId } from './id-generator'
 import { mulberry32, randomSeed, type Rng } from './rng'
 import { createLogger } from './logger'
+import type { MarketClockSnapshot, MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 
 /** Power-user escape hatch: set SATEX_SIMULATOR_24_7=true to keep the
  *  simulator emitting fake ticks around the clock for off-hours testing.
@@ -24,26 +25,7 @@ function simulatorBypassMarketHours(): boolean {
 
 const log = createLogger('simulator')
 
-export type Unsub = () => void
-export interface MarketDataSource {
-  start(): void
-  stop(): void
-  onQuotes(fn: (quotes: Quote[]) => void): Unsub
-  onCandle(fn: (symbol: string, candle: Candle, isNew: boolean) => void): Unsub
-  /** Optional bulk-snapshot stream — fires once per symbol with the full
-   *  candle history when a source has a "warmed up" moment (currently only
-   *  ReplaySource after seek). LiveMarket and MarketSimulator don't
-   *  implement this; subscribers must tolerate the listener never firing. */
-  onBulkCandlesReplace?(fn: (symbol: string, candles: Candle[]) => void): Unsub
-  onNews(fn: (item: NewsItem) => void): Unsub
-  /** P0-1 Footprint — per-trade event stream. MarketSimulator infers from
-   *  tick direction; LiveMarket forwards Alpaca SIP trades when entitled;
-   *  ReplaySource is a no-op today (historical import doesn't carry side). */
-  onTrades(fn: (trades: Trade[]) => void): Unsub
-  getQuote(symbol: string): Quote | undefined
-  getAllQuotes(): Quote[]
-  getCandles(symbol: string, limit?: number): Candle[]
-}
+export type { MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 
 interface SymbolState {
   entry: UniverseEntry
@@ -89,6 +71,8 @@ export class MarketSimulator implements MarketDataSource {
   /** Persists the last inferred side per symbol so flat ticks (price ==
    *  previous) keep the previous direction instead of dropping to neutral. */
   private lastSide  = new Map<string, TradeSide>()
+  /** Wall-clock ms of the most recent tick emission. 0 = never ticked. */
+  private lastTickAt = 0
 
   /**
    * @param seed             — deterministic RNG seed (omit for random)
@@ -196,6 +180,15 @@ export class MarketSimulator implements MarketDataSource {
     return [...s.candles, s.currentCandle].slice(-limit)
   }
 
+  // ── F.1 L1.A: safe defaults (simulator has no broker REST surface) ────────
+  async getBars(_symbol: string, _tf: HistoricalTimeframe, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getCryptoBars(_symbol: string, _tf: HistoricalTimeframe, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getClock(): Promise<MarketClockSnapshot> {
+    return { isOpen: true, nextOpen: 0, nextClose: Number.MAX_SAFE_INTEGER }
+  }
+  isConnected(): boolean { return true }
+  msSinceLastTick(): number { return this.lastTickAt > 0 ? Date.now() - this.lastTickAt : 0 }
+
   private quoteFrom(s: SymbolState): Quote {
     return {
       symbol: s.entry.symbol, name: s.entry.name, assetClass: s.entry.assetClass,
@@ -254,6 +247,7 @@ export class MarketSimulator implements MarketDataSource {
         size: vol, side: inferredSide, provenance: 'inferred',
       })
     }
+    if (batch.length > 0) this.lastTickAt = now
     for (const l of this.quoteListeners) l(batch)
     if (trades.length > 0) for (const l of this.tradeListeners) l(trades)
   }

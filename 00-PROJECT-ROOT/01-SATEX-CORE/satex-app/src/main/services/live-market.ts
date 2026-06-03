@@ -5,9 +5,9 @@
  */
 import type { AlpacaClient, AlpacaTick } from './alpaca'
 import { LiveCandleBuffer } from './live-candle-buffer'
-import type { Candle, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
+import type { Candle, HistoricalTimeframe, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
 import { SIMULATOR_CANDLE_INTERVAL_SEC, SPARKLINE_LENGTH, UNIVERSE, findUniverseEntry } from '@shared/constants'
-import type { MarketDataSource, Unsub } from './market-data'
+import type { MarketClockSnapshot, MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 import { createLogger } from './logger'
 
 const log = createLogger('live-market')
@@ -91,6 +91,34 @@ export class LiveMarket implements MarketDataSource {
   getCandles(symbol: string, limit = 500): Candle[] { return this.buffer.getCandles(symbol, limit) }
 
   seedHistory(symbol: string, candles: Candle[]): void { this.buffer.seedHistory(symbol, candles) }
+
+  // ── F.1 L1.A: broker-data delegates ──────────────────────────────────────
+  async getBars(symbol: string, tf: HistoricalTimeframe, startIso: string, endIso?: string): Promise<Candle[]> {
+    return this.alpaca.getBars(symbol, tf, startIso, endIso)
+  }
+
+  async getCryptoBars(symbol: string, tf: HistoricalTimeframe, startIso: string, endIso?: string): Promise<Candle[]> {
+    return this.alpaca.getCryptoBars(symbol, tf, startIso, endIso)
+  }
+
+  async getClock(): Promise<MarketClockSnapshot> {
+    const raw = await this.alpaca.getClock()
+    const nextOpen  = new Date(raw.nextOpen).getTime()
+    const nextClose = new Date(raw.nextClose).getTime()
+    if (!Number.isFinite(nextOpen) || !Number.isFinite(nextClose)) {
+      throw new Error(`LiveMarket.getClock: unparseable clock dates from broker (nextOpen=${raw.nextOpen}, nextClose=${raw.nextClose})`)
+    }
+    return { isOpen: raw.isOpen, nextOpen, nextClose }
+  }
+
+  isConnected(): boolean {
+    return this.alpaca.isMarketConnected
+  }
+
+  msSinceLastTick(): number {
+    const ms = this.alpaca.msSinceLastTick
+    return Number.isFinite(ms) ? ms : 0
+  }
 
   private toPublic(q: QuoteState): Quote {
     const change = q.last - q.prevClose

@@ -23,6 +23,7 @@ import {
   MAX_POSITION_CONCENTRATION, DEFAULT_EQUITY
 } from '@shared/constants'
 import { randomUUID } from 'node:crypto'
+import type { AccountSnapshot } from '@shared/broker/account-syncer'
 
 export interface OrderValidationContext {
   /** Current quote/last price for the symbol — used for notional computation. */
@@ -306,16 +307,17 @@ export class OrderManager {
     this.rebuildEquity()
   }
 
-  // ── Sync from Alpaca (live mode) ─────────────────────────────────────────────
-  syncFromAlpaca(snap: { equity: number; cash: number; buyingPower: number }, alpacaPositions: Position[]): void {
+  // ── Sync from broker snapshot ────────────────────────────────────────────────
+  /** Canonical sync entry point — accepts the broker-agnostic AccountSnapshot. */
+  syncFromSnapshot(snap: AccountSnapshot): void {
     this.account.equity      = snap.equity
     this.account.cash        = snap.cash
     this.account.buyingPower = snap.buyingPower
     this.positions.clear()
-    for (const p of alpacaPositions) this.positions.set(p.symbol, p)
-    this.account.openPositions = alpacaPositions
+    for (const p of snap.positions) this.positions.set(p.symbol, p)
+    this.account.openPositions = snap.positions
     this.account.dailyPnl      = snap.equity - this.sessionStartEquity
-    log.debug('account synced from alpaca', { equity: snap.equity, positions: alpacaPositions.length })
+    log.debug('account synced from alpaca', { equity: snap.equity, positions: snap.positions.length })
   }
 
   // ── Signal helpers ───────────────────────────────────────────────────────────
@@ -379,7 +381,7 @@ export class OrderManager {
         // avgPrice*qty entry outlay). Pre-2026-05-18 this line was
         // `cash += cost + pnl`, which double-counted the PnL component and
         // left paper-mode cash inflated by `pnl` on every closed position
-        // (live mode masked it within 15s via syncFromAlpaca).
+        // (live mode masked it within 15s via syncFromSnapshot).
         this.account.cash += cost
         this.account.buyingPower += cost * BUYING_POWER_MULT
         existing.quantity -= quantity

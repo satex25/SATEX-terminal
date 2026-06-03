@@ -68,6 +68,13 @@ Touching any of the above requires a human in the loop and explicit PR sign-off.
 - Don't render SIM/SUB badges from inline logic — use the canonical gates
   (`isSyntheticFeed`, `showSub`).
 - Don't feed the sub-second aggregator from any path but `alpaca.onTick`.
+- Equity + account WS lifecycle goes through **`AlpacaBrokerSession.connect()`
+  / `.disconnect()`** at the three engine construction call-sites (cold boot,
+  data-feed switch, reconnect), not bare `market.start()` / per-stream
+  disconnect calls. F.1 (2026-06-02). New broker concretes (Rithmic /
+  Tradovate) should implement the `@shared/broker/` interfaces and slot in
+  via the same shape. Crypto WS is still engine-owned (not part of the
+  session today).
 - Clean up what you create: disconnect observers, clear timers, cancel in-flight
   async on unmount (a real `ResizeObserver` leak shipped once — see PR #6).
 

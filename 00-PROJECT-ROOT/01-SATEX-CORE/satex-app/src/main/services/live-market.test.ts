@@ -137,3 +137,85 @@ describe('LiveMarket — trade-frame bid/ask sentinel preserves spread (B2, v0.4
     expect(lm.getQuote('NVDA')!.ask).toBe(100.10)
   })
 })
+
+describe('LiveMarket — broker-data delegates (F.1 L1.A)', () => {
+  it('getBars delegates to AlpacaClient.getBars', async () => {
+    const calls: unknown[] = []
+    const fakeAlpaca = {
+      getBars: async (s: string, tf: string, start: string, end?: string) => {
+        calls.push([s, tf, start, end])
+        return [{ time: 1, open: 1, high: 1, low: 1, close: 1, volume: 0 }]
+      },
+    } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['AAPL'])
+    const bars = await lm.getBars('AAPL', '1Min', '2026-06-02T13:00:00Z')
+    expect(bars).toHaveLength(1)
+    expect(calls[0]).toEqual(['AAPL', '1Min', '2026-06-02T13:00:00Z', undefined])
+  })
+
+  it('getBars accepts 1Day timeframe (F.1 L1.A 2.5 expansion)', async () => {
+    const calls: unknown[] = []
+    const fakeAlpaca = {
+      getBars: async (s: string, tf: string, start: string) => {
+        calls.push([s, tf, start])
+        return [{ time: 1, open: 100, high: 105, low: 99, close: 103, volume: 1000 }]
+      },
+    } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['AAPL'])
+    const bars = await lm.getBars('AAPL', '1Day', '2026-06-01T00:00:00Z')
+    expect(bars).toHaveLength(1)
+    expect(calls[0]).toEqual(['AAPL', '1Day', '2026-06-01T00:00:00Z'])
+  })
+
+  it('getCryptoBars delegates to AlpacaClient.getCryptoBars', async () => {
+    const fakeAlpaca = {
+      getCryptoBars: async (_s: string) => [{ time: 2, open: 2, high: 2, low: 2, close: 2, volume: 0 }],
+    } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['BTC'])
+    const bars = await lm.getCryptoBars('BTC', '1Min', '2026-06-02T00:00:00Z')
+    expect(bars).toHaveLength(1)
+    expect(bars[0]!.close).toBe(2)
+  })
+
+  it('getClock delegates to AlpacaClient.getClock and translates ISO dates to unix-ms', async () => {
+    const nextOpenIso  = '2026-06-03T13:30:00Z'
+    const nextCloseIso = '2026-06-03T20:00:00Z'
+    const fakeAlpaca = {
+      getClock: async () => ({
+        timestamp: '2026-06-02T17:00:00Z',
+        isOpen: true,
+        nextOpen:  nextOpenIso,
+        nextClose: nextCloseIso,
+      }),
+    } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['AAPL'])
+    const clock = await lm.getClock()
+    expect(clock.isOpen).toBe(true)
+    expect(clock.nextOpen).toBe(new Date(nextOpenIso).getTime())
+    expect(clock.nextClose).toBe(new Date(nextCloseIso).getTime())
+  })
+
+  it('isConnected delegates to AlpacaClient.isMarketConnected', () => {
+    const fakeAlpaca = { isMarketConnected: true } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['AAPL'])
+    expect(lm.isConnected()).toBe(true)
+  })
+
+  it('msSinceLastTick delegates to AlpacaClient.msSinceLastTick, normalising Infinity to 0', () => {
+    const fakeAlpacaInfinity = { msSinceLastTick: Infinity } as unknown as AlpacaClient
+    const lm1 = new LiveMarket(fakeAlpacaInfinity, ['AAPL'])
+    expect(lm1.msSinceLastTick()).toBe(0)
+
+    const fakeAlpaca42 = { msSinceLastTick: 42 } as unknown as AlpacaClient
+    const lm2 = new LiveMarket(fakeAlpaca42, ['AAPL'])
+    expect(lm2.msSinceLastTick()).toBe(42)
+  })
+
+  it('getClock throws on unparseable broker dates', async () => {
+    const fakeAlpaca = {
+      getClock: async () => ({ isOpen: true, nextOpen: 'not-a-date', nextClose: 'also-bad', timestamp: '2026-06-02T00:00:00Z' }),
+    } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['AAPL'])
+    await expect(lm.getClock()).rejects.toThrow(/unparseable clock dates/)
+  })
+})

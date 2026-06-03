@@ -14,10 +14,15 @@
 import { app, powerMonitor } from 'electron'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { getEnv } from '../services/env'
 import { evaluateDataSourceSwitch } from './data-source-guard'
+import { handleOrderEvent } from './order-event-router'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
+import { AlpacaBrokerSession } from '../services/alpaca/broker-session'
+import { AlpacaAccountSyncer } from '../services/alpaca/account-syncer'
+import type { OrderEvent } from '@shared/broker/order-router'
 import { MarketSimulator, type MarketDataSource, type Unsub } from '../services/market-data'
 import { LiveMarket } from '../services/live-market'
 import { OrderManager, type OrderValidationContext } from '../services/order-manager'
@@ -31,7 +36,7 @@ import { computeSnapshot } from '@shared/indicators'
 import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
   Account, AiDecision, AlpacaModeSetRequest, AlpacaModeStatus,
-  AlpacaTradeUpdate, Candle,
+  Candle,
   CredentialsMaskedStatus, CredentialsSetRequest,
   IndicatorSnapshot, LiveModeSetRequest, LiveModeStatus, NewsItem, NewsKind, Order,
   OrderRequest, Position, Quote, SystemStatus, TacticsStatus, AlpacaCredentialsStatus,
@@ -128,6 +133,12 @@ interface EntryFeaturesValue {
 export class TradingEngine {
   private market!: MarketDataSource
   private alpaca:  AlpacaClient | null = null
+  /** BrokerSession umbrella — owns the equity + account WS lifecycle for live
+   *  Alpaca mode. Null in simulator/replay. F.1 migration (2026-06-02): the
+   *  engine now drives connect/disconnect via this rather than calling
+   *  market.start() + per-stream disconnect methods directly. Crypto WS is
+   *  still engine-owned (not part of LiveMarket / BrokerSession today). */
+  private session: AlpacaBrokerSession | null = null
   /** Dedicated AlpacaClient that ONLY handles the crypto WebSocket
    *  (wss://stream.data.alpaca.markets/v1beta3/crypto/us). Runs in parallel
    *  with the equity market source (simulator OR live IEX), so BTC/ETH stream
@@ -174,7 +185,7 @@ export class TradingEngine {
   private static TICK_WINDOW_MS = 1000
   /** Adversarial finding C2 (2026-05-16) — gates the one-shot
    *  sessionStartEquity sync that runs on the first successful Alpaca
-   *  account sync of the session. See `syncAlpacaAccount`. */
+   *  account sync of the session. See `syncBrokerAccount`. */
   private alpacaFirstSyncDone = false
   private statusTimer:     NodeJS.Timeout | null = null
   private accountSyncTimer:NodeJS.Timeout | null = null
@@ -202,6 +213,11 @@ export class TradingEngine {
   private static TRADE_BATCH_MS = 50
   /** Snapshot of features at order entry, keyed by order id — drives brain.learn on close. */
   private entryFeatures = new Map<string, EntryFeaturesValue>()
+  /** Tracks brokerOrderId → SATEX orderId for parent orders submitted by the
+   *  engine. Populated post-submit; cleared on FILL/REJECT/CANCEL/EXPIRE so
+   *  long-running sessions don't accumulate stale mappings. Bracket-child
+   *  fills have broker order IDs not present here. */
+  private brokerOrderIdToSatexId = new Map<string, string>()
   /** Last seen tactics state — used to detect transitions so we can vault them. */
   private lastTacticsState: TacticsStatus['state'] | null = null
 
@@ -442,9 +458,13 @@ export class TradingEngine {
       }
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
-      // Phase 3.2: wire bracket-fill learning — Alpaca pushes trade_updates for
-      // server-side stop/TP fills that never round-trip through our OrderManager.
-      this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
+      this.session = AlpacaBrokerSession.create(this.alpaca, this.market)
+      // F.1 L1.A 2.1: wire bracket-fill learning via OrderRouter.onUpdate.
+      // AlpacaOrderRouter translates wire trade_updates to OrderEvent and fans
+      // them out; bracket children (stop/TP fills never round-tripped through
+      // our OrderManager) arrive with clientOrderId='' and are handled in
+      // onOrderEvent with the symbol+side fields preserved on the FILL event.
+      this.session.orders.onUpdate((e) => this.onOrderEvent(e))
       log.info('using alpaca live market', { feed, mode, fromStore: !!stored, baseUrl })
     }
     this.dataSource = useAlpaca ? 'live' : 'simulator'
@@ -452,8 +472,14 @@ export class TradingEngine {
     // Wire data events (helper so we can re-wire on live↔replay swap)
     this.installMarketWiring(this.market)
 
-    // Start data
-    await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+    // Start data. Live mode goes through the BrokerSession (drives data.start
+    // + connectAccountStream + state observer); simulator has no session so
+    // we start the source directly.
+    if (this.session) {
+      await this.session.connect()
+    } else {
+      await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+    }
 
     // ── Tick recorder (Phase 9): captures live tape for later replay ────────
     this.recorder = new TickRecorder(this.currentSessionId)
@@ -475,8 +501,8 @@ export class TradingEngine {
 
     // Periodic account sync from Alpaca
     if (this.alpaca) {
-      this.accountSyncTimer = setInterval(() => this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount()), 15_000)
-      this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+      this.accountSyncTimer = setInterval(() => this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount()), 15_000)
+      this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount())
       this.clockSyncTimer = setInterval(() => this.fireAndForget('syncMarketClock', () => this.syncMarketClock()), 30_000)
       this.fireAndForget('syncMarketClock', () => this.syncMarketClock())
     } else {
@@ -628,7 +654,7 @@ export class TradingEngine {
     this.fireAndForget('seedHistoricalCandles', () => this.seedHistoricalCandles())
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     if (this.statusTimer)            { clearInterval(this.statusTimer);            this.statusTimer = null }
     if (this.accountSyncTimer)       { clearInterval(this.accountSyncTimer);       this.accountSyncTimer = null }
     if (this.clockSyncTimer)         { clearInterval(this.clockSyncTimer);         this.clockSyncTimer = null }
@@ -668,8 +694,17 @@ export class TradingEngine {
     this.depth?.stop()
     this.edgar?.stop()
     this.market?.stop?.()
-    this.alpaca?.disconnectMarketStream()
-    this.alpaca?.disconnectAccountStream()
+    // F.1 L1.A 4: session.disconnect() handles market + account WS teardown
+    // atomically + drains in-flight orders via OrderRouter.failUnacked.
+    if (this.session) {
+      try { await this.session.disconnect() } catch (e) {
+        log.warn('session disconnect failed', { err: String(e) })
+      }
+      this.session = null
+    }
+    // Crypto WS is engine-owned per program-design.md §7 #3 — not part of
+    // BrokerSession today. Disconnect directly until a future phase migrates
+    // crypto into a session facet.
     this.alpaca?.disconnectCryptoStream()
     this.cryptoAlpaca?.disconnectCryptoStream()
     const endingEquity = this.om?.getAccount().equity ?? DEFAULT_EQUITY
@@ -756,8 +791,8 @@ export class TradingEngine {
     // Equity feed: live = Alpaca client present AND WS authenticated.
     // simulator = no Alpaca client (engine fell back to MarketSimulator).
     // off = Alpaca client built but WS down (creds saved, network bad, etc.).
-    const equity: FeedStatus['equity'] = this.alpaca
-      ? (this.alpaca.isMarketConnected ? 'live' : 'off')
+    const equity: FeedStatus['equity'] = this.session
+      ? (this.session.state === 'CONNECTED' ? 'live' : 'off')
       : 'simulator'
     // Futures: IEX has no futures coverage; values for ES/NQ/CL/GC come from
     // seedHistoricalCandles' synthetic GBM walk. Always 'synthetic' today.
@@ -902,19 +937,15 @@ export class TradingEngine {
       } catch (e) { log.debug('feature capture failed', { err: String(e) }) }
     }
 
-    if (this.alpaca) {
+    if (this.session) {
       try {
-        const result = await this.alpaca.submitOrder(req)
-        order.fillPrice = result.filledAvgPrice ?? undefined
-        // S1-6: update entryFeatures with realized slippage now that the
-        // actual fill came back. Skipped when reference quote or fill is
-        // missing (simulator no-quote case, or Alpaca returned null fill).
-        const ef = this.entryFeatures.get(order.id)
-        if (ef && order.fillPrice != null && ef.quoteAtSubmit != null && ef.quoteAtSubmit > 0) {
-          ef.entrySlippageBps = (order.fillPrice - ef.quoteAtSubmit) / ef.quoteAtSubmit * 10_000
-        }
-        this.om.fillOrder(order.id, order.fillPrice ?? req.limitPrice ?? 0)
-        log.info('alpaca paper order submitted', { alpacaId: result.id, status: result.status })
+        const clientOrderId = randomUUID()
+        const ack = await this.session.orders.submit({ ...req, clientOrderId })
+        // F.1 L1.A 2.3: register broker→SATEX id mapping so onOrderEvent's FILL
+        // handler can call om.fillOrder with the correct SATEX order id.
+        // S1-6 slippage capture now happens in the async FILL handler — see onOrderEvent.
+        this.brokerOrderIdToSatexId.set(ack.brokerOrderId, order.id)
+        log.info('order acknowledged', { brokerOrderId: ack.brokerOrderId, clientOrderId })
       } catch (err) {
         this.om.rejectOrder(order.id, String(err))
         return { ok: false, reason: String(err) }
@@ -933,7 +964,7 @@ export class TradingEngine {
   }
 
   async cancelOrder(id: string): Promise<void> {
-    if (this.alpaca) { try { await this.alpaca.cancelOrder(id) } catch (e) { log.warn('cancel failed', { id, err: String(e) }) } }
+    if (this.session) { try { await this.session.orders.cancel(id) } catch (e) { log.warn('cancel failed', { id, err: String(e) }) } }
     this.om.cancelOrder(id)
   }
 
@@ -1023,27 +1054,32 @@ export class TradingEngine {
           keyId: creds.keyId, secretKey: creds.secretKey,
           baseUrl: resolveBaseUrl(env.alpacaBaseUrl), dataUrl: env.alpacaDataUrl, feed: creds.feed,
         })
-        const acct = await alpaca.getAccount()
-        const positions = (await alpaca.getPositions()).map(p => AlpacaClient.toSatexPosition(p, Date.now()))
+        const initialSnap = await new AlpacaAccountSyncer(alpaca).getSnapshot()
         // COMMIT (local, atomic).
         this.uninstallMarketWiring(); toreDown = true
-        try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+        await this.teardownSession()                  // tears down OLD session (data.stop + disconnectAccountStream + observer)
         this.alpaca = alpaca
-        this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
-        this.om.syncFromAlpaca({ equity: acct.equity, cash: acct.cash, buyingPower: acct.buyingPower }, positions)
-        this.om.setSessionStartEquity(acct.equity)
+        this.om.syncFromSnapshot(initialSnap)
+        this.om.setSessionStartEquity(initialSnap.equity)
         this.market = new LiveMarket(alpaca)
+        this.session = AlpacaBrokerSession.create(alpaca, this.market)
+        // F.1 L1.A 2.1: wire bracket-fill learning via OrderRouter.onUpdate.
+        this.session.orders.onUpdate((e) => this.onOrderEvent(e))
       } else {
         // → Simulator: no fallible prep; tear down + reset to a clean paper world.
         this.uninstallMarketWiring(); toreDown = true
-        try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+        await this.teardownSession()
         this.alpaca = null
         this.om.resetToPaper(DEFAULT_EQUITY)
         this.market = new MarketSimulator()
       }
       this.dataSource = target
       this.installMarketWiring(this.market)
-      await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      if (this.session) {
+        await this.session.connect()
+      } else {
+        await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      }
       this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
       this.regime?.resume()
       this.recorder?.resume()
@@ -1058,6 +1094,7 @@ export class TradingEngine {
       // fail) so the engine is never left source-less.
       if (toreDown) {
         this.alpaca = null
+        this.session = null
         this.om.resetToPaper(DEFAULT_EQUITY)
         this.market = new MarketSimulator()
         this.dataSource = 'simulator'
@@ -1084,10 +1121,8 @@ export class TradingEngine {
     if (!stored) return { ok: false, reason: `No stored credentials for ${mode} mode` }
     const env = getEnv()
     try {
-      this.alpaca?.disconnectMarketStream()
-      this.alpaca?.disconnectAccountStream()
       this.uninstallMarketWiring()
-      this.market?.stop?.()
+      await this.teardownSession()                    // tears down market + account WS + observer; falls back to market.stop() if no session
       const baseUrl = resolveBaseUrl(env.alpacaBaseUrl)
       const cfg: AlpacaConfig = {
         keyId: stored.keyId, secretKey: stored.secretKey,
@@ -1096,13 +1131,14 @@ export class TradingEngine {
       }
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
-      // Phase 3.2: re-wire bracket-fill learning on every reconnect.
-      this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
+      this.session = AlpacaBrokerSession.create(this.alpaca, this.market)
+      // F.1 L1.A 2.1: re-wire bracket-fill learning via OrderRouter.onUpdate on every reconnect.
+      this.session.orders.onUpdate((e) => this.onOrderEvent(e))
       this.installMarketWiring(this.market)
-      await (this.market as MarketDataSource & { start: () => void | Promise<void> }).start()
+      await this.session.connect()
       // Re-attach recorder ingest.
       this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
-      this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+      this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount())
       this.fireAndForget('syncMarketClock', () => this.syncMarketClock())
       log.info('alpaca reconnected', { mode, feed: stored.feed, baseUrl })
       return { ok: true }
@@ -1123,7 +1159,7 @@ export class TradingEngine {
       paperConfigured: !!(paperStored?.keyId && paperStored?.secretKey) || (!!env.alpacaKeyId && !!env.alpacaSecretKey),
       liveConfigured:  !!(liveStored?.keyId  && liveStored?.secretKey),
       baseUrl: resolveBaseUrl(env.alpacaBaseUrl),
-      connected: this.alpaca?.isMarketConnected ?? false,
+      connected: this.session?.state === 'CONNECTED',
     }
   }
 
@@ -1391,25 +1427,22 @@ export class TradingEngine {
 
   // ── Historical-day importer ─────────────────────────────────────────────────
   async importHistoricalDay(req: HistoricalImportRequest): Promise<HistoricalImportResult> {
-    // Fall back to a REST-only AlpacaClient when the engine booted in
-    // simulator mode (SATEX_USE_SIMULATOR=true, or no creds at boot) but the
-    // user has since saved credentials. Without this fallback `this.alpaca`
-    // is null and the importer fails with "No Alpaca credentials" even
-    // though the credential store has perfectly good keys.
-    const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
-    const importer = new HistoricalImporter(alpaca)
+    // Pass this.market (always non-null after initialize). In live mode
+    // LiveMarket.getBars() delegates to Alpaca REST. In simulator mode
+    // MarketSimulator.getBars() returns [] — the importer surfaces "no bars"
+    // gracefully rather than failing with a credentials error.
+    const importer = new HistoricalImporter(this.market)
     return importer.import(req)
   }
 
-  /** Replay-free historical bars for the chart's off-hours backfill. Reuses the
-   *  same REST-only Alpaca fallback as importHistoricalDay so it works when the
-   *  engine booted in simulator mode but the user has since saved credentials.
-   *  Crucially this NEVER touches `this.replay`, `this.market`, wiring, or
-   *  `dataSource` — it is a pure read, so the chart can show the last NY session
-   *  without the Replay workspace taking over. */
+  /** Replay-free historical bars for the chart's off-hours backfill. Routes
+   *  through this.market so LiveMarket delegates to Alpaca REST and
+   *  MarketSimulator returns [] gracefully. Crucially this NEVER touches
+   *  `this.replay`, wiring, or `dataSource` — it is a pure read, so the
+   *  chart can show the last NY session without the Replay workspace taking
+   *  over. */
   async getHistoricalBars(req: HistoricalBarsRequest): Promise<HistoricalBarsResult> {
-    const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
-    const importer = new HistoricalImporter(alpaca)
+    const importer = new HistoricalImporter(this.market)
     // Asset-class dispatch (2026-05-26): crypto trades 24/7 so "last completed
     // NY session date" doesn't apply — hit the v1beta3 crypto endpoint for the
     // last 24h instead. The IPC contract is unchanged; we look the class up
@@ -1425,8 +1458,8 @@ export class TradingEngine {
     if (this.replay && this.replay.snapshot().sessionId === sessionId) {
       return { ok: false, reason: 'Stop replay before deleting the active session.' }
     }
-    // deleteSession is local-DB-only — no Alpaca call. Passing null is fine.
-    const importer = new HistoricalImporter(this.alpaca)
+    // deleteSession is local-DB-only — no data source call needed.
+    const importer = new HistoricalImporter(this.market)
     return importer.deleteSession(sessionId)
   }
 
@@ -1559,7 +1592,7 @@ export class TradingEngine {
    * null as "insufficient data" and hides the lines.
    */
   async getPriorDayHlc(symbol: string): Promise<{ high: number; low: number; close: number; date: string } | null> {
-    if (!this.alpaca) return null
+    if (!this.session) return null
     const sym = symbol.toUpperCase()
     // Equity-only — Alpaca daily-bars endpoint is /v2/stocks/.
     const entry = findUniverseEntry(sym)
@@ -1569,7 +1602,7 @@ export class TradingEngine {
     const start = new Date(now); start.setUTCDate(start.getUTCDate() - 10)
     const startIso = start.toISOString()
     try {
-      const bars = await this.alpaca.getBars(sym, '1Day', startIso)
+      const bars = await this.session.data.getBars(sym, '1Day', startIso)
       if (bars.length === 0) return null
       // bars are time-ascending; find the most-recent one whose calendar day
       // is strictly before today (avoid an in-progress day if it ever shows up).
@@ -1631,6 +1664,21 @@ export class TradingEngine {
   private uninstallMarketWiring(): void {
     for (const u of this.marketSubs) { try { u() } catch { /* ignore */ } }
     this.marketSubs = []
+  }
+
+  /** Tear down whichever data source is currently active. Prefers
+   *  `session.disconnect()` (drains in-flight orders via failUnacked,
+   *  stops the market, disconnects the account WS, releases the state
+   *  observer) when a session exists; falls back to a bare `market.stop()`
+   *  for simulator/replay paths that don't have one. Used by the data-feed
+   *  switch and reconnect paths. */
+  private async teardownSession(): Promise<void> {
+    if (this.session) {
+      try { await this.session.disconnect() } catch (e) { log.warn('session.disconnect failed during teardown', { err: String(e) }) }
+      this.session = null
+    } else {
+      try { (this.market as MarketDataSource & { stop?: () => void }).stop?.() } catch { /* ignore */ }
+    }
   }
 
   private broadcastReplayStatus(): void {
@@ -1700,10 +1748,10 @@ export class TradingEngine {
       this.tickWindow.shift()
     }
     const status: SystemStatus = {
-      connected:   this.alpaca ? this.alpaca.isMarketConnected : true,
+      connected:   this.session ? this.session.state === 'CONNECTED' : true,
       mode:        this.alpaca ? 'paper' : 'simulator',
       tickHz:      this.tickWindow.length,
-      latencyMs:   this.alpaca ? this.alpaca.msSinceLastTick : 0,
+      latencyMs:   this.session ? this.session.data.msSinceLastTick() : 0,
       cpuPct:      0,
       memMb:       Math.round(mem.heapUsed / 1024 / 1024),
       uptime:      Math.floor((Date.now() - this.startedAt) / 1000),
@@ -1732,9 +1780,9 @@ export class TradingEngine {
   }
 
   private async syncMarketClock(): Promise<void> {
-    if (!this.alpaca) return
+    if (!this.session) return
     try {
-      const clock = await this.alpaca.getClock()
+      const clock = await this.session.data.getClock()
       this.om.setMarketOpen(clock.isOpen)
     } catch (err) {
       log.warn('clock sync failed', { err: String(err) })
@@ -1774,7 +1822,7 @@ export class TradingEngine {
    *      (manual closes, simulator fills, autonomous-trader exits that we
    *      explicitly submit as separate orders).
    *
-   *   2. AlpacaClient.onTradeUpdate — for server-side bracket children
+   *   2. OrderRouter.onUpdate (FILL event) — for server-side bracket children
    *      (stop-loss / take-profit legs) that fire on the exchange without
    *      ever round-tripping through our OrderManager. Pre-2026-05-13 these
    *      were silently dropped and the Brain never learned from them.
@@ -1853,9 +1901,9 @@ export class TradingEngine {
         holdMs: Date.now() - entry.openedAt,
         closedAt: Date.now(),
         // triggeredBy was removed from OrderRequest (adversarial finding C1).
-        // Stop/TP fills from Alpaca bracket children land via onAlpacaTradeUpdate
-        // and currently surface as `source: 'alpaca-bracket'`. Future work:
-        // derive triggeredBy from AlpacaTradeUpdate.order legs.
+        // Stop/TP fills from Alpaca bracket children land via onOrderEvent
+        // (F.1 L1.A) and currently surface as `source: 'alpaca-bracket'`. Future
+        // work: derive triggeredBy from OrderEvent fields.
         triggeredBy: null,
         source: order?.request.source ?? source,
         tags: entry.tags ?? [],
@@ -1883,41 +1931,38 @@ export class TradingEngine {
   }
 
   /**
-   * Alpaca account-stream trade-update handler.
+   * Canonical order-event handler (F.1 L1.A 2.1 / 2.3).
    *
-   * Fires for every fill on the account, including:
-   *   - Entry orders we submitted (OrderManager already handles these via
-   *     fillOrder → onOrderFill — we dedup by orderId).
-   *   - Bracket child orders (stop/TP) — these never round-tripped through
-   *     us so OrderManager doesn't know about them. THIS is the path we
-   *     need to learn from.
-   *   - External orders placed directly in the Alpaca dashboard.
+   * Subscribed to OrderRouter.onUpdate via session.orders.onUpdate.
+   * AlpacaOrderRouter translates every wire trade_update to an OrderEvent
+   * before calling this handler — no Alpaca-specific parsing here.
+   *
+   * Handles two categories of FILL events:
+   *   - Parent orders (submitted by the engine via submitOrder): discriminated
+   *     by presence in brokerOrderIdToSatexId. Calls om.fillOrder with the
+   *     SATEX order id, captures S1-6 slippage, then cleans up the map entry.
+   *   - Bracket child orders (stop/TP, clientOrderId === ''): not in
+   *     brokerOrderIdToSatexId. Symbol + side are carried on the FILL event
+   *     (populated by AlpacaOrderRouter.translate) so we can route to
+   *     recordTradeClose for brain learning.
+   *
+   * om.fillOrder is called exactly once per FILL event (either in the parent
+   * path or not at all in the bracket-child path — recordTradeClose handles
+   * its own accounting separately).
    */
-  private onAlpacaTradeUpdate(update: AlpacaTradeUpdate): void {
-    if (update.event !== 'fill') return  // Ignore partial / new / canceled / etc.
-    // Dedup: if OrderManager already has this orderId, its onOrderFill path
-    // will run recordTradeClose. Avoid double-learning.
-    if (this.om.getOrders().some(o => o.id === update.orderId)) return
-    // For now we only learn from sell-fills that close a position we opened.
-    // Buy-fills (covering shorts) would mirror — out of scope until shorts.
-    if (update.side !== 'sell') return
-    const found = this.findOpenEntryForSymbol(update.symbol)
-    if (!found) {
-      log.debug('alpaca bracket fill: no matching entry', { symbol: update.symbol, orderId: update.orderId })
-      return
-    }
-    const [entryId, entry] = found
-    this.recordTradeClose({
-      symbol: update.symbol,
-      quantity: update.quantity,
-      fillPrice: update.price,
-      entry,
-      entryId,
-      source: 'alpaca-bracket',
-    })
-    // Refresh account snapshot so equity reflects the fill immediately
-    // rather than waiting on the next 15s sync.
-    this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+  private onOrderEvent(e: OrderEvent): void {
+    // Delegate to the pure handleOrderEvent helper so this logic is
+    // unit-testable without instantiating the full engine.
+    // See src/main/core/order-event-router.ts + order-event-router.test.ts.
+    handleOrderEvent({
+      om:                      this.om,
+      brokerOrderIdToSatexId:  this.brokerOrderIdToSatexId,
+      entryFeatures:           this.entryFeatures,
+      findOpenEntryForSymbol:  (s) => this.findOpenEntryForSymbol(s),
+      recordTradeClose:        (args) => this.recordTradeClose(args),
+      fireAndForget:           (lbl, op) => this.fireAndForget(lbl, op),
+      syncBrokerAccount:       () => this.syncBrokerAccount(),
+    }, e)
   }
 
   /** Walk entryFeatures looking for the oldest open entry on this symbol.
@@ -1936,17 +1981,11 @@ export class TradingEngine {
     return bestId && bestValue ? [bestId, bestValue] : null
   }
 
-  private async syncAlpacaAccount(): Promise<void> {
-    if (!this.alpaca) return
+  private async syncBrokerAccount(): Promise<void> {
+    if (!this.session) return
     try {
-      const [snap, positions] = await Promise.all([
-        this.alpaca.getAccount(),
-        this.alpaca.getPositions(),
-      ])
-      const satexPositions = positions.map((p) =>
-        AlpacaClient.toSatexPosition(p, Date.now())
-      )
-      this.om.syncFromAlpaca(snap, satexPositions)
+      const snap = await this.session.account.getSnapshot()
+      this.om.syncFromSnapshot(snap)
 
       // Adversarial finding C2 (2026-05-16) — on the first sync of the session,
       // realign `sessionStartEquity` to the broker-reported equity AND persist
@@ -2047,8 +2086,8 @@ export class TradingEngine {
       dailyPnl: Math.round(acct.dailyPnl),
       openPositions: acct.openPositions.length,
       ordersThisSession: db.listOrders(this.currentSessionId).length,
-      alpacaConnected: this.alpaca?.isMarketConnected ?? false,
-      msSinceLastTick: this.alpaca?.msSinceLastTick ?? null,
+      alpacaConnected: this.session?.state === 'CONNECTED',
+      msSinceLastTick: this.session?.data.msSinceLastTick() ?? null,
       autonomous: auto ? { enabled: auto.enabled, approved: auto.approvedCount, signals: auto.signalsFired } : null,
       entryFeaturesSize: this.entryFeatures.size,
     })
@@ -2149,9 +2188,9 @@ export class TradingEngine {
       let bars: Candle[] | null = null
 
       // Path 1 — Alpaca REST for equities/ETFs.
-      if (isAlpacaServable && this.alpaca?.isConfigured) {
+      if (isAlpacaServable && this.session) {
         try {
-          const fetched = await this.alpaca.getBars(sym, '1Min', startIso)
+          const fetched = await this.session.data.getBars(sym, '1Min', startIso)
           if (fetched.length > 0) bars = fetched
         } catch (e) {
           log.debug('alpaca bars fetch failed — falling back to synth', { sym, err: String(e) })

@@ -25,7 +25,7 @@
  * to its tape. Re-importing the same (date, symbols, timeframe) is a no-op
  * unless we explicitly clear the old session first (`replace = true`).
  */
-import type { AlpacaClient } from './alpaca'
+import type { MarketDataSource } from '@shared/broker/market-data-source'
 import {
   HISTORICAL_BARS_FALLBACK_SYMBOLS,
   REPLAY_MIN_SPEED,
@@ -45,22 +45,23 @@ const log = createLogger('historical-importer')
 const TF_SPAN_MS: Record<HistoricalTimeframe, number> = {
   '1Min':  60_000,
   '1Hour': 3_600_000,
+  '1Day':  86_400_000,
 }
 
 /** Subticks emitted per bar — matches the OHLC walk pattern. */
 const SUBTICKS_PER_BAR = 4
 
 export class HistoricalImporter {
-  constructor(private readonly alpaca: AlpacaClient | null) {}
+  constructor(private readonly data: MarketDataSource | null) {}
 
   /** Synthetic universe (and order) used when caller passes no symbols. */
   defaultSymbols(): string[] { return [...HISTORICAL_BARS_FALLBACK_SYMBOLS] }
 
   async import(req: HistoricalImportRequest): Promise<HistoricalImportResult> {
-    if (!this.alpaca || !this.alpaca.isConfigured) {
+    if (!this.data) {
       return {
         ok: false,
-        reason: 'No Alpaca credentials — open Settings and paste your paper key/secret first.',
+        reason: 'No data source available — open Settings and paste your paper key/secret first.',
       }
     }
 
@@ -102,7 +103,7 @@ export class HistoricalImporter {
 
     for (const symbol of symbols) {
       try {
-        const bars = await this.alpaca.getBars(symbol, tf, startIso, endIso)
+        const bars = await this.data.getBars(symbol, tf, startIso, endIso)
         if (bars.length === 0) {
           skipped.push(symbol)
           continue
@@ -206,10 +207,10 @@ export class HistoricalImporter {
     date: string,
     tf: HistoricalTimeframe = '1Min',
   ): Promise<HistoricalBarsResult> {
-    if (!this.alpaca || !this.alpaca.isConfigured) {
+    if (!this.data) {
       return {
         ok: false,
-        reason: 'No Alpaca credentials — open Settings and paste your paper key/secret first.',
+        reason: 'No data source available — open Settings and paste your paper key/secret first.',
       }
     }
     const dateValidation = validateDate(date)
@@ -218,7 +219,7 @@ export class HistoricalImporter {
 
     const { startIso, endIso } = sessionWindowIso(date)
     try {
-      const bars = await this.alpaca.getBars(symbol.trim().toUpperCase(), tf, startIso, endIso)
+      const bars = await this.data.getBars(symbol.trim().toUpperCase(), tf, startIso, endIso)
       return { ok: true, bars }
     } catch (err) {
       log.warn('historical bars fetch failed', { symbol, date, err: String(err) })
@@ -236,10 +237,10 @@ export class HistoricalImporter {
     tf: HistoricalTimeframe = '1Min',
     hoursBack = 24,
   ): Promise<HistoricalBarsResult> {
-    if (!this.alpaca || !this.alpaca.isConfigured) {
+    if (!this.data) {
       return {
         ok: false,
-        reason: 'No Alpaca credentials — open Settings and paste your paper key/secret first.',
+        reason: 'No data source available — open Settings and paste your paper key/secret first.',
       }
     }
     if (!(tf in TF_SPAN_MS)) return { ok: false, reason: `Unsupported timeframe: ${tf}` }
@@ -247,7 +248,7 @@ export class HistoricalImporter {
     const startIso = new Date(now - hoursBack * 3_600_000).toISOString()
     const endIso   = new Date(now).toISOString()
     try {
-      const bars = await this.alpaca.getCryptoBars(symbol.trim().toUpperCase(), tf, startIso, endIso)
+      const bars = await this.data.getCryptoBars(symbol.trim().toUpperCase(), tf, startIso, endIso)
       return { ok: true, bars }
     } catch (err) {
       log.warn('historical crypto bars fetch failed', { symbol, hoursBack, err: String(err) })

@@ -638,7 +638,7 @@ export interface ReplayStartRequest {
 
 /** Historical-day import. Pulls Alpaca bars for `date` × `symbols` and
  *  materializes them as a synthetic replayable session in the tape table. */
-export type HistoricalTimeframe = '1Min' | '1Hour'
+export type HistoricalTimeframe = '1Min' | '1Hour' | '1Day'
 
 export interface HistoricalImportRequest {
   /** YYYY-MM-DD (US Eastern session). Weekends / holidays / future dates rejected. */

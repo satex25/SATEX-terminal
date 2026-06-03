@@ -167,9 +167,12 @@ function gracefulShutdown(label: string, cause: unknown): void {
     cause: String(cause),
     stack: (cause as Error)?.stack,
   })
-  try { engine.shutdown() } catch (e) {
+  // engine.shutdown() is async (F.1 L1.A 4 — awaits session.disconnect()).
+  // Fire-and-forget here: the 5s hard-exit below is the safety net so a
+  // stuck disconnect can't deadlock the process on crash paths.
+  engine.shutdown().catch((e) => {
     log.error('engine.shutdown threw during graceful shutdown', { err: String(e) })
-  }
+  })
   try { autoUpdate.shutdown() } catch (e) {
     log.error('autoUpdate.shutdown threw during graceful shutdown', { err: String(e) })
   }
@@ -525,7 +528,7 @@ function wireEngineEvents(): void {
     // both a security bypass surface and unused in practice (no caller ever
     // set the field). All fills now share the standard "✓ Filled" toast.
     // Stop-loss UX clarity will return once we derive trigger-type from
-    // AlpacaTradeUpdate bracket-leg metadata in `onAlpacaTradeUpdate`.
+    // bracket-leg metadata on OrderEvent in `onOrderEvent`.
     for (const o of orders) {
       const key = `${o.id}:${o.status}`
       if (o.status === 'filled' && !lastSeenOrderIds.has(key)) {
@@ -1052,8 +1055,22 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  engine.shutdown()
+  // engine.shutdown() is async — fire and forget; before-quit owns the
+  // clean-shutdown path. window-all-closed fires first on non-darwin so we
+  // kick shutdown early; before-quit's guard (isQuitting) prevents a second
+  // run. On darwin this event is not emitted on normal quit.
+  engine.shutdown().catch((e) => log.warn('engine shutdown on window-all-closed failed', { err: String(e) }))
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => engine.shutdown())
+// F.1 L1.A 4: prevent-default + await + re-quit so Electron waits for
+// async session teardown (drains in-flight orders via failUnacked).
+let isQuitting = false
+app.on('before-quit', (event) => {
+  if (isQuitting) return
+  event.preventDefault()
+  isQuitting = true
+  engine.shutdown()
+    .catch((e) => log.warn('engine shutdown failed', { err: String(e) }))
+    .finally(() => app.quit())
+})
