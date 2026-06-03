@@ -142,7 +142,7 @@ describe('OrderManager — C2: session equity baseline rebase', () => {
     expect(om.getSessionStartEquity()).toBe(100_000)
     const acct = om.getAccount()
     // account.equity is still the constructor's 10_000 because we haven't
-    // syncFromAlpaca'd; dailyPnl now reflects equity - new baseline.
+    // synced from broker; dailyPnl now reflects equity - new baseline.
     expect(acct.dailyPnl).toBeCloseTo(10_000 - 100_000)
   })
 
@@ -159,13 +159,13 @@ describe('OrderManager — C2: session equity baseline rebase', () => {
 
   it('Gate 3 (daily loss) measures against the rebased baseline, not the constant', () => {
     om.setMarketOpen(true)
-    om.syncFromAlpaca({ equity: 100_000, cash: 100_000, buyingPower: 100_000 }, [])
+    om.syncFromSnapshot({ equity: 100_000, cash: 100_000, buyingPower: 100_000, positions: [], observedAt: Date.now() })
     om.setSessionStartEquity(100_000)
     // Simulate equity drop within the daily-loss cap (default 2%): -1_500 of 100k = 1.5%
-    om.syncFromAlpaca({ equity: 98_500, cash: 98_500, buyingPower: 98_500 }, [])
+    om.syncFromSnapshot({ equity: 98_500, cash: 98_500, buyingPower: 98_500, positions: [], observedAt: Date.now() })
     expect(om.validate(baseBuy({ quantity: 1 }), liveCtx({ refPrice: 100 })).ok).toBe(true)
     // Now breach: drop to -2.5%
-    om.syncFromAlpaca({ equity: 97_500, cash: 97_500, buyingPower: 97_500 }, [])
+    om.syncFromSnapshot({ equity: 97_500, cash: 97_500, buyingPower: 97_500, positions: [], observedAt: Date.now() })
     const res = om.validate(baseBuy({ quantity: 1 }), liveCtx({ refPrice: 100 }))
     expect(res.ok).toBe(false)
     expect(res.gate).toBe('daily-loss')
@@ -464,14 +464,4 @@ describe('OrderManager — syncFromSnapshot (F.1 L1.A Task 1.7)', () => {
     expect(om.getAccount().dailyPnl).toBeCloseTo(-2_000)
   })
 
-  it('legacy syncFromAlpaca still forwards correctly through syncFromSnapshot', () => {
-    const om = new OrderManager(100_000)
-    om.setSessionStartEquity(100_000)
-    om.syncFromAlpaca({ equity: 99_000, cash: 99_000, buyingPower: 198_000 }, [])
-    const acct = om.getAccount()
-    expect(acct.equity).toBe(99_000)
-    expect(acct.cash).toBe(99_000)
-    expect(acct.buyingPower).toBe(198_000)
-    expect(acct.dailyPnl).toBeCloseTo(-1_000)
-  })
 })

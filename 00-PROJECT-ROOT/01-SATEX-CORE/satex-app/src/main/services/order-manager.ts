@@ -320,11 +320,6 @@ export class OrderManager {
     log.debug('account synced from alpaca', { equity: snap.equity, positions: snap.positions.length })
   }
 
-  /** @deprecated Use syncFromSnapshot. Removed in L1.A Task 4.1. */
-  syncFromAlpaca(snap: { equity: number; cash: number; buyingPower: number }, alpacaPositions: Position[]): void {
-    this.syncFromSnapshot({ ...snap, positions: alpacaPositions, observedAt: Date.now() })
-  }
-
   // ── Signal helpers ───────────────────────────────────────────────────────────
   /** Convert a strategy signal into an order request sized to fit `notionalCap`.
    *
@@ -386,7 +381,7 @@ export class OrderManager {
         // avgPrice*qty entry outlay). Pre-2026-05-18 this line was
         // `cash += cost + pnl`, which double-counted the PnL component and
         // left paper-mode cash inflated by `pnl` on every closed position
-        // (live mode masked it within 15s via syncFromAlpaca).
+        // (live mode masked it within 15s via syncFromSnapshot).
         this.account.cash += cost
         this.account.buyingPower += cost * BUYING_POWER_MULT
         existing.quantity -= quantity

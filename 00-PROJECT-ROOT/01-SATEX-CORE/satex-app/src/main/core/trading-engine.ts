@@ -653,7 +653,7 @@ export class TradingEngine {
     this.fireAndForget('seedHistoricalCandles', () => this.seedHistoricalCandles())
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     if (this.statusTimer)            { clearInterval(this.statusTimer);            this.statusTimer = null }
     if (this.accountSyncTimer)       { clearInterval(this.accountSyncTimer);       this.accountSyncTimer = null }
     if (this.clockSyncTimer)         { clearInterval(this.clockSyncTimer);         this.clockSyncTimer = null }
@@ -693,8 +693,17 @@ export class TradingEngine {
     this.depth?.stop()
     this.edgar?.stop()
     this.market?.stop?.()
-    this.alpaca?.disconnectMarketStream()
-    this.alpaca?.disconnectAccountStream()
+    // F.1 L1.A 4: session.disconnect() handles market + account WS teardown
+    // atomically + drains in-flight orders via OrderRouter.failUnacked.
+    if (this.session) {
+      try { await this.session.disconnect() } catch (e) {
+        log.warn('session disconnect failed', { err: String(e) })
+      }
+      this.session = null
+    }
+    // Crypto WS is engine-owned per program-design.md §7 #3 — not part of
+    // BrokerSession today. Disconnect directly until a future phase migrates
+    // crypto into a session facet.
     this.alpaca?.disconnectCryptoStream()
     this.cryptoAlpaca?.disconnectCryptoStream()
     const endingEquity = this.om?.getAccount().equity ?? DEFAULT_EQUITY

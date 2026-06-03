@@ -9,7 +9,7 @@
  *   wss://stream.data.alpaca.markets/v2/{iex|sip}  — market data ticks
  *   wss://paper-api.alpaca.markets/stream           — trade_updates
  */
-import type { AlpacaTradeUpdate, Candle, OrderRequest, Position } from '@shared/types'
+import type { AlpacaTradeUpdate, Candle, OrderRequest } from '@shared/types'
 import { ALPACA_PAPER_HOST, findUniverseEntry } from '@shared/constants'
 import { isLive } from './live-mode'
 import { createLogger } from './logger'
@@ -829,13 +829,6 @@ export class AlpacaClient {
     this.lastConnectionState = curr
     for (const fn of this.connectionStateListeners) {
       try { fn(curr) } catch { /* one bad listener must not break the fanout */ }
-    }
-  }
-
-  static toSatexPosition(p: AlpacaPosition, openedAt: number): Position {
-    return {
-      symbol: p.symbol, quantity: p.side === 'short' ? -Math.abs(p.qty) : Math.abs(p.qty),
-      avgPrice: p.avgEntryPrice, unrealizedPnl: p.unrealizedPl, realizedPnl: 0, openedAt,
     }
   }
 }
