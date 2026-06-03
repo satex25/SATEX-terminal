@@ -1,0 +1,92 @@
+/**
+ * SATEX — Slippage Model
+ * Pluggable fill-price simulator. Wraps the simulator path in OrderManager
+ * so backtests and day-to-day paper trading both compute fills that aren't
+ * "fill at quote.last with zero friction".
+ *
+ * Interface is intentionally small: take an order + a market snapshot,
+ * return the executed fill price + ms-delay-before-fill. Stateless;
+ * callers may pass per-call config.
+ *
+ * G-11 from docs/audits/2026-05-28-evidence-audit.md.
+ */
+import type { OrderRequest, Quote } from '@shared/types'
+
+export interface SlippageContext {
+  /** Reference quote at the moment the order hit the simulator. */
+  quote: Quote
+  /** Optional bid/ask spread override if the source has L1. Falls back to
+   *  derived spread from quote.bid/ask, then to a synthetic 1bp spread. */
+  spreadBpsOverride?: number
+}
+
+export interface SlippageFill {
+  /** Price the simulator should record as the actual fill. */
+  fillPrice: number
+  /** Delay before the fill resolves (ms). Models latency; default 50. */
+  delayMs: number
+}
+
+export interface SlippageModel {
+  readonly name: string
+  fill(req: OrderRequest, ctx: SlippageContext): SlippageFill
+}
+
+/** Zero-slippage baseline = pre-2026-05-29 behavior. Default for OrderManager
+ *  so existing callers don't see a behavior change. Useful in unit tests as a
+ *  control. */
+export class ZeroSlippageModel implements SlippageModel {
+  readonly name = 'zero'
+  fill(_req: OrderRequest, ctx: SlippageContext): SlippageFill {
+    return { fillPrice: ctx.quote.last, delayMs: 50 }
+  }
+}
+
+/** Constant N-bps friction model. Buys lift ask side by N bps; sells hit bid
+ *  side by N bps. Cheap, deterministic, useful as a default for backtests
+ *  before a per-symbol calibration model is built. */
+export class FixedBpsSlippageModel implements SlippageModel {
+  readonly name = 'fixed-bps'
+  constructor(private readonly bps: number) {
+    if (bps < 0) throw new Error(`FixedBpsSlippageModel: bps must be >= 0 (got ${bps})`)
+  }
+  fill(req: OrderRequest, ctx: SlippageContext): SlippageFill {
+    const drift = ctx.quote.last * (this.bps / 10_000)
+    const fillPrice = req.side === 'buy' ? ctx.quote.last + drift : ctx.quote.last - drift
+    return { fillPrice, delayMs: 50 }
+  }
+}
+
+export interface SpreadHalfPlusImpactConfig {
+  /** Coefficient on the sqrt-of-notional impact term. Tunable per symbol
+   *  family; 0.0001 is a reasonable default for US mid-cap equities. Pass
+   *  0 to disable impact and get pure spread-crossing fills. */
+  impactCoef: number
+  /** Synthetic fallback spread (bps) when the quote lacks bid/ask. */
+  fallbackSpreadBps?: number
+}
+
+/** Spread-half-plus-sqrt-impact model. Crosses half the spread, plus a
+ *  sqrt($notional/$10k) × impactCoef multiplier on quote.last for size.
+ *  Standard "square-root law" market-impact form used in execution research.
+ *  Sells mirror buys around quote.last. Falls back to a synthetic spread
+ *  (default 1bp) when the quote has no usable bid/ask. */
+export class SpreadHalfPlusImpactModel implements SlippageModel {
+  readonly name = 'spread-half-impact'
+  private readonly fallbackSpreadBps: number
+  constructor(private readonly cfg: SpreadHalfPlusImpactConfig) {
+    this.fallbackSpreadBps = cfg.fallbackSpreadBps ?? 1
+  }
+  fill(req: OrderRequest, ctx: SlippageContext): SlippageFill {
+    const { quote } = ctx
+    const halfSpread = (quote.bid > 0 && quote.ask > quote.bid)
+      ? (quote.ask - quote.bid) / 2
+      : quote.last * (this.fallbackSpreadBps / 10_000) / 2
+    const notional = quote.last * req.quantity
+    const impactFrac = Math.sqrt(notional / 10_000) * this.cfg.impactCoef
+    const impactPrice = quote.last * impactFrac
+    const drift = halfSpread + impactPrice
+    const fillPrice = req.side === 'buy' ? quote.last + drift : quote.last - drift
+    return { fillPrice, delayMs: 50 }
+  }
+}
