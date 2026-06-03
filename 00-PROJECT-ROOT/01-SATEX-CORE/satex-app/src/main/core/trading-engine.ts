@@ -1585,7 +1585,7 @@ export class TradingEngine {
    * null as "insufficient data" and hides the lines.
    */
   async getPriorDayHlc(symbol: string): Promise<{ high: number; low: number; close: number; date: string } | null> {
-    if (!this.alpaca) return null
+    if (!this.session) return null
     const sym = symbol.toUpperCase()
     // Equity-only — Alpaca daily-bars endpoint is /v2/stocks/.
     const entry = findUniverseEntry(sym)
@@ -1595,7 +1595,7 @@ export class TradingEngine {
     const start = new Date(now); start.setUTCDate(start.getUTCDate() - 10)
     const startIso = start.toISOString()
     try {
-      const bars = await this.alpaca.getBars(sym, '1Day', startIso)
+      const bars = await this.session.data.getBars(sym, '1Day', startIso)
       if (bars.length === 0) return null
       // bars are time-ascending; find the most-recent one whose calendar day
       // is strictly before today (avoid an in-progress day if it ever shows up).
@@ -2225,9 +2225,9 @@ export class TradingEngine {
       let bars: Candle[] | null = null
 
       // Path 1 — Alpaca REST for equities/ETFs.
-      if (isAlpacaServable && this.alpaca?.isConfigured) {
+      if (isAlpacaServable && this.session) {
         try {
-          const fetched = await this.alpaca.getBars(sym, '1Min', startIso)
+          const fetched = await this.session.data.getBars(sym, '1Min', startIso)
           if (fetched.length > 0) bars = fetched
         } catch (e) {
           log.debug('alpaca bars fetch failed — falling back to synth', { sym, err: String(e) })

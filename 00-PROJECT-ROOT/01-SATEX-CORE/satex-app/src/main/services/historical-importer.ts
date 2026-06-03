@@ -45,6 +45,7 @@ const log = createLogger('historical-importer')
 const TF_SPAN_MS: Record<HistoricalTimeframe, number> = {
   '1Min':  60_000,
   '1Hour': 3_600_000,
+  '1Day':  86_400_000,
 }
 
 /** Subticks emitted per bar — matches the OHLC walk pattern. */

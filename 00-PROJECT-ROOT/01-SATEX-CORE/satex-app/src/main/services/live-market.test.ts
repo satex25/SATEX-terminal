@@ -153,6 +153,20 @@ describe('LiveMarket — broker-data delegates (F.1 L1.A)', () => {
     expect(calls[0]).toEqual(['AAPL', '1Min', '2026-06-02T13:00:00Z', undefined])
   })
 
+  it('getBars accepts 1Day timeframe (F.1 L1.A 2.5 expansion)', async () => {
+    const calls: unknown[] = []
+    const fakeAlpaca = {
+      getBars: async (s: string, tf: string, start: string) => {
+        calls.push([s, tf, start])
+        return [{ time: 1, open: 100, high: 105, low: 99, close: 103, volume: 1000 }]
+      },
+    } as unknown as AlpacaClient
+    const lm = new LiveMarket(fakeAlpaca, ['AAPL'])
+    const bars = await lm.getBars('AAPL', '1Day', '2026-06-01T00:00:00Z')
+    expect(bars).toHaveLength(1)
+    expect(calls[0]).toEqual(['AAPL', '1Day', '2026-06-01T00:00:00Z'])
+  })
+
   it('getCryptoBars delegates to AlpacaClient.getCryptoBars', async () => {
     const fakeAlpaca = {
       getCryptoBars: async (_s: string) => [{ time: 2, open: 2, high: 2, low: 2, close: 2, volume: 0 }],
