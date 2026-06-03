@@ -525,7 +525,7 @@ function wireEngineEvents(): void {
     // both a security bypass surface and unused in practice (no caller ever
     // set the field). All fills now share the standard "✓ Filled" toast.
     // Stop-loss UX clarity will return once we derive trigger-type from
-    // AlpacaTradeUpdate bracket-leg metadata in `onAlpacaTradeUpdate`.
+    // bracket-leg metadata on OrderEvent in `onOrderEvent`.
     for (const o of orders) {
       const key = `${o.id}:${o.status}`
       if (o.status === 'filled' && !lastSeenOrderIds.has(key)) {
