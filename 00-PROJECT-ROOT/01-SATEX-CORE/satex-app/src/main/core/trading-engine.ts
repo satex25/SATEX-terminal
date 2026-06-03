@@ -19,6 +19,7 @@ import { evaluateDataSourceSwitch } from './data-source-guard'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
 import { AlpacaBrokerSession } from '../services/alpaca/broker-session'
+import type { OrderEvent } from '@shared/broker/order-router'
 import { MarketSimulator, type MarketDataSource, type Unsub } from '../services/market-data'
 import { LiveMarket } from '../services/live-market'
 import { OrderManager, type OrderValidationContext } from '../services/order-manager'
@@ -32,7 +33,7 @@ import { computeSnapshot } from '@shared/indicators'
 import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
 import type {
   Account, AiDecision, AlpacaModeSetRequest, AlpacaModeStatus,
-  AlpacaTradeUpdate, Candle,
+  Candle,
   CredentialsMaskedStatus, CredentialsSetRequest,
   IndicatorSnapshot, LiveModeSetRequest, LiveModeStatus, NewsItem, NewsKind, Order,
   OrderRequest, Position, Quote, SystemStatus, TacticsStatus, AlpacaCredentialsStatus,
@@ -450,9 +451,12 @@ export class TradingEngine {
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
       this.session = AlpacaBrokerSession.create(this.alpaca, this.market)
-      // Phase 3.2: wire bracket-fill learning — Alpaca pushes trade_updates for
-      // server-side stop/TP fills that never round-trip through our OrderManager.
-      this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
+      // F.1 L1.A 2.1: wire bracket-fill learning via OrderRouter.onUpdate.
+      // AlpacaOrderRouter translates wire trade_updates to OrderEvent and fans
+      // them out; bracket children (stop/TP fills never round-tripped through
+      // our OrderManager) arrive with clientOrderId='' and are handled in
+      // onOrderEvent with the symbol+side fields preserved on the FILL event.
+      this.session.orders.onUpdate((e) => this.onOrderEvent(e))
       log.info('using alpaca live market', { feed, mode, fromStore: !!stored, baseUrl })
     }
     this.dataSource = useAlpaca ? 'live' : 'simulator'
@@ -1043,11 +1047,12 @@ export class TradingEngine {
         this.uninstallMarketWiring(); toreDown = true
         await this.teardownSession()                  // tears down OLD session (data.stop + disconnectAccountStream + observer)
         this.alpaca = alpaca
-        this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
         this.om.syncFromAlpaca({ equity: acct.equity, cash: acct.cash, buyingPower: acct.buyingPower }, positions)
         this.om.setSessionStartEquity(acct.equity)
         this.market = new LiveMarket(alpaca)
         this.session = AlpacaBrokerSession.create(alpaca, this.market)
+        // F.1 L1.A 2.1: wire bracket-fill learning via OrderRouter.onUpdate.
+        this.session.orders.onUpdate((e) => this.onOrderEvent(e))
       } else {
         // → Simulator: no fallible prep; tear down + reset to a clean paper world.
         this.uninstallMarketWiring(); toreDown = true
@@ -1115,8 +1120,8 @@ export class TradingEngine {
       this.alpaca = new AlpacaClient(cfg)
       this.market = new LiveMarket(this.alpaca)
       this.session = AlpacaBrokerSession.create(this.alpaca, this.market)
-      // Phase 3.2: re-wire bracket-fill learning on every reconnect.
-      this.alpaca.onTradeUpdate((u) => this.onAlpacaTradeUpdate(u))
+      // F.1 L1.A 2.1: re-wire bracket-fill learning via OrderRouter.onUpdate on every reconnect.
+      this.session.orders.onUpdate((e) => this.onOrderEvent(e))
       this.installMarketWiring(this.market)
       await this.session.connect()
       // Re-attach recorder ingest.
@@ -1808,7 +1813,7 @@ export class TradingEngine {
    *      (manual closes, simulator fills, autonomous-trader exits that we
    *      explicitly submit as separate orders).
    *
-   *   2. AlpacaClient.onTradeUpdate — for server-side bracket children
+   *   2. OrderRouter.onUpdate (FILL event) — for server-side bracket children
    *      (stop-loss / take-profit legs) that fire on the exchange without
    *      ever round-tripping through our OrderManager. Pre-2026-05-13 these
    *      were silently dropped and the Brain never learned from them.
@@ -1887,9 +1892,9 @@ export class TradingEngine {
         holdMs: Date.now() - entry.openedAt,
         closedAt: Date.now(),
         // triggeredBy was removed from OrderRequest (adversarial finding C1).
-        // Stop/TP fills from Alpaca bracket children land via onAlpacaTradeUpdate
-        // and currently surface as `source: 'alpaca-bracket'`. Future work:
-        // derive triggeredBy from AlpacaTradeUpdate.order legs.
+        // Stop/TP fills from Alpaca bracket children land via onOrderEvent
+        // (F.1 L1.A) and currently surface as `source: 'alpaca-bracket'`. Future
+        // work: derive triggeredBy from OrderEvent fields.
         triggeredBy: null,
         source: order?.request.source ?? source,
         tags: entry.tags ?? [],
@@ -1917,34 +1922,41 @@ export class TradingEngine {
   }
 
   /**
-   * Alpaca account-stream trade-update handler.
+   * Canonical order-event handler (F.1 L1.A 2.1).
    *
-   * Fires for every fill on the account, including:
-   *   - Entry orders we submitted (OrderManager already handles these via
-   *     fillOrder → onOrderFill — we dedup by orderId).
-   *   - Bracket child orders (stop/TP) — these never round-tripped through
-   *     us so OrderManager doesn't know about them. THIS is the path we
-   *     need to learn from.
-   *   - External orders placed directly in the Alpaca dashboard.
+   * Subscribed to OrderRouter.onUpdate via session.orders.onUpdate.
+   * AlpacaOrderRouter translates every wire trade_update to an OrderEvent
+   * before calling this handler — no Alpaca-specific parsing here.
+   *
+   * Handles two categories of FILL events:
+   *   - Engine-managed orders (clientOrderId !== ''): OrderManager already
+   *     handles their fill via onOrderFill → recordTradeClose. We dedup by
+   *     checking orderId against OM to avoid double-learning.
+   *   - Bracket child orders (stop/TP, clientOrderId === ''): these never
+   *     round-tripped through our OrderManager. Symbol + side are carried on
+   *     the FILL event (populated by AlpacaOrderRouter.translate) so we can
+   *     route to recordTradeClose for brain learning.
    */
-  private onAlpacaTradeUpdate(update: AlpacaTradeUpdate): void {
-    if (update.event !== 'fill') return  // Ignore partial / new / canceled / etc.
+  private onOrderEvent(e: OrderEvent): void {
+    if (e.execType !== 'FILL') return  // Ignore ACK / PARTIAL_FILL / CANCEL / REJECT / EXPIRE
     // Dedup: if OrderManager already has this orderId, its onOrderFill path
     // will run recordTradeClose. Avoid double-learning.
-    if (this.om.getOrders().some(o => o.id === update.orderId)) return
+    if (this.om.getOrders().some(o => o.id === e.orderId)) return
     // For now we only learn from sell-fills that close a position we opened.
     // Buy-fills (covering shorts) would mirror — out of scope until shorts.
-    if (update.side !== 'sell') return
-    const found = this.findOpenEntryForSymbol(update.symbol)
+    if (e.side !== 'sell') return
+    const symbol = e.symbol
+    if (!symbol) return  // No symbol — cannot route to entry; should not occur for Alpaca fills.
+    const found = this.findOpenEntryForSymbol(symbol)
     if (!found) {
-      log.debug('alpaca bracket fill: no matching entry', { symbol: update.symbol, orderId: update.orderId })
+      log.debug('alpaca bracket fill: no matching entry', { symbol, orderId: e.orderId })
       return
     }
     const [entryId, entry] = found
     this.recordTradeClose({
-      symbol: update.symbol,
-      quantity: update.quantity,
-      fillPrice: update.price,
+      symbol,
+      quantity: e.filled,
+      fillPrice: e.avgPrice,
       entry,
       entryId,
       source: 'alpaca-bracket',

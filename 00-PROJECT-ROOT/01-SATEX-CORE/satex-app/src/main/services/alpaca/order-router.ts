@@ -139,8 +139,10 @@ export class AlpacaOrderRouter implements OrderRouter {
 
     switch (u.event) {
       case 'new':          return { execType: 'ACK',          ...base }
-      case 'fill':         return { execType: 'FILL',         ...base, filled: u.filledQty, avgPrice: u.price }
-      case 'partial_fill': return { execType: 'PARTIAL_FILL', ...base, filled: u.filledQty, price:    u.price }
+      case 'fill':         return { execType: 'FILL',         ...base, filled: u.filledQty, avgPrice: u.price,
+                                    symbol: u.symbol, side: u.side }
+      case 'partial_fill': return { execType: 'PARTIAL_FILL', ...base, filled: u.filledQty, price:    u.price,
+                                    symbol: u.symbol, side: u.side }
       case 'canceled':     return { execType: 'CANCEL',       ...base }
       case 'rejected':     return { execType: 'REJECT',       ...base, reason: 'broker rejected' }
       case 'expired':      return { execType: 'EXPIRE',       ...base }

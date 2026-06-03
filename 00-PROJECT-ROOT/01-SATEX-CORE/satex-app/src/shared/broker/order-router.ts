@@ -32,8 +32,12 @@ export interface OrderAck {
  */
 export type OrderEvent =
   | { execType: 'ACK';          orderId: string; clientOrderId: string; timestamp: number }
-  | { execType: 'PARTIAL_FILL'; orderId: string; clientOrderId: string; filled: number; price: number; timestamp: number }
-  | { execType: 'FILL';         orderId: string; clientOrderId: string; filled: number; avgPrice: number; timestamp: number }
+  | { execType: 'PARTIAL_FILL'; orderId: string; clientOrderId: string; filled: number; price: number; timestamp: number;
+      /** Broker-supplied instrument symbol. Present on Alpaca; optional for other brokers. */
+      symbol?: string; side?: 'buy' | 'sell' }
+  | { execType: 'FILL';         orderId: string; clientOrderId: string; filled: number; avgPrice: number; timestamp: number;
+      /** Broker-supplied instrument symbol. Present on Alpaca; optional for other brokers. */
+      symbol?: string; side?: 'buy' | 'sell' }
   | { execType: 'REJECT';       orderId: string; clientOrderId: string; reason: string; timestamp: number }
   | { execType: 'CANCEL';       orderId: string; clientOrderId: string; timestamp: number }
   | { execType: 'EXPIRE';       orderId: string; clientOrderId: string; timestamp: number }
