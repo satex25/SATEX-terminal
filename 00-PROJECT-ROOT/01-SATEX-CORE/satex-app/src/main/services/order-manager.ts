@@ -23,6 +23,7 @@ import {
   MAX_POSITION_CONCENTRATION, DEFAULT_EQUITY
 } from '@shared/constants'
 import { randomUUID } from 'node:crypto'
+import type { AccountSnapshot } from '@shared/broker/account-syncer'
 
 export interface OrderValidationContext {
   /** Current quote/last price for the symbol — used for notional computation. */
@@ -306,16 +307,22 @@ export class OrderManager {
     this.rebuildEquity()
   }
 
-  // ── Sync from Alpaca (live mode) ─────────────────────────────────────────────
-  syncFromAlpaca(snap: { equity: number; cash: number; buyingPower: number }, alpacaPositions: Position[]): void {
+  // ── Sync from broker snapshot ────────────────────────────────────────────────
+  /** Canonical sync entry point — accepts the broker-agnostic AccountSnapshot. */
+  syncFromSnapshot(snap: AccountSnapshot): void {
     this.account.equity      = snap.equity
     this.account.cash        = snap.cash
     this.account.buyingPower = snap.buyingPower
     this.positions.clear()
-    for (const p of alpacaPositions) this.positions.set(p.symbol, p)
-    this.account.openPositions = alpacaPositions
+    for (const p of snap.positions) this.positions.set(p.symbol, p)
+    this.account.openPositions = snap.positions
     this.account.dailyPnl      = snap.equity - this.sessionStartEquity
-    log.debug('account synced from alpaca', { equity: snap.equity, positions: alpacaPositions.length })
+    log.debug('account synced from alpaca', { equity: snap.equity, positions: snap.positions.length })
+  }
+
+  /** @deprecated Use syncFromSnapshot. Removed in L1.A Task 4.1. */
+  syncFromAlpaca(snap: { equity: number; cash: number; buyingPower: number }, alpacaPositions: Position[]): void {
+    this.syncFromSnapshot({ ...snap, positions: alpacaPositions, observedAt: Date.now() })
   }
 
   // ── Signal helpers ───────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { OrderManager, type OrderValidationContext } from './order-manager'
 import type { OrderRequest, StrategySignal } from '../../shared/types'
+import type { AccountSnapshot } from '../../shared/broker/account-syncer'
 
 function baseBuy(overrides?: Partial<OrderRequest>): OrderRequest {
   return {
@@ -405,5 +406,72 @@ describe('resetToPaper — clean-sandbox reset for the data-feed switch', () => 
     om.armKillSwitch('test')
     om.resetToPaper()
     expect(om.getAccount().killSwitchArmed).toBe(true)
+  })
+})
+
+describe('OrderManager — syncFromSnapshot (F.1 L1.A Task 1.7)', () => {
+  it('syncFromSnapshot accepts AccountSnapshot directly and sets equity', () => {
+    const om = new OrderManager(100_000)
+    const snap: AccountSnapshot = {
+      equity: 50_000,
+      cash: 50_000,
+      buyingPower: 100_000,
+      positions: [],
+      observedAt: Date.now(),
+    }
+    om.syncFromSnapshot(snap)
+    expect(om.getAccount().equity).toBe(50_000)
+  })
+
+  it('syncFromSnapshot sets cash and buyingPower', () => {
+    const om = new OrderManager(100_000)
+    const snap: AccountSnapshot = {
+      equity: 75_000,
+      cash: 30_000,
+      buyingPower: 60_000,
+      positions: [],
+      observedAt: Date.now(),
+    }
+    om.syncFromSnapshot(snap)
+    const acct = om.getAccount()
+    expect(acct.cash).toBe(30_000)
+    expect(acct.buyingPower).toBe(60_000)
+  })
+
+  it('syncFromSnapshot replaces positions from the snapshot', () => {
+    const om = new OrderManager(100_000)
+    const pos: import('../../shared/types').Position = {
+      symbol: 'NVDA', quantity: 10, avgPrice: 100,
+      unrealizedPnl: 0, realizedPnl: 0, openedAt: Date.now(),
+    }
+    const snap: AccountSnapshot = {
+      equity: 100_000, cash: 100_000, buyingPower: 200_000,
+      positions: [pos], observedAt: Date.now(),
+    }
+    om.syncFromSnapshot(snap)
+    expect(om.getPosition('NVDA')).toBeDefined()
+    expect(om.getAccount().openPositions).toHaveLength(1)
+  })
+
+  it('syncFromSnapshot computes dailyPnl against sessionStartEquity', () => {
+    const om = new OrderManager(100_000)
+    om.setSessionStartEquity(100_000)
+    const snap: AccountSnapshot = {
+      equity: 98_000, cash: 98_000, buyingPower: 196_000,
+      positions: [], observedAt: Date.now(),
+    }
+    om.syncFromSnapshot(snap)
+    expect(om.getAccount().dailyPnl).toBeCloseTo(-2_000)
+  })
+
+  it('legacy syncFromAlpaca still forwards correctly through syncFromSnapshot', () => {
+    const om = new OrderManager(100_000)
+    om.setSessionStartEquity(100_000)
+    om.syncFromAlpaca({ equity: 99_000, cash: 99_000, buyingPower: 198_000 }, [])
+    const acct = om.getAccount()
+    expect(acct.equity).toBe(99_000)
+    expect(acct.cash).toBe(99_000)
+    expect(acct.buyingPower).toBe(198_000)
+    expect(acct.dailyPnl).toBeCloseTo(-1_000)
   })
 })
