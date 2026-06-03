@@ -17,6 +17,7 @@ import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '../services/env'
 import { evaluateDataSourceSwitch } from './data-source-guard'
+import { handleOrderEvent } from './order-event-router'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
 import { AlpacaBrokerSession } from '../services/alpaca/broker-session'
@@ -1950,56 +1951,18 @@ export class TradingEngine {
    * its own accounting separately).
    */
   private onOrderEvent(e: OrderEvent): void {
-    // Terminal events that aren't FILL: clean up the broker→satex map so
-    // long-running sessions don't accumulate stale entries (e.g., orders
-    // that were ACK'd but later rejected/canceled never enter the FILL path).
-    if (e.execType === 'REJECT' || e.execType === 'CANCEL' || e.execType === 'EXPIRE') {
-      this.brokerOrderIdToSatexId.delete(e.orderId)
-      return
-    }
-    if (e.execType !== 'FILL') return  // Ignore ACK / PARTIAL_FILL
-
-    // ── Parent-order path (F.1 L1.A 2.3) ──────────────────────────────────
-    // The engine registered this mapping at submit time. If it's here, this
-    // FILL belongs to an order the engine submitted, not a bracket child.
-    const satexOrderId = this.brokerOrderIdToSatexId.get(e.orderId)
-    if (satexOrderId !== undefined) {
-      this.brokerOrderIdToSatexId.delete(e.orderId)  // one-shot; clean up immediately
-      this.om.fillOrder(satexOrderId, e.avgPrice)
-      // S1-6: slippage capture — moved here from the synchronous submitOrder
-      // return path (L1.A 2.3). entryFeatures is only set for buy orders, so
-      // this is a no-op for any future sell-entry orders.
-      const ef = this.entryFeatures.get(satexOrderId)
-      if (ef && ef.quoteAtSubmit != null && ef.quoteAtSubmit > 0) {
-        ef.entrySlippageBps = (e.avgPrice - ef.quoteAtSubmit) / ef.quoteAtSubmit * 10_000
-      }
-      log.info('parent order filled', { brokerOrderId: e.orderId, satexOrderId, avgPrice: e.avgPrice })
-      return
-    }
-
-    // ── Bracket-child path (F.1 L1.A 2.1) ─────────────────────────────────
-    // For now we only learn from sell-fills that close a position we opened.
-    // Buy-fills (covering shorts) would mirror — out of scope until shorts.
-    if (e.side !== 'sell') return
-    const symbol = e.symbol
-    if (!symbol) return  // No symbol — cannot route to entry; should not occur for Alpaca fills.
-    const found = this.findOpenEntryForSymbol(symbol)
-    if (!found) {
-      log.debug('alpaca bracket fill: no matching entry', { symbol, orderId: e.orderId })
-      return
-    }
-    const [entryId, entry] = found
-    this.recordTradeClose({
-      symbol,
-      quantity: e.filled,
-      fillPrice: e.avgPrice,
-      entry,
-      entryId,
-      source: 'alpaca-bracket',
-    })
-    // Refresh account snapshot so equity reflects the fill immediately
-    // rather than waiting on the next 15s sync.
-    this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount())
+    // Delegate to the pure handleOrderEvent helper so this logic is
+    // unit-testable without instantiating the full engine.
+    // See src/main/core/order-event-router.ts + order-event-router.test.ts.
+    handleOrderEvent({
+      om:                      this.om,
+      brokerOrderIdToSatexId:  this.brokerOrderIdToSatexId,
+      entryFeatures:           this.entryFeatures,
+      findOpenEntryForSymbol:  (s) => this.findOpenEntryForSymbol(s),
+      recordTradeClose:        (args) => this.recordTradeClose(args),
+      fireAndForget:           (lbl, op) => this.fireAndForget(lbl, op),
+      syncBrokerAccount:       () => this.syncBrokerAccount(),
+    }, e)
   }
 
   /** Walk entryFeatures looking for the oldest open entry on this symbol.
