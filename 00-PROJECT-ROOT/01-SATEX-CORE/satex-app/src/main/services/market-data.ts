@@ -11,7 +11,7 @@ import { isUsEquityMarketOpen } from '@shared/market-hours'
 import { shortId } from './id-generator'
 import { mulberry32, randomSeed, type Rng } from './rng'
 import { createLogger } from './logger'
-import type { MarketDataSource, Unsub } from '@shared/broker/market-data-source'
+import type { MarketClockSnapshot, MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 
 /** Power-user escape hatch: set SATEX_SIMULATOR_24_7=true to keep the
  *  simulator emitting fake ticks around the clock for off-hours testing.
@@ -71,6 +71,8 @@ export class MarketSimulator implements MarketDataSource {
   /** Persists the last inferred side per symbol so flat ticks (price ==
    *  previous) keep the previous direction instead of dropping to neutral. */
   private lastSide  = new Map<string, TradeSide>()
+  /** Wall-clock ms of the most recent tick emission. 0 = never ticked. */
+  private lastTickAt = 0
 
   /**
    * @param seed             — deterministic RNG seed (omit for random)
@@ -178,6 +180,15 @@ export class MarketSimulator implements MarketDataSource {
     return [...s.candles, s.currentCandle].slice(-limit)
   }
 
+  // ── F.1 L1.A: safe defaults (simulator has no broker REST surface) ────────
+  async getBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getCryptoBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getClock(): Promise<MarketClockSnapshot> {
+    return { isOpen: true, nextOpen: 0, nextClose: Number.MAX_SAFE_INTEGER }
+  }
+  isConnected(): boolean { return true }
+  msSinceLastTick(): number { return this.lastTickAt > 0 ? Date.now() - this.lastTickAt : 0 }
+
   private quoteFrom(s: SymbolState): Quote {
     return {
       symbol: s.entry.symbol, name: s.entry.name, assetClass: s.entry.assetClass,
@@ -236,6 +247,7 @@ export class MarketSimulator implements MarketDataSource {
         size: vol, side: inferredSide, provenance: 'inferred',
       })
     }
+    this.lastTickAt = now
     for (const l of this.quoteListeners) l(batch)
     if (trades.length > 0) for (const l of this.tradeListeners) l(trades)
   }

@@ -8,10 +8,17 @@
  * Concrete implementations stay in main/: MarketSimulator, LiveMarket,
  * ReplaySource. F.1 task A.0.
  */
-import type { Candle, NewsItem, Quote, Trade } from '@shared/types'
+import type { Candle, HistoricalTimeframe, NewsItem, Quote, Trade } from '@shared/types'
 
 /** Unsubscribe handle returned by every `on*` subscription. */
 export type Unsub = () => void
+
+/** Broker-reported market clock snapshot (unix-ms). F.1 L1.A. */
+export interface MarketClockSnapshot {
+  isOpen:    boolean
+  nextOpen:  number  // unix ms
+  nextClose: number  // unix ms
+}
 
 /** The data-feed contract shared by simulator, live-broker WS, and replay. */
 export interface MarketDataSource {
@@ -32,4 +39,16 @@ export interface MarketDataSource {
   getQuote(symbol: string): Quote | undefined
   getAllQuotes(): Quote[]
   getCandles(symbol: string, limit?: number): Candle[]
+
+  // ── F.1 L1.A extension: broker-data methods previously on AlpacaClient ────
+  /** Pull historical bars over `[startIso, endIso?]`. Empty array on no-data. */
+  getBars(symbol: string, tf: HistoricalTimeframe, startIso: string, endIso?: string): Promise<Candle[]>
+  /** Crypto-scoped bars; no session boundaries. */
+  getCryptoBars(symbol: string, tf: HistoricalTimeframe, startIso: string, endIso?: string): Promise<Candle[]>
+  /** Broker-reported market clock snapshot. */
+  getClock(): Promise<MarketClockSnapshot>
+  /** True iff primary data WS is currently open. Simulator + Replay always return true. */
+  isConnected(): boolean
+  /** Milliseconds since the most-recent tick was processed. 0 if never. */
+  msSinceLastTick(): number
 }

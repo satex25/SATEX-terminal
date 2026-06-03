@@ -142,3 +142,26 @@ describe('MarketSimulator — seedOverrides (Task 3, 2026-05-26)', () => {
     }
   })
 })
+
+describe('MarketSimulator — F.1 L1.A interface compliance', () => {
+  it('getBars returns []', async () => {
+    const sim = new MarketSimulator()
+    expect(await sim.getBars('AAPL', '1Min', '2026-06-02T13:00:00Z')).toEqual([])
+  })
+  it('getCryptoBars returns []', async () => {
+    const sim = new MarketSimulator()
+    expect(await sim.getCryptoBars('BTC', '1Min', '2026-06-02T00:00:00Z')).toEqual([])
+  })
+  it('getClock reports isOpen=true', async () => {
+    const sim = new MarketSimulator()
+    expect((await sim.getClock()).isOpen).toBe(true)
+  })
+  it('isConnected is always true', () => {
+    const sim = new MarketSimulator()
+    expect(sim.isConnected()).toBe(true)
+  })
+  it('msSinceLastTick returns 0 when no ticks have been emitted', () => {
+    const sim = new MarketSimulator()
+    expect(sim.msSinceLastTick()).toBe(0)
+  })
+})

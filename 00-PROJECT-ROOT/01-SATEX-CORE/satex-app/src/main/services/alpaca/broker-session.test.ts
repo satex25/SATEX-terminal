@@ -71,6 +71,12 @@ function fakeMarket(overrides: Partial<MarketDataSource> = {}) {
     getQuote:     () => undefined,
     getAllQuotes: () => [],
     getCandles:   () => [],
+    // F.1 L1.A safe defaults for the test double
+    getBars:        async () => [],
+    getCryptoBars:  async () => [],
+    getClock:       async () => ({ isOpen: true, nextOpen: 0, nextClose: Number.MAX_SAFE_INTEGER }),
+    isConnected:    () => true,
+    msSinceLastTick: () => 0,
     startCalls: () => startCalls,
     stopCalls:  () => stopCalls,
   }

@@ -223,3 +223,40 @@ describe('ReplaySource.tick — wall-clock anomaly detection (B4, v0.4.3)', () =
     expect(snap.speed).toBe(5)
   })
 })
+
+describe('ReplaySource — F.1 L1.A interface compliance', () => {
+  // Minimal tape setup reused across all tests in this describe block.
+  const T0 = 3_000_000_000_000
+  const TAPE_LEN_MS = 5_000
+
+  beforeEach(() => {
+    mockReadTapeRange.mockReset()
+    mockGetTapeBounds.mockReset()
+    mockGetTapeManifest.mockReset().mockReturnValue(null)
+
+    mockGetTapeBounds.mockReturnValue({
+      firstTs: T0, lastTs: T0 + TAPE_LEN_MS, count: 5,
+    })
+    mockReadTapeRange.mockReturnValue([])
+  })
+
+  it('getBars returns []', async () => {
+    const replay = new ReplaySource('test')
+    expect(await replay.getBars('AAPL', '1Min', '2026-06-02T13:00:00Z')).toEqual([])
+  })
+
+  it('getCryptoBars returns []', async () => {
+    const replay = new ReplaySource('test')
+    expect(await replay.getCryptoBars('BTC', '1Min', '2026-06-02T00:00:00Z')).toEqual([])
+  })
+
+  it('getClock reports isOpen=true', async () => {
+    const replay = new ReplaySource('test')
+    expect((await replay.getClock()).isOpen).toBe(true)
+  })
+
+  it('isConnected is always true', () => {
+    const replay = new ReplaySource('test')
+    expect(replay.isConnected()).toBe(true)
+  })
+})

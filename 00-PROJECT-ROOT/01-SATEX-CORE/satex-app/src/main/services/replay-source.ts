@@ -39,7 +39,7 @@ import {
 } from '@shared/constants'
 import type { Candle, NewsItem, Quote, TickTapeRow, Trade } from '@shared/types'
 import * as db from './persistence'
-import type { MarketDataSource, Unsub } from './market-data'
+import type { MarketClockSnapshot, MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 import { createLogger } from './logger'
 import { verifyTapeManifest, type ManifestVerdict } from './tape-integrity'
 
@@ -103,6 +103,8 @@ export class ReplaySource implements MarketDataSource {
   private tickTimer: NodeJS.Timeout | null = null
   private currentCandleStart = 0
   private emittedTicks = 0
+  /** Wall-clock ms of the most recent tape row emitted. 0 = never. */
+  private lastTickAt = 0
   /** B4 (2026-05-18) — wall-clock at last tick(). Drives anomaly detection so
    *  NTP step-backward / laptop-suspend doesn't silently advance the cursor.
    *  Zero before the first tick after start() / resume() / setSpeed(). */
@@ -291,6 +293,15 @@ export class ReplaySource implements MarketDataSource {
     if (!s) return []
     return [...s.candles, s.currentCandle].slice(-limit)
   }
+
+  // ── F.1 L1.A: safe defaults (replay has no broker REST surface) ───────────
+  async getBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getCryptoBars(_symbol: string, _tf: string, _startIso: string, _endIso?: string): Promise<Candle[]> { return [] }
+  async getClock(): Promise<MarketClockSnapshot> {
+    return { isOpen: true, nextOpen: 0, nextClose: Number.MAX_SAFE_INTEGER }
+  }
+  isConnected(): boolean { return true }
+  msSinceLastTick(): number { return this.lastTickAt > 0 ? Date.now() - this.lastTickAt : 0 }
 
   // ── Replay control surface ──────────────────────────────────────────────────
 
@@ -567,6 +578,7 @@ export class ReplaySource implements MarketDataSource {
     if (i > 0) this.prefetched.splice(0, i)
     this.cursorTs = target
     this.emittedTicks += batch.length
+    if (batch.length > 0) this.lastTickAt = now
 
     if (batch.length > 0) {
       // De-duplicate by symbol — keep the latest snapshot only, matching how
