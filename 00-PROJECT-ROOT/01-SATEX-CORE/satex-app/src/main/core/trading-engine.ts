@@ -20,6 +20,7 @@ import { evaluateDataSourceSwitch } from './data-source-guard'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
 import { AlpacaBrokerSession } from '../services/alpaca/broker-session'
+import { AlpacaAccountSyncer } from '../services/alpaca/account-syncer'
 import type { OrderEvent } from '@shared/broker/order-router'
 import { MarketSimulator, type MarketDataSource, type Unsub } from '../services/market-data'
 import { LiveMarket } from '../services/live-market'
@@ -183,7 +184,7 @@ export class TradingEngine {
   private static TICK_WINDOW_MS = 1000
   /** Adversarial finding C2 (2026-05-16) — gates the one-shot
    *  sessionStartEquity sync that runs on the first successful Alpaca
-   *  account sync of the session. See `syncAlpacaAccount`. */
+   *  account sync of the session. See `syncBrokerAccount`. */
   private alpacaFirstSyncDone = false
   private statusTimer:     NodeJS.Timeout | null = null
   private accountSyncTimer:NodeJS.Timeout | null = null
@@ -499,8 +500,8 @@ export class TradingEngine {
 
     // Periodic account sync from Alpaca
     if (this.alpaca) {
-      this.accountSyncTimer = setInterval(() => this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount()), 15_000)
-      this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+      this.accountSyncTimer = setInterval(() => this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount()), 15_000)
+      this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount())
       this.clockSyncTimer = setInterval(() => this.fireAndForget('syncMarketClock', () => this.syncMarketClock()), 30_000)
       this.fireAndForget('syncMarketClock', () => this.syncMarketClock())
     } else {
@@ -1043,14 +1044,13 @@ export class TradingEngine {
           keyId: creds.keyId, secretKey: creds.secretKey,
           baseUrl: resolveBaseUrl(env.alpacaBaseUrl), dataUrl: env.alpacaDataUrl, feed: creds.feed,
         })
-        const acct = await alpaca.getAccount()
-        const positions = (await alpaca.getPositions()).map(p => AlpacaClient.toSatexPosition(p, Date.now()))
+        const initialSnap = await new AlpacaAccountSyncer(alpaca).getSnapshot()
         // COMMIT (local, atomic).
         this.uninstallMarketWiring(); toreDown = true
         await this.teardownSession()                  // tears down OLD session (data.stop + disconnectAccountStream + observer)
         this.alpaca = alpaca
-        this.om.syncFromAlpaca({ equity: acct.equity, cash: acct.cash, buyingPower: acct.buyingPower }, positions)
-        this.om.setSessionStartEquity(acct.equity)
+        this.om.syncFromSnapshot(initialSnap)
+        this.om.setSessionStartEquity(initialSnap.equity)
         this.market = new LiveMarket(alpaca)
         this.session = AlpacaBrokerSession.create(alpaca, this.market)
         // F.1 L1.A 2.1: wire bracket-fill learning via OrderRouter.onUpdate.
@@ -1128,7 +1128,7 @@ export class TradingEngine {
       await this.session.connect()
       // Re-attach recorder ingest.
       this.marketSubs.push(this.market.onQuotes(q => this.recorder?.ingest(q)))
-      this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+      this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount())
       this.fireAndForget('syncMarketClock', () => this.syncMarketClock())
       log.info('alpaca reconnected', { mode, feed: stored.feed, baseUrl })
       return { ok: true }
@@ -1773,9 +1773,9 @@ export class TradingEngine {
   }
 
   private async syncMarketClock(): Promise<void> {
-    if (!this.alpaca) return
+    if (!this.session) return
     try {
-      const clock = await this.alpaca.getClock()
+      const clock = await this.session.data.getClock()
       this.om.setMarketOpen(clock.isOpen)
     } catch (err) {
       log.warn('clock sync failed', { err: String(err) })
@@ -1993,7 +1993,7 @@ export class TradingEngine {
     })
     // Refresh account snapshot so equity reflects the fill immediately
     // rather than waiting on the next 15s sync.
-    this.fireAndForget('syncAlpacaAccount', () => this.syncAlpacaAccount())
+    this.fireAndForget('syncBrokerAccount', () => this.syncBrokerAccount())
   }
 
   /** Walk entryFeatures looking for the oldest open entry on this symbol.
@@ -2012,17 +2012,11 @@ export class TradingEngine {
     return bestId && bestValue ? [bestId, bestValue] : null
   }
 
-  private async syncAlpacaAccount(): Promise<void> {
-    if (!this.alpaca) return
+  private async syncBrokerAccount(): Promise<void> {
+    if (!this.session) return
     try {
-      const [snap, positions] = await Promise.all([
-        this.alpaca.getAccount(),
-        this.alpaca.getPositions(),
-      ])
-      const satexPositions = positions.map((p) =>
-        AlpacaClient.toSatexPosition(p, Date.now())
-      )
-      this.om.syncFromAlpaca(snap, satexPositions)
+      const snap = await this.session.account.getSnapshot()
+      this.om.syncFromSnapshot(snap)
 
       // Adversarial finding C2 (2026-05-16) — on the first sync of the session,
       // realign `sessionStartEquity` to the broker-reported equity AND persist
