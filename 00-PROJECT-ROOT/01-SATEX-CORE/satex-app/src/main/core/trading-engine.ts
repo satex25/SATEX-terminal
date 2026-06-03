@@ -774,8 +774,8 @@ export class TradingEngine {
     // Equity feed: live = Alpaca client present AND WS authenticated.
     // simulator = no Alpaca client (engine fell back to MarketSimulator).
     // off = Alpaca client built but WS down (creds saved, network bad, etc.).
-    const equity: FeedStatus['equity'] = this.alpaca
-      ? (this.alpaca.isMarketConnected ? 'live' : 'off')
+    const equity: FeedStatus['equity'] = this.session
+      ? (this.session.state === 'CONNECTED' ? 'live' : 'off')
       : 'simulator'
     // Futures: IEX has no futures coverage; values for ES/NQ/CL/GC come from
     // seedHistoricalCandles' synthetic GBM walk. Always 'synthetic' today.
@@ -951,7 +951,7 @@ export class TradingEngine {
   }
 
   async cancelOrder(id: string): Promise<void> {
-    if (this.alpaca) { try { await this.alpaca.cancelOrder(id) } catch (e) { log.warn('cancel failed', { id, err: String(e) }) } }
+    if (this.session) { try { await this.session.orders.cancel(id) } catch (e) { log.warn('cancel failed', { id, err: String(e) }) } }
     this.om.cancelOrder(id)
   }
 
@@ -1739,10 +1739,10 @@ export class TradingEngine {
       this.tickWindow.shift()
     }
     const status: SystemStatus = {
-      connected:   this.alpaca ? this.alpaca.isMarketConnected : true,
+      connected:   this.session ? this.session.state === 'CONNECTED' : true,
       mode:        this.alpaca ? 'paper' : 'simulator',
       tickHz:      this.tickWindow.length,
-      latencyMs:   this.alpaca ? this.alpaca.msSinceLastTick : 0,
+      latencyMs:   this.session ? this.session.data.msSinceLastTick() : 0,
       cpuPct:      0,
       memMb:       Math.round(mem.heapUsed / 1024 / 1024),
       uptime:      Math.floor((Date.now() - this.startedAt) / 1000),
