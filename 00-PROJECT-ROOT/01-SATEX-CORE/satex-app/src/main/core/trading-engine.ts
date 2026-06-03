@@ -14,6 +14,7 @@
 import { app, powerMonitor } from 'electron'
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { getEnv } from '../services/env'
 import { evaluateDataSourceSwitch } from './data-source-guard'
 import { AlpacaClient } from '../services/alpaca'
@@ -210,6 +211,10 @@ export class TradingEngine {
   private static TRADE_BATCH_MS = 50
   /** Snapshot of features at order entry, keyed by order id — drives brain.learn on close. */
   private entryFeatures = new Map<string, EntryFeaturesValue>()
+  /** F.1 L1.A 2.3 — maps broker order ID (from OrderAck.brokerOrderId) → SATEX order ID
+   *  (from om.createOrder) so the async FILL event in onOrderEvent can route to the correct
+   *  OM entry. Entries are removed after the FILL event is processed. */
+  private brokerOrderIdToSatexId = new Map<string, string>()
   /** Last seen tactics state — used to detect transitions so we can vault them. */
   private lastTacticsState: TacticsStatus['state'] | null = null
 
@@ -920,19 +925,15 @@ export class TradingEngine {
       } catch (e) { log.debug('feature capture failed', { err: String(e) }) }
     }
 
-    if (this.alpaca) {
+    if (this.session) {
       try {
-        const result = await this.alpaca.submitOrder(req)
-        order.fillPrice = result.filledAvgPrice ?? undefined
-        // S1-6: update entryFeatures with realized slippage now that the
-        // actual fill came back. Skipped when reference quote or fill is
-        // missing (simulator no-quote case, or Alpaca returned null fill).
-        const ef = this.entryFeatures.get(order.id)
-        if (ef && order.fillPrice != null && ef.quoteAtSubmit != null && ef.quoteAtSubmit > 0) {
-          ef.entrySlippageBps = (order.fillPrice - ef.quoteAtSubmit) / ef.quoteAtSubmit * 10_000
-        }
-        this.om.fillOrder(order.id, order.fillPrice ?? req.limitPrice ?? 0)
-        log.info('alpaca paper order submitted', { alpacaId: result.id, status: result.status })
+        const clientOrderId = randomUUID()
+        const ack = await this.session.orders.submit({ ...req, clientOrderId })
+        // F.1 L1.A 2.3: register broker→SATEX id mapping so onOrderEvent's FILL
+        // handler can call om.fillOrder with the correct SATEX order id.
+        // S1-6 slippage capture now happens in the async FILL handler — see onOrderEvent.
+        this.brokerOrderIdToSatexId.set(ack.brokerOrderId, order.id)
+        log.info('order submitted', { brokerOrderId: ack.brokerOrderId, clientOrderId })
       } catch (err) {
         this.om.rejectOrder(order.id, String(err))
         return { ok: false, reason: String(err) }
@@ -1922,26 +1923,47 @@ export class TradingEngine {
   }
 
   /**
-   * Canonical order-event handler (F.1 L1.A 2.1).
+   * Canonical order-event handler (F.1 L1.A 2.1 / 2.3).
    *
    * Subscribed to OrderRouter.onUpdate via session.orders.onUpdate.
    * AlpacaOrderRouter translates every wire trade_update to an OrderEvent
    * before calling this handler — no Alpaca-specific parsing here.
    *
    * Handles two categories of FILL events:
-   *   - Engine-managed orders (clientOrderId !== ''): OrderManager already
-   *     handles their fill via onOrderFill → recordTradeClose. We dedup by
-   *     checking orderId against OM to avoid double-learning.
-   *   - Bracket child orders (stop/TP, clientOrderId === ''): these never
-   *     round-tripped through our OrderManager. Symbol + side are carried on
-   *     the FILL event (populated by AlpacaOrderRouter.translate) so we can
-   *     route to recordTradeClose for brain learning.
+   *   - Parent orders (submitted by the engine via submitOrder): discriminated
+   *     by presence in brokerOrderIdToSatexId. Calls om.fillOrder with the
+   *     SATEX order id, captures S1-6 slippage, then cleans up the map entry.
+   *   - Bracket child orders (stop/TP, clientOrderId === ''): not in
+   *     brokerOrderIdToSatexId. Symbol + side are carried on the FILL event
+   *     (populated by AlpacaOrderRouter.translate) so we can route to
+   *     recordTradeClose for brain learning.
+   *
+   * om.fillOrder is called exactly once per FILL event (either in the parent
+   * path or not at all in the bracket-child path — recordTradeClose handles
+   * its own accounting separately).
    */
   private onOrderEvent(e: OrderEvent): void {
     if (e.execType !== 'FILL') return  // Ignore ACK / PARTIAL_FILL / CANCEL / REJECT / EXPIRE
-    // Dedup: if OrderManager already has this orderId, its onOrderFill path
-    // will run recordTradeClose. Avoid double-learning.
-    if (this.om.getOrders().some(o => o.id === e.orderId)) return
+
+    // ── Parent-order path (F.1 L1.A 2.3) ──────────────────────────────────
+    // The engine registered this mapping at submit time. If it's here, this
+    // FILL belongs to an order the engine submitted, not a bracket child.
+    const satexOrderId = this.brokerOrderIdToSatexId.get(e.orderId)
+    if (satexOrderId !== undefined) {
+      this.brokerOrderIdToSatexId.delete(e.orderId)  // one-shot; clean up immediately
+      this.om.fillOrder(satexOrderId, e.avgPrice)
+      // S1-6: slippage capture — moved here from the synchronous submitOrder
+      // return path (L1.A 2.3). entryFeatures is only set for buy orders, so
+      // this is a no-op for any future sell-entry orders.
+      const ef = this.entryFeatures.get(satexOrderId)
+      if (ef && ef.quoteAtSubmit != null && ef.quoteAtSubmit > 0) {
+        ef.entrySlippageBps = (e.avgPrice - ef.quoteAtSubmit) / ef.quoteAtSubmit * 10_000
+      }
+      log.info('parent order filled', { brokerOrderId: e.orderId, satexOrderId, avgPrice: e.avgPrice })
+      return
+    }
+
+    // ── Bracket-child path (F.1 L1.A 2.1) ─────────────────────────────────
     // For now we only learn from sell-fills that close a position we opened.
     // Buy-fills (covering shorts) would mirror — out of scope until shorts.
     if (e.side !== 'sell') return
