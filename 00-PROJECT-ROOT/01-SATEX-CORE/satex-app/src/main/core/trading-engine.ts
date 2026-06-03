@@ -211,9 +211,10 @@ export class TradingEngine {
   private static TRADE_BATCH_MS = 50
   /** Snapshot of features at order entry, keyed by order id — drives brain.learn on close. */
   private entryFeatures = new Map<string, EntryFeaturesValue>()
-  /** F.1 L1.A 2.3 — maps broker order ID (from OrderAck.brokerOrderId) → SATEX order ID
-   *  (from om.createOrder) so the async FILL event in onOrderEvent can route to the correct
-   *  OM entry. Entries are removed after the FILL event is processed. */
+  /** Tracks brokerOrderId → SATEX orderId for parent orders submitted by the
+   *  engine. Populated post-submit; cleared on FILL/REJECT/CANCEL/EXPIRE so
+   *  long-running sessions don't accumulate stale mappings. Bracket-child
+   *  fills have broker order IDs not present here. */
   private brokerOrderIdToSatexId = new Map<string, string>()
   /** Last seen tactics state — used to detect transitions so we can vault them. */
   private lastTacticsState: TacticsStatus['state'] | null = null
@@ -933,7 +934,7 @@ export class TradingEngine {
         // handler can call om.fillOrder with the correct SATEX order id.
         // S1-6 slippage capture now happens in the async FILL handler — see onOrderEvent.
         this.brokerOrderIdToSatexId.set(ack.brokerOrderId, order.id)
-        log.info('order submitted', { brokerOrderId: ack.brokerOrderId, clientOrderId })
+        log.info('order acknowledged', { brokerOrderId: ack.brokerOrderId, clientOrderId })
       } catch (err) {
         this.om.rejectOrder(order.id, String(err))
         return { ok: false, reason: String(err) }
@@ -1943,7 +1944,14 @@ export class TradingEngine {
    * its own accounting separately).
    */
   private onOrderEvent(e: OrderEvent): void {
-    if (e.execType !== 'FILL') return  // Ignore ACK / PARTIAL_FILL / CANCEL / REJECT / EXPIRE
+    // Terminal events that aren't FILL: clean up the broker→satex map so
+    // long-running sessions don't accumulate stale entries (e.g., orders
+    // that were ACK'd but later rejected/canceled never enter the FILL path).
+    if (e.execType === 'REJECT' || e.execType === 'CANCEL' || e.execType === 'EXPIRE') {
+      this.brokerOrderIdToSatexId.delete(e.orderId)
+      return
+    }
+    if (e.execType !== 'FILL') return  // Ignore ACK / PARTIAL_FILL
 
     // ── Parent-order path (F.1 L1.A 2.3) ──────────────────────────────────
     // The engine registered this mapping at submit time. If it's here, this
