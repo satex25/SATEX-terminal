@@ -1417,25 +1417,22 @@ export class TradingEngine {
 
   // ── Historical-day importer ─────────────────────────────────────────────────
   async importHistoricalDay(req: HistoricalImportRequest): Promise<HistoricalImportResult> {
-    // Fall back to a REST-only AlpacaClient when the engine booted in
-    // simulator mode (SATEX_USE_SIMULATOR=true, or no creds at boot) but the
-    // user has since saved credentials. Without this fallback `this.alpaca`
-    // is null and the importer fails with "No Alpaca credentials" even
-    // though the credential store has perfectly good keys.
-    const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
-    const importer = new HistoricalImporter(alpaca)
+    // Pass this.market (always non-null after initialize). In live mode
+    // LiveMarket.getBars() delegates to Alpaca REST. In simulator mode
+    // MarketSimulator.getBars() returns [] — the importer surfaces "no bars"
+    // gracefully rather than failing with a credentials error.
+    const importer = new HistoricalImporter(this.market)
     return importer.import(req)
   }
 
-  /** Replay-free historical bars for the chart's off-hours backfill. Reuses the
-   *  same REST-only Alpaca fallback as importHistoricalDay so it works when the
-   *  engine booted in simulator mode but the user has since saved credentials.
-   *  Crucially this NEVER touches `this.replay`, `this.market`, wiring, or
-   *  `dataSource` — it is a pure read, so the chart can show the last NY session
-   *  without the Replay workspace taking over. */
+  /** Replay-free historical bars for the chart's off-hours backfill. Routes
+   *  through this.market so LiveMarket delegates to Alpaca REST and
+   *  MarketSimulator returns [] gracefully. Crucially this NEVER touches
+   *  `this.replay`, wiring, or `dataSource` — it is a pure read, so the
+   *  chart can show the last NY session without the Replay workspace taking
+   *  over. */
   async getHistoricalBars(req: HistoricalBarsRequest): Promise<HistoricalBarsResult> {
-    const alpaca = this.alpaca ?? this.buildRestOnlyAlpacaClient()
-    const importer = new HistoricalImporter(alpaca)
+    const importer = new HistoricalImporter(this.market)
     // Asset-class dispatch (2026-05-26): crypto trades 24/7 so "last completed
     // NY session date" doesn't apply — hit the v1beta3 crypto endpoint for the
     // last 24h instead. The IPC contract is unchanged; we look the class up
@@ -1451,8 +1448,8 @@ export class TradingEngine {
     if (this.replay && this.replay.snapshot().sessionId === sessionId) {
       return { ok: false, reason: 'Stop replay before deleting the active session.' }
     }
-    // deleteSession is local-DB-only — no Alpaca call. Passing null is fine.
-    const importer = new HistoricalImporter(this.alpaca)
+    // deleteSession is local-DB-only — no data source call needed.
+    const importer = new HistoricalImporter(this.market)
     return importer.deleteSession(sessionId)
   }
 
