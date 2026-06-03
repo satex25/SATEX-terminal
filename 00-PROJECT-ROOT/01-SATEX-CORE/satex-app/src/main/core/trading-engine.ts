@@ -1149,7 +1149,7 @@ export class TradingEngine {
       paperConfigured: !!(paperStored?.keyId && paperStored?.secretKey) || (!!env.alpacaKeyId && !!env.alpacaSecretKey),
       liveConfigured:  !!(liveStored?.keyId  && liveStored?.secretKey),
       baseUrl: resolveBaseUrl(env.alpacaBaseUrl),
-      connected: this.alpaca?.isMarketConnected ?? false,
+      connected: this.session?.state === 'CONNECTED',
     }
   }
 
@@ -2117,8 +2117,8 @@ export class TradingEngine {
       dailyPnl: Math.round(acct.dailyPnl),
       openPositions: acct.openPositions.length,
       ordersThisSession: db.listOrders(this.currentSessionId).length,
-      alpacaConnected: this.alpaca?.isMarketConnected ?? false,
-      msSinceLastTick: this.alpaca?.msSinceLastTick ?? null,
+      alpacaConnected: this.session?.state === 'CONNECTED',
+      msSinceLastTick: this.session?.data.msSinceLastTick() ?? null,
       autonomous: auto ? { enabled: auto.enabled, approved: auto.approvedCount, signals: auto.signalsFired } : null,
       entryFeaturesSize: this.entryFeatures.size,
     })
