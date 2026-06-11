@@ -108,7 +108,7 @@ RUBBISH/
 
 # Dropped reference material (not SATEX source) -- see the declined in-app
 # agent-runtime directive; this is the jim-schwoebel/awesome_ai_agents README catalog.
-awesome_ai_agents-main/
+90-REFERENCE/
 
 # Obsidian vault config — workspace-local, never shared. The markdown notes in
 # Vault/ stay tracked; the .obsidian/ app-config dir does not.
@@ -129,3 +129,13 @@ Vault/Settings/
 
 # Superpowers brainstorming visual-companion mockups (transient design aids)
 .superpowers/
+
+# Vault runtime artifacts (nightly self-eval reports, session learnings) --
+# generated data, untracked by design; the READMEs stay tracked.
+Vault/Backtests/*
+!Vault/Backtests/README.md
+Vault/Learnings/*
+!Vault/Learnings/README.md
+
+# Agent PR-body scratch files
+**/.pr-body-*.md
