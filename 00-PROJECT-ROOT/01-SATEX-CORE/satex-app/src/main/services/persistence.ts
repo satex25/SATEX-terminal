@@ -177,6 +177,18 @@ function migrate(db: DB): void {
       note                TEXT NOT NULL DEFAULT ''
     );
 
+    -- 2026-06-10: Confidence-calibration outcomes (Brier / reliability loop).
+    -- One row per closed trade that carried a stated entry confidence.
+    -- Read back oldest-first into the CalibrationService rolling window.
+    CREATE TABLE IF NOT EXISTS calibration_log (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts          INTEGER NOT NULL,
+      symbol      TEXT NOT NULL,
+      confidence  REAL NOT NULL,
+      win         INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_calibration_ts ON calibration_log(ts DESC);
+
     -- Phase 9: Replay tape. Compressed quote snapshots, append-only.
     -- One row per (session, timestamp_ms, symbol). Recorder writes from live
     -- engine; ReplaySource streams back at controlled speed.
@@ -388,6 +400,32 @@ export function listBrainParams(): BrainParameter[] {
     confidence: Number(r['confidence']),
     updatedAt: Number(r['updated_at']),
   }))
+}
+
+// ─── Confidence calibration (2026-06-10) ─────────────────────────────────────
+
+export function insertCalibrationSample(s: { ts: number; symbol: string; confidence: number; win: boolean }): void {
+  openDB().prepare(`
+    INSERT INTO calibration_log (ts, symbol, confidence, win)
+    VALUES (?,?,?,?)
+  `).run(s.ts, s.symbol, s.confidence, s.win ? 1 : 0)
+}
+
+/** Keep calibration_log bounded (Observer-flood lesson): retain the newest
+ *  `keep` rows, delete the rest. Returns rows deleted. */
+export function pruneCalibrationLog(keep = 2_000): number {
+  const res = openDB().prepare(`
+    DELETE FROM calibration_log WHERE id NOT IN
+      (SELECT id FROM calibration_log ORDER BY ts DESC, id DESC LIMIT ?)
+  `).run(keep)
+  return Number(res?.changes ?? 0)
+}
+
+/** Most-recent `limit` outcomes, returned oldest→newest for window replay. */
+export function listCalibrationSamples(limit = 200): Array<{ ts: number; symbol: string; confidence: number; win: boolean }> {
+  return (openDB().prepare('SELECT ts, symbol, confidence, win FROM calibration_log ORDER BY ts DESC, id DESC LIMIT ?').all(limit) as Array<Record<string, unknown>>)
+    .map(r => ({ ts: Number(r['ts']), symbol: String(r['symbol']), confidence: Number(r['confidence']), win: Number(r['win']) === 1 }))
+    .reverse()
 }
 
 // ─── Watchlist ───────────────────────────────────────────────────────────────

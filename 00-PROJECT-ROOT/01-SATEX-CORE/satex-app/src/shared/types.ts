@@ -439,8 +439,82 @@ export interface CredentialsSetRequest {
   mode?: AccountMode
 }
 
-export interface BaiduMaskedStatus {
+/** Advisory-LLM configuration as exposed to the renderer. The API key itself
+ *  never crosses the IPC boundary — only its existence (`configured`). */
+export interface LlmStatus {
   configured: boolean
+  baseUrl: string
+  model: string
+}
+
+export interface LlmConfigSetRequest {
+  baseUrl: string
+  model: string
+  /** Empty string = keep the previously stored key (provider/model-only change). */
+  apiKey: string
+}
+
+/** Nightly self-eval surface for the Settings toggle + status line. */
+export interface SelfEvalStatus {
+  enabled: boolean
+  running: boolean
+  lastRun: {
+    finishedAt: number
+    evaluated: number
+    skipped: number
+    baselined: number
+    regressions: number
+    reportFilename: string
+  } | null
+}
+
+// ── THE WIRE — toggleable live world-news desk (2026-06-10) ────────────────
+export interface WireItem {
+  /** `sourceId:guid-or-link` — globally unique, dedupe key. */
+  id: string
+  sourceId: string
+  sourceLabel: string
+  title: string
+  link: string
+  publishedAt: number
+  fetchedAt: number
+}
+
+export interface WireSourceStatus {
+  id: string
+  label: string
+  status: 'idle' | 'ok' | 'error'
+  lastFetchAt: number | null
+  count: number
+}
+
+export interface WireSnapshot {
+  enabled: boolean
+  /** Newest-first across all channels, capped. */
+  items: WireItem[]
+  sources: WireSourceStatus[]
+  generatedAt: number
+}
+
+export interface CalibrationBucket {
+  lo: number
+  hi: number
+  n: number
+  avgConfidence: number
+  winRate: number
+}
+
+/** Rolling confidence-vs-outcome health of the decision engine.
+ *  See services/calibration.ts for the math + the downgrade-only rule. */
+export interface CalibrationSnapshot {
+  samples: number
+  minSamples: number
+  /** mean((confidence − outcome)²) over the window; null while empty. */
+  brierScore: number | null
+  buckets: CalibrationBucket[]
+  /** Downgrade-only multiplier applied to stated confidence (1 = untouched). */
+  multiplier: number
+  computedAt: number
 }
 
 export interface AiDecision {

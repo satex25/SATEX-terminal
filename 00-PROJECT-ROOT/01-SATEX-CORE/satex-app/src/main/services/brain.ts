@@ -8,12 +8,15 @@
  *      P&L of each trade as the reward signal. Weights persist via the brain
  *      table in SQLite.
  *
- *   2. Optional Baidu ERNIE 5.1 decision agent (requires stored AI Studio
- *      access token). Calls the OpenAI-compatible chat-completions endpoint
- *      at aistudio.baidu.com. Falls back gracefully when the key is missing.
+ *   2. Optional advisory LLM (provider-agnostic via services/llm.ts —
+ *      any OpenAI-compatible endpoint: Groq, OpenAI, OpenRouter, Ollama,
+ *      Baidu, …). Configured in Settings; falls back gracefully when no
+ *      config is stored. ADVISORY ONLY — the rationale string never gates,
+ *      sizes, or routes an order.
  */
 import type { AiDecision, DepthSnapshot, IndicatorSnapshot, Quote, OrderSide, BrainParameter } from '@shared/types'
-import { getBaiduKey } from './credential-store'
+import { getLlmConfig } from './credential-store'
+import { chatComplete, type LlmConfig } from './llm'
 import * as db from './persistence'
 import { createLogger } from './logger'
 
@@ -158,10 +161,10 @@ export class Brain {
     const local = this.decisionFromLocal(quote, ind)
     let llmRationale: string | null = null
 
-    const key = getBaiduKey()
-    if (key && local.confidence > 0.3) {
-      try { llmRationale = await callErnie(key, symbol, quote, ind, local) }
-      catch (e) { log.warn('ernie call failed', { err: String(e) }) }
+    const llmCfg = getLlmConfig()
+    if (llmCfg && local.confidence > 0.3) {
+      try { llmRationale = await callAdvisor(llmCfg, symbol, quote, ind, local) }
+      catch (e) { log.warn('llm advisor call failed', { err: String(e) }) }
     }
 
     return {
@@ -180,38 +183,21 @@ export class Brain {
 function clamp(n: number, lo: number, hi: number): number { return Math.max(lo, Math.min(hi, n)) }
 function confidenceOf(samples: number): number { return Math.min(1, samples / 40) }
 
-async function callErnie(
-  apiKey: string,
+/** Build the advisory prompt and call the configured provider. The transport
+ *  (timeout, auth, parsing, error caps) lives in services/llm.ts — audit §3.1's
+ *  10s AbortSignal budget applies to every call, so a hung provider can no
+ *  longer stall AutonomousTrader.runCycle. */
+async function callAdvisor(
+  cfg: LlmConfig,
   symbol: string,
   quote: Quote,
   ind: IndicatorSnapshot,
   local: { bias: 'bullish' | 'bearish' | 'neutral'; localScore: number; confidence: number },
 ): Promise<string> {
-  const body = {
-    model: 'ernie-5.1',
-    max_tokens: 90,
+  return chatComplete(cfg, {
+    system: 'You are an institutional trading advisor. Given indicator snapshot, return ONE sentence (max 35 words) on tactical bias for the symbol. No disclaimers. No advice. Just describe the technical state and qualify it. Use direct prose.',
+    user: `Symbol: ${symbol}\nLast: ${quote.last.toFixed(2)}  VWAP: ${ind.vwap.toFixed(2)}  RSI14: ${ind.rsi14.toFixed(1)}  ATR14: ${ind.atr14.toFixed(2)}\nEMA9/21/50: ${ind.ema9.toFixed(2)} / ${ind.ema21.toFixed(2)} / ${ind.ema50.toFixed(2)}\nTrend strength: ${ind.trendStrength.toFixed(2)}\nLocal model bias: ${local.bias} (score ${local.localScore.toFixed(2)})`,
+    maxTokens: 90,
     temperature: 0.4,
-    messages: [
-      {
-        role: 'system',
-        content: 'You are an institutional trading advisor. Given indicator snapshot, return ONE sentence (max 35 words) on tactical bias for the symbol. No disclaimers. No advice. Just describe the technical state and qualify it. Use direct prose.',
-      },
-      {
-        role: 'user',
-        content: `Symbol: ${symbol}\nLast: ${quote.last.toFixed(2)}  VWAP: ${ind.vwap.toFixed(2)}  RSI14: ${ind.rsi14.toFixed(1)}  ATR14: ${ind.atr14.toFixed(2)}\nEMA9/21/50: ${ind.ema9.toFixed(2)} / ${ind.ema21.toFixed(2)} / ${ind.ema50.toFixed(2)}\nTrend strength: ${ind.trendStrength.toFixed(2)}\nLocal model bias: ${local.bias} (score ${local.localScore.toFixed(2)})`,
-      },
-    ],
-  }
-  const res = await fetch('https://aistudio.baidu.com/llm/lmapi/v3/chat/completions', {
-    method: 'POST',
-    headers: {
-      'authorization': `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`ernie ${res.status}: ${await res.text()}`)
-  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
-  const text = json.choices?.[0]?.message?.content ?? ''
-  return text.trim()
 }

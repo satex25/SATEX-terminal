@@ -1027,7 +1027,7 @@ export function ChartPanel() {
               localMarkers.push({
                 time: view[viewIdx]!.time as unknown,
                 position: 'aboveBar',
-                color: confirmed ? '#ff4655' : 'rgba(255,70,85,0.55)',
+                color: confirmed ? (readCssVar('--bb-neg') || '#ff4655') : applyOpacity(readCssVar('--bb-neg') || '#ff4655', 0.55),
                 shape: confirmed ? 'arrowDown' : 'circle',
                 text:  confirmed ? `2T ${t.pointB.price.toFixed(2)} ✓` : `2T ${t.pointB.price.toFixed(2)}`,
               })
@@ -1042,7 +1042,7 @@ export function ChartPanel() {
               localMarkers.push({
                 time: view[viewIdx]!.time as unknown,
                 position: 'belowBar',
-                color: confirmed ? '#21c97a' : 'rgba(33,201,122,0.55)',
+                color: confirmed ? (readCssVar('--bb-pos') || '#21c97a') : applyOpacity(readCssVar('--bb-pos') || '#21c97a', 0.55),
                 shape: confirmed ? 'arrowUp' : 'circle',
                 text:  confirmed ? `2B ${b.pointB.price.toFixed(2)} ✓` : `2B ${b.pointB.price.toFixed(2)}`,
               })
@@ -1379,13 +1379,13 @@ export function ChartPanel() {
             )}
             {indSettings.enabled['double-top'] && (
               <div className="row">
-                <span className="swatch" aria-hidden="true" style={{ background: '#ff4655' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: 'var(--bb-neg)' }} />
                 2T pattern
               </div>
             )}
             {indSettings.enabled['double-bottom'] && (
               <div className="row">
-                <span className="swatch" aria-hidden="true" style={{ background: '#21c97a' }} />
+                <span className="swatch" aria-hidden="true" style={{ background: 'var(--bb-pos)' }} />
                 2B pattern
               </div>
             )}

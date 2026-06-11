@@ -9,6 +9,148 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Added
 
+- **THE WIRE — toggleable live world-news desk (operator fun-challenge).**
+  The Catalysts quadrant becomes a two-desk surface: CATALYSTS ⇄ ◉ THE WIRE.
+  The wire streams real channels — BBC World, NPR, Guardian World, Hacker
+  News — with one tab per outlet plus ALL, polled main-side every 60s via a
+  zero-dependency, unit-tested RSS parser (`services/wire-feed.ts`). Headlines
+  under 2 minutes old pulse ⚡; clicking opens the story in the default
+  browser through the existing scheme-allowlisted handler; a failing outlet
+  dims its own tab without dimming the desk. OFF by default — flipping to
+  CATALYSTS stops all polling (zero background traffic) — and the renderer
+  CSP still allowlists no news hosts because every fetch lives in main with
+  the house 10s timeout. Desk choice persists across boots. Strictly cosmetic
+  to trading: the wire never emits catalysts, never touches engine stores.
+  IPC: `WIRE_GET` / `WIRE_SET` / `WIRE_UPDATE` (Zod `.strict()`).
+  9 new vitest cases.
+
+- **Standing agent — daily PSD session scheduled (P-016).** A `Cowork` scheduled
+  task (`satex-psd-daily`, weekdays 09:05) runs the Problem-Solution-Decision
+  loop autonomously while the Claude app is open. The agent reads the
+  `PROBLEM-LEDGER.md`, picks the highest-leverage OPEN or IN-PROGRESS entry
+  (skipping operator-gated and safety-perimeter work), runs all four gates on
+  code changes, updates the ledger, adds a CHANGELOG entry, and reports real
+  gate results. The loop is self-contained, never commits or merges, and
+  prepares working-tree changes for the operator's review per the branch→PR
+  flow. The session respects the SATEX constitution's trading-safety guardrails.
+
+- **Groq locked in as the default advisor provider.** Settings → AI Advisor
+  prefills `https://api.groq.com/openai/v1` + `llama-3.1-8b-instant`
+  (`DEFAULT_LLM_*` in `@shared/constants`) so a fresh setup is paste-key-and-go.
+  Any OpenAI-compatible provider still swaps in by editing two fields.
+
+- **End-of-session LEARNINGS note (`services/learning-report.ts`).** On engine
+  shutdown a single, hard-capped (≤4 KB) markdown note lands in
+  `Vault/Learnings/`: which brain weights moved and how far, how honest the
+  stated confidence was (Brier, multiplier, worst reliability bucket), and the
+  autonomous signal funnel. A no-learning session is called out explicitly.
+  Folder pruned to 30 notes and `calibration_log` pruned to 2,000 rows on boot
+  (the Observer-flood lesson). 6 new vitest cases.
+
+- **Nightly self-eval is now a Settings toggle.** Settings → Nightly
+  Self-Evaluation: ● ON / ○ OFF (persisted in `userData/self-eval.json`,
+  default ON), a Run Now button for on-demand evaluation, and a last-run
+  status line (evaluated / baselined / regressions → report filename). IPC:
+  `SELF_EVAL_GET` / `SELF_EVAL_SET` / `SELF_EVAL_RUN` (Zod `.strict()`).
+
+- **Provider-agnostic AI advisor (`services/llm.ts`).** Replaces the hardcoded
+  Baidu/ERNIE call in `brain.ts` with one OpenAI-compatible chat-completions
+  client — Groq, OpenAI, OpenRouter, Mistral, DeepSeek, Baidu, or a local
+  Ollama plug in via Settings → AI Advisor ({ baseUrl, model, apiKey };
+  key in safeStorage, never crosses IPC). A stored legacy Baidu token keeps
+  working untouched (read-only fallback in credential-store). Every call now
+  carries a 10s `AbortSignal` budget (2026-06-10 audit §3.1 — a hung LLM
+  socket previously suspended `AutonomousTrader.runCycle` forever, silently
+  halting autonomous trading). Advisory-only invariant unchanged: the
+  rationale string never gates, sizes, or routes an order. IPC: `BAIDU_*`
+  channels replaced by `LLM_CONFIG_GET` / `LLM_CONFIG_SET` (Zod `.strict()`).
+  9 new vitest cases (`llm.test.ts`).
+
+- **Confidence calibration — Brier score + reliability curve
+  (`services/calibration.ts`).** Implements the constitution's "no confidence
+  inflation" rule. Every closed trade that carried a stated entry confidence
+  (autonomous path) is journaled to a new `calibration_log` table; a rolling
+  200-outcome window yields the Brier score, a 10-bucket reliability curve,
+  and a **downgrade-only** multiplier `clamp(winRate / avgConfidence, 0.5, 1)`
+  applied at the single decision choke point (`TradingEngine.getAiDecision`)
+  once ≥30 outcomes exist. A system claiming 75% and winning 45% trades at
+  ×0.6 of its stated conviction; an underconfident system is never boosted.
+  Trading-safety note: this can only REDUCE autonomous trading activity,
+  never increase it — but it does touch the live decision pipeline, so this
+  cut requires the usual human sign-off. Surfaced in AIInsightsPanel as a
+  CALIBRATION strip (Brier · multiplier · n + per-bucket health bars).
+  14 new vitest cases (`calibration.test.ts`).
+
+- **Nightly backtest self-evaluation (`services/self-eval.ts`).** At 02:30
+  local the engine re-runs its strategy roster — `BrainStrategy` with the
+  LIVE learned weights, plus Momentum / MeanReversion / Breakout and the
+  regime-routed `StrategyEnsemble` — over the day's in-memory candles,
+  regression-checks each (strategy, symbol) against a locked baseline via
+  `compareReports`, and writes a verdict table to `Vault/Backtests/`
+  (baselines under `Vault/Backtests/baselines/`; delete a stale baseline to
+  promote an intentional improvement). Strictly observational: never submits
+  or gates an order, never mutates brain/pattern/tactics state. Regressions
+  surface as WARN lines in the SystemLogs panel. Fully DI'd — scheduling,
+  baseline policy, and report rendering are unit-tested without Electron or
+  disk. 10 new vitest cases (`self-eval.test.ts`).
+
+- **Formal type scale (audit §4.2.1 — the 2026-05-14 handoff item that never
+  shipped).** Nine `--text-*` tokens (8.5 → 36px) in `globals.css`; all 277
+  hardcoded `font-size` declarations (16 distinct px values) now route
+  through the scale. Sizes snapped to the half-step grid (max visual delta
+  0.5px: 8→8.5, 9→9.5, 10→10.5, 11→11.5, 12/13→12.5). Density modes become
+  a 9-token override block when built. Inline TSX `fontSize:` numbers are a
+  tracked follow-up.
+
+### Fixed
+
+- **PatternLearner duplicate-SGD updates (P-001, audit §3.3).** Each observation
+  inside the 5-min lookback received the same gradient step on ~8 consecutive
+  30s cycles (effective LR ≈ 8×, sample counts inflated ~8×). A per-symbol
+  high-water cursor now guarantees exactly one update per observation; the
+  cursor advances only on successful labeling so horizon-pending rows retry.
+  In-memory by decision (restart re-labels ≤5 min once — bounded). `cycle()`
+  made public for tests/on-demand runs. 3 new vitest cases.
+
+- **Order ticket no longer clips to invisible at small window heights
+  (P-002, audit §3.2).** Below ~1010px of window height the right rail's fixed
+  rows (288+268px) exceeded the main row and `overflow:hidden` hid the
+  ExecTicket — including at the ALLOWED minimum window 1200×720. A
+  `max-height: 1009px` media query turns the rail into a thin-scrollbar column
+  with full-size panels; order entry is reachable at every height, zero change
+  on 1080p+ displays.
+
+- **Accessibility floor (P-003, audit §3.9).** Global token-driven
+  `:focus-visible` ring (the terminal is keyboard-first but focus position was
+  invisible) and a `prefers-reduced-motion` block that collapses
+  animations/transitions for vestibular-sensitive operators.
+
+- **Risk-gate correlation computed on returns, not prices (P-010, audit §3.4).**
+  Gate 5's Pearson ρ was computing correlation of raw closes, which reads shared
+  *trend* as co-movement (two trending series with independent returns read
+  price-ρ>0.95 but return-ρ<0.35). New `toLogReturns()` function (zero-price
+  guarded) diffs aligned closes into log-returns before `correlation()`.
+  `correlationWatch` threshold retuned 0.60→0.45 to reflect structural difference
+  in return-space ρ (0.45 avg pairwise return-ρ genuinely indicates crowded
+  positions). The gate now displays meaningful correlation structure.
+
+- **Renderer CSP no longer allowlists an LLM endpoint (audit §3.6).**
+  `aistudio.baidu.com` removed from `connect-src` — all LLM traffic
+  originates in the main process, so the entry only handed an XSS'd renderer
+  a sanctioned exfiltration channel.
+
+- **Theme-reactivity leaks (audit §3.7).** Double-top/bottom chart markers
+  and legend swatches now resolve `--bb-pos` / `--bb-neg` via `readCssVar`
+  (canvas) and CSS vars (DOM) instead of hardcoded hex; the Settings
+  data-source pill drops its off-brand Tailwind palette (`#22c55e`/`#f5a623`)
+  for `--bb-pos` / `--bb-warn`. Mono and Bluyel themes now recolor these
+  surfaces correctly.
+
+- **`CLAUDE.md` drift (audit §3.8).** Two stale claims corrected: CI runs all
+  four gates (not "typecheck + vitest only"), and the F.1 facet migration is
+  complete (no `this.alpaca.submitOrder/getAccount/cancelOrder` call-sites
+  remain — the "~30 sites" follow-up shipped).
+
 - **F.1 — BrokerAdapter abstraction + Alpaca reference implementation.** Lands the
   broker-portability foundation for Phase F (Rithmic / Tradovate execution next). A
   new `@shared/broker/` contract layer (`MarketDataSource`, `OrderRouter` +
@@ -594,28 +736,4 @@ place but the installer remains **unsigned** pending CA-issued certificate
 - **Electron sandbox + CSP hardening (5 medium).** `sandbox: true` on the
   BrowserWindow webPreferences; `script-src 'self'` (no `'unsafe-inline'`)
   on the renderer CSP; scheme allowlist on `shell.openExternal`;
-  `AutonomousConfig` Zod schema tightened to `.strict()`; IPC byte-size cap
-  enforced via `Buffer.byteLength` (was `String#length`, ~4× looser on
-  multibyte payloads).
-
-### Reliability
-- 10s timeout on every Alpaca REST call. Exponential backoff on equity,
-  crypto, and account WebSocket reconnects (was fixed 5s / 3s — could storm
-  unreachable endpoints during outages). `LiveCandleBuffer` fill-forward on
-  bucket boundaries. Tick recorder uses feed-time (`q.timestamp`) instead
-  of `Date.now()` so bucket alignment and replay clock anchor are accurate.
-
-### Observability
-- Rolling-window tick-Hz computation (was inverted by a stale `Date.now -
-  lastTickAt` formula). Explicit no-quote rejection. SESSION_VAR "n/a" label.
-  TRADES_TICK 50ms coalescing (matches the existing quote-batch cadence).
-  Replay unknown-symbol warning so users see dropped tape rows.
-
-### Post-stabilization pickups (same day)
-- **Kill-switch persistence** — `kill-switch-store.ts` persists `{ armed,
-  reason, armedAt, updatedAt }` to `userData/kill-switch.json`; boot
-  restores armed state via `OrderManager.restoreKillSwitch`. Closes
-  deferred item from issue #1.
-- **Periodic tape-manifest reseal** — `TickRecorder` reseals every 5s during
-  recording so a mid-session crash leaves a recoverable tape (`ok-extended`
-  verdict instead of `no-manifest`). Closes deferred item from issue #1.
+  `AutonomousConfig` Zod schema tightened to `.strict()`; IPC byte-size ca

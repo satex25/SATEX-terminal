@@ -50,7 +50,10 @@ const DEFAULTS: RiskGatesConfig = {
   concentrationBreach: 0.50,
   grossLeverageWatch:  2.0,
   grossLeverageBreach: 3.0,
-  correlationWatch:    0.60,
+  // P-010: retuned 0.60 → 0.45 — return-space ρ runs structurally lower than
+  // the price-space numbers this gate displayed pre-fix (which read shared
+  // trend as co-movement). 0.45 avg pairwise return-ρ is genuinely crowded.
+  correlationWatch:    0.45,
   sessionVarTarget:    12_000,
 }
 
@@ -113,6 +116,20 @@ export function alignCloses(a: Candle[], b: Candle[]): { a: number[]; b: number[
     if (matched !== undefined) { outA.push(c.close); outB.push(matched) }
   }
   return { a: outA, b: outB }
+}
+
+/** Log-returns of a close-price series (P-010, 2026-06-10). Correlating raw
+ *  PRICES measures shared trend — any two assets drifting the same way read
+ *  ρ→1 even with independent returns. Institutional convention correlates
+ *  log-returns; this is the diff step. Non-positive closes are guarded (a
+ *  zero would poison the log). Exported for unit tests. */
+export function toLogReturns(closes: number[]): number[] {
+  const out: number[] = []
+  for (let i = 1; i < closes.length; i++) {
+    const p0 = closes[i - 1]!, p1 = closes[i]!
+    if (p0 > 0 && p1 > 0) out.push(Math.log(p1 / p0))
+  }
+  return out
 }
 
 /** Sample stdev of an array. */
@@ -253,11 +270,13 @@ export class RiskGatesService {
       for (let i = 0; i < syms.length; i++) {
         for (let j = i + 1; j < syms.length; j++) {
           const aligned = alignCloses(candlesBySym[syms[i]!]!, candlesBySym[syms[j]!]!)
-          if (aligned.a.length < MIN_CORR_OVERLAP) {
+          // P-010: +1 because the log-return diff consumes one row; the
+          // correlation() floor then sees ≥ MIN_CORR_OVERLAP return points.
+          if (aligned.a.length < MIN_CORR_OVERLAP + 1) {
             droppedPairCount++
             continue
           }
-          const rho = correlation(aligned.a, aligned.b)
+          const rho = correlation(toLogReturns(aligned.a), toLogReturns(aligned.b))
           sumRho += Math.abs(rho)
           usablePairCount++
           if (Math.abs(rho) > Math.abs(topRho)) {

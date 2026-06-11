@@ -54,6 +54,13 @@ export class PatternLearner {
   /** weights[feature][regime] = { weight, samples } */
   private weights: Record<FeatureKey, Record<MarketRegime, { weight: number; samples: number }>>
   private cycles = 0
+  /** P-001 (2026-06-10): high-water mark per symbol — the newest observation
+   *  ts already labeled+learned. Without it, every observation inside the
+   *  5-min lookback received the SAME gradient step on ~8 consecutive 30s
+   *  cycles (effective LR ≈ 8×LR, sample counts inflated ~8×). In-memory by
+   *  decision: a restart re-labels ≤5 min of observations exactly once —
+   *  bounded and harmless vs. a schema change. See PROBLEM-LEDGER P-001. */
+  private lastLabeledTs = new Map<string, number>()
   private lastCycleAt: number | null = null
   private lastCycleObservations = 0
   private lastCycleAvgError = 0
@@ -104,7 +111,9 @@ export class PatternLearner {
 
   // ── internal ────────────────────────────────────────────────────────────────
 
-  private async cycle(): Promise<void> {
+  /** One learning pass. Public for unit tests + on-demand triggers; the
+   *  interval in start() is the production driver. */
+  async cycle(): Promise<void> {
     const now = Date.now()
     const sinceTs = now - LOOKBACK_MS
     const labelCutoff = now - LABEL_HORIZON_MS  // can only label observations older than this
@@ -121,11 +130,16 @@ export class PatternLearner {
 
       // For each observation that has at least LABEL_HORIZON_MS of subsequent
       // observations to derive a label, compute forward return and update.
+      // The cursor guarantees ONE gradient step per observation across
+      // overlapping cycles (P-001); rows are ts-ASC from listObservations.
+      const cursor = this.lastLabeledTs.get(symbol) ?? 0
+      let maxLabeled = cursor
       for (let i = 0; i < obs.length; i++) {
         const x = obs[i]!
         if (x.ts > labelCutoff) break  // not enough forward data yet
+        if (x.ts <= cursor) continue   // already learned from this observation
         const label = forwardLogReturn(obs, i, LABEL_HORIZON_MS)
-        if (label === null) continue
+        if (label === null) continue   // no forward point yet — retry next cycle
 
         const features = featuresOf(x)
         const predicted = this.predict(features, x.regime)
@@ -139,7 +153,9 @@ export class PatternLearner {
           cell.samples += 1
         }
         totalUpdated++
+        maxLabeled = x.ts
       }
+      this.lastLabeledTs.set(symbol, maxLabeled)
     }
 
     this.cycles += 1

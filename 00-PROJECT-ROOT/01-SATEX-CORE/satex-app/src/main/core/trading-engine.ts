@@ -12,7 +12,7 @@
  *   6. Register IPC → engine method wiring (done in main/index.ts)
  */
 import { app, powerMonitor } from 'electron'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '../services/env'
@@ -40,11 +40,11 @@ import type {
   CredentialsMaskedStatus, CredentialsSetRequest,
   IndicatorSnapshot, LiveModeSetRequest, LiveModeStatus, NewsItem, NewsKind, Order,
   OrderRequest, Position, Quote, SystemStatus, TacticsStatus, AlpacaCredentialsStatus,
-  BaiduMaskedStatus, ObserverStats, LearnerStats, VaultStats, PatternWeight,
+  LlmStatus, LlmConfigSetRequest, ObserverStats, LearnerStats, VaultStats, PatternWeight,
   VaultCheckpointRequest,
   ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
   HistoricalImportRequest, HistoricalImportResult, HistoricalBarsRequest, HistoricalBarsResult,
-  ClosedTrade, JournalTag, Trade,
+  ClosedTrade, JournalTag, Trade, CalibrationSnapshot, SelfEvalStatus, BrainParameter,
 } from '@shared/types'
 import { shortId } from '../services/id-generator'
 import { createLogger, configureLogger } from '../services/logger'
@@ -52,12 +52,21 @@ import * as db from '../services/persistence'
 import { sessionId } from '../services/id-generator'
 import {
   getAlpacaCreds, setAlpacaCreds, clearAlpacaCreds, getAlpacaCredsMasked,
-  setBaiduKey as storeSetBaiduKey, getBaiduMasked as storeGetBaiduMasked
+  setLlmConfig as storeSetLlmConfig, getLlmStatus as storeGetLlmStatus
 } from '../services/credential-store'
 import { getLiveModeStatus, setLiveMode as storeSetLiveMode, isLive, getNotionalCap } from '../services/live-mode'
 import { getAlpacaMode, setAlpacaMode as storeSetAlpacaMode, resolveBaseUrl } from '../services/alpaca-mode'
 import { loadKillSwitchState, saveKillSwitchState } from '../services/kill-switch-store'
 import { Brain } from '../services/brain'
+import { CalibrationService } from '../services/calibration'
+import { SelfEvalService } from '../services/self-eval'
+import { getSelfEvalEnabled, setSelfEvalEnabled as storeSetSelfEvalEnabled } from '../services/self-eval-store'
+import { renderLearningsMd, MAX_LEARNINGS_FILES } from '../services/learning-report'
+import { BrainStrategy } from '../backtest/brain-strategy'
+import { MomentumStrategy } from '../backtest/strategies/momentum'
+import { MeanReversionStrategy } from '../backtest/strategies/mean-reversion'
+import { BreakoutStrategy } from '../backtest/strategies/breakout'
+import { StrategyEnsemble } from '../backtest/strategies/ensemble'
 import { TacticsEngine } from '../services/tactics'
 import { MarketObserver } from '../services/market-observer'
 import { PatternLearner } from '../services/pattern-learner'
@@ -128,6 +137,9 @@ interface EntryFeaturesValue {
    *  recordTradeClose can copy it onto the ClosedTrade event. Null when no
    *  reference quote was available. */
   entrySlippageBps?: number | null
+  /** Confidence stamped on the entry decision (autonomous path supplies it
+   *  via submitOrder opts). Drives the calibration loop on close. */
+  signalConfidence?: number
 }
 
 export class TradingEngine {
@@ -147,6 +159,15 @@ export class TradingEngine {
   private cryptoAlpaca: AlpacaClient | null = null
   public  om!:     OrderManager
   private brain:   Brain = new Brain()
+  /** Confidence-vs-outcome loop (Brier + downgrade-only multiplier). Records
+   *  in recordTradeClose; applies in getAiDecision — the two choke points. */
+  private calibration: CalibrationService = new CalibrationService()
+  /** Nightly observational backtest over the day's candles (02:30 local).
+   *  Writes Vault/Backtests/ reports; never touches the trading path. */
+  private selfEval: SelfEvalService | null = null
+  /** Brain weights at session start — diffed at shutdown for the
+   *  end-of-session LEARNINGS note (learning-report.ts). */
+  private brainParamsAtStart: BrainParameter[] = []
   private tactics: TacticsEngine = new TacticsEngine()
   private observer!: MarketObserver
   private learner!:  PatternLearner
@@ -417,6 +438,10 @@ export class TradingEngine {
 
     // Brain — load weights from db
     this.brain.initialize()
+    // Calibration — hydrate the rolling outcome window from db
+    this.calibration.initialize()
+    // Snapshot weights for the end-of-session LEARNINGS drift diff
+    this.brainParamsAtStart = db.listBrainParams()
 
     // Tactics — seed from prior orders (approx)
     this.tactics.seedFromOrders(db.listAllOrders())
@@ -529,6 +554,63 @@ export class TradingEngine {
 
     this.vault = new VaultWriter({ projectRoot: resolveVaultRoot() })
     this.vault.initialize()
+
+    // ── Nightly self-evaluation (2026-06-10, audit §6.3.5) ────────────────
+    // Re-runs BrainStrategy (live learned weights) + the Tier-2 candidates
+    // over the day's in-memory candles at 02:30 local, regression-checks
+    // against locked baselines, and writes the verdict to Vault/Backtests/.
+    // Observational only — see self-eval.ts header for the guarantees.
+    {
+      const backtestsDir = join(resolveVaultRoot(), 'Vault', 'Backtests')
+      const baselinesDir = join(backtestsDir, 'baselines')
+      const safeKey = (key: string) => key.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+      this.selfEval = new SelfEvalService({
+        getWatchlist: () => db.getWatchlist(),
+        // Day buffer from the active market source (sim or live) — no creds
+        // required, works in every data mode. Thin tapes are skipped inside
+        // the service with a logged reason.
+        getCandles: async (s) => this.market.getCandles(s, 3600),
+        buildStrategies: () => {
+          const brainStrat = () => new BrainStrategy(this.brain)
+          return [
+            brainStrat(),
+            new MomentumStrategy(),
+            new MeanReversionStrategy(),
+            new BreakoutStrategy(),
+            new StrategyEnsemble({
+              routes: [
+                { regime: 'trend_up',   strategy: new MomentumStrategy() },
+                { regime: 'trend_down', strategy: new MomentumStrategy() },
+                { regime: 'range',      strategy: new MeanReversionStrategy() },
+                { regime: 'chop',       strategy: new BreakoutStrategy() },
+              ],
+              fallback: brainStrat(),
+            }),
+          ]
+        },
+        readBaseline: (key) => {
+          try {
+            const p = join(baselinesDir, `${safeKey(key)}.json`)
+            if (!existsSync(p)) return null
+            return JSON.parse(readFileSync(p, 'utf-8'))
+          } catch (e) { log.warn('self-eval baseline read failed', { key, err: String(e) }); return null }
+        },
+        writeBaseline: (key, report) => {
+          try {
+            mkdirSync(baselinesDir, { recursive: true })
+            writeFileSync(join(baselinesDir, `${safeKey(key)}.json`), JSON.stringify(report, null, 2))
+          } catch (e) { log.warn('self-eval baseline write failed', { key, err: String(e) }) }
+        },
+        writeReport: (filename, markdown) => {
+          try {
+            mkdirSync(backtestsDir, { recursive: true })
+            writeFileSync(join(backtestsDir, filename), markdown)
+          } catch (e) { log.warn('self-eval report write failed', { filename, err: String(e) }) }
+        },
+      })
+      if (getSelfEvalEnabled()) this.selfEval.start()
+      else log.info('self-eval disabled by user toggle — timer not armed')
+    }
 
     // Session-start vault note
     this.fireAndForget('vault.writeSessionStart', () => this.vault.writeSessionStart(
@@ -667,6 +749,7 @@ export class TradingEngine {
     if (this.replayStatusTimer)      { clearInterval(this.replayStatusTimer);      this.replayStatusTimer = null }
     if (this.batchTimer)             { clearTimeout(this.batchTimer);              this.batchTimer = null }
     if (this.tradeBatchTimer)        { clearTimeout(this.tradeBatchTimer);         this.tradeBatchTimer = null }
+    this.selfEval?.stop()
     // v0.4.3 B11 — release powerMonitor listeners so a re-initialize (HMR /
     // engine restart) doesn't pile up handlers. Bound arrow-class-fields
     // mean `off` finds the same reference as `on`.
@@ -715,6 +798,30 @@ export class TradingEngine {
       if (finalSession && this.vault) this.fireAndForget('vault.writeSessionEnd', () => this.vault.writeSessionEnd({ ...finalSession, endedAt: Date.now(), endingEquity }))
     } catch (e) { log.warn('final vault session-end write failed', { err: String(e) }) }
     db.closeDB()
+    // End-of-session LEARNINGS note (2026-06-10) — short, size-capped, and
+    // pruned to MAX_LEARNINGS_FILES so the vault never floods (audit §5).
+    try {
+      const learningsDir = join(resolveVaultRoot(), 'Vault', 'Learnings')
+      mkdirSync(learningsDir, { recursive: true })
+      const endedAt = Date.now()
+      const stamp = new Date(endedAt)
+      const fname = `${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}${String(stamp.getSeconds()).padStart(2, '0')}-learnings.md`
+      writeFileSync(join(learningsDir, fname), renderLearningsMd({
+        sessionId: this.currentSessionId,
+        startedAt: this.startedAt,
+        endedAt,
+        calibration: this.calibration.snapshot(),
+        weightsAtStart: this.brainParamsAtStart,
+        weightsAtEnd: db.listBrainParams(),
+        learner: this.learner.stats(),
+        autonomous: this.autonomous.getStatus(),
+      }))
+      const files = readdirSync(learningsDir).filter(f => f.endsWith('-learnings.md')).sort()
+      for (const f of files.slice(0, Math.max(0, files.length - MAX_LEARNINGS_FILES))) {
+        rmSync(join(learningsDir, f), { force: true })
+      }
+    } catch (e) { log.warn('learnings note write failed', { err: String(e) }) }
+
     log.info('engine shutdown complete')
   }
 
@@ -930,6 +1037,7 @@ export class TradingEngine {
           openedAt: Date.now(),
           ...(req.tags && req.tags.length > 0 ? { tags: req.tags } : {}),
           ...(req.conviction !== undefined ? { conviction: req.conviction } : {}),
+          ...(opts?.signalConfidence !== undefined ? { signalConfidence: opts.signalConfidence } : {}),
           // S1-6: stamp the reference quote so we can compute entry slippage
           // once Alpaca returns the actual fill price.
           ...(quote?.last ? { quoteAtSubmit: quote.last } : {}),
@@ -1029,8 +1137,8 @@ export class TradingEngine {
   getCredentialsMasked(): CredentialsMaskedStatus { return getAlpacaCredsMasked() }
   setCredentials(req: CredentialsSetRequest): { ok: boolean; reason?: string } { return setAlpacaCreds(req) }
   clearCredentials(): { ok: boolean } { clearAlpacaCreds(); return { ok: true } }
-  setBaiduKey(key: string): { ok: boolean; reason?: string } { return storeSetBaiduKey(key) }
-  getBaiduMasked(): BaiduMaskedStatus { return storeGetBaiduMasked() }
+  setLlmConfig(req: LlmConfigSetRequest): { ok: boolean; reason?: string } { return storeSetLlmConfig(req) }
+  getLlmStatus(): LlmStatus { return storeGetLlmStatus() }
 
   getDataSource(): DataSourceStatus {
     return {
@@ -1244,7 +1352,48 @@ export class TradingEngine {
     const quote = this.market.getQuote(symbol)
     if (!quote) throw new Error(`no quote for ${symbol}`)
     const ind = computeSnapshot(symbol, this.market.getCandles(symbol, 200))
-    return this.brain.decide(symbol, quote, ind)
+    const raw = await this.brain.decide(symbol, quote, ind)
+    // Calibration choke point — every consumer (autonomous gate via
+    // deps.getDecision, BRAIN_DECISION IPC, AIInsights) sees the calibrated
+    // confidence. Downgrade-only; identity until MIN_SAMPLES outcomes exist.
+    return { ...raw, confidence: this.calibration.calibrate(raw.confidence) }
+  }
+
+  getCalibration(): CalibrationSnapshot { return this.calibration.snapshot() }
+
+  // ── Nightly self-eval controls (Settings → Nightly Self-Evaluation) ────────
+  getSelfEvalStatus(): SelfEvalStatus {
+    const last = this.selfEval?.getLastResult() ?? null
+    return {
+      enabled: getSelfEvalEnabled(),
+      running: this.selfEval?.isRunning() ?? false,
+      lastRun: last ? {
+        finishedAt: last.finishedAt,
+        evaluated: last.evaluated,
+        skipped: last.skipped,
+        baselined: last.baselined,
+        regressions: last.regressions.length,
+        reportFilename: last.reportFilename,
+      } : null,
+    }
+  }
+
+  setSelfEvalEnabled(enabled: boolean): SelfEvalStatus {
+    storeSetSelfEvalEnabled(enabled)
+    if (this.selfEval) {
+      if (enabled) this.selfEval.start()
+      else this.selfEval.stop()
+    }
+    return this.getSelfEvalStatus()
+  }
+
+  /** Manual trigger from the Settings button. Runs in the background; the
+   *  renderer polls getSelfEvalStatus for completion. */
+  runSelfEvalNow(): { ok: boolean; reason?: string } {
+    if (!this.selfEval) return { ok: false, reason: 'self-eval not constructed yet' }
+    if (this.selfEval.isRunning()) return { ok: false, reason: 'already running' }
+    void this.selfEval.runOnce().catch(e => log.error('manual self-eval failed', { err: String(e) }))
+    return { ok: true }
   }
 
   // ── MAY-TACTICS ─────────────────────────────────────────────────────────────
@@ -1859,6 +2008,9 @@ export class TradingEngine {
     this.tactics.recordOutcome(symbol, realizedPnl)
     const tacticsAfter = this.tactics.status()
     if (entry) this.brain.learn(realizedPnl, entry.notional, entry.features, 'buy')
+    // Calibration loop — only entries that carried a stated confidence count
+    // (autonomous path). Manual orders have no claim to calibrate against.
+    if (entry?.signalConfidence !== undefined) this.calibration.record(symbol, entry.signalConfidence, realizedPnl)
     if (entryId) this.entryFeatures.delete(entryId)
     db.updateSession(this.currentSessionId, { tradeCount: db.listOrders(this.currentSessionId).length })
     log.info('learning hook fired', { symbol, realizedPnl: Math.round(realizedPnl * 100) / 100, source })

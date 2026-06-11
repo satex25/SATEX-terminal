@@ -15,7 +15,7 @@ import { IPC } from '@shared/ipc-channels'
 import {
   OrderSubmitReq, OrderCancelReq, KillSwitchReq, CandlesGetReq, SymbolOnlyReq,
   OptionalSymbolReq, SubscribeReq, WatchlistSetReq, SessionIdReq, OptionalSessionIdReq,
-  CredentialsSetReq, BaiduSetReq, LiveModeSetReq, AlpacaModeSetReq, BrainDecisionReq, DataSourceSetReq,
+  CredentialsSetReq, LlmConfigSetReq, SelfEvalSetReq, WireSetReq, LiveModeSetReq, AlpacaModeSetReq, BrainDecisionReq, DataSourceSetReq,
   AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq, HistoricalBarsReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
@@ -29,6 +29,7 @@ import { SubsecondPrefsService } from './services/subsecond-prefs'
 import { migratePlaintextEnvLocalCreds } from './services/credential-store'
 import { isLive } from './services/live-mode'
 import { AutoUpdateService } from './services/auto-update'
+import { WireFeedService, defaultFetchText } from './services/wire-feed'
 
 // Migrate plaintext Alpaca keys out of userData/.env.local into safeStorage
 // BEFORE dotenv runs. If keys are migrated the file is rewritten (or deleted)
@@ -152,6 +153,11 @@ const workspaceState    = new WorkspaceStateService(resolveVaultProjectRoot())
 // same Vault/Settings tree as indicator-toggles.md / workspace-state.md.
 const subsecondPrefs    = new SubsecondPrefsService(resolveVaultProjectRoot())
 const autoUpdate        = new AutoUpdateService()
+// THE WIRE — live world-news desk. OFF until the renderer's News Desk flips
+// it on; all fetches are main-side (renderer CSP stays LLM/news-host-free)
+// and carry the house 10s timeout. Cosmetic to trading by design.
+const wire              = new WireFeedService({ fetchText: defaultFetchText })
+wire.onUpdate((snap) => push(IPC.WIRE_UPDATE, snap))
 let mainWindow: BrowserWindow | null = null
 
 // ── Process-level crash safety (S0-1) ───────────────────────────────────────
@@ -170,6 +176,7 @@ function gracefulShutdown(label: string, cause: unknown): void {
   // engine.shutdown() is async (F.1 L1.A 4 — awaits session.disconnect()).
   // Fire-and-forget here: the 5s hard-exit below is the safety net so a
   // stuck disconnect can't deadlock the process on crash paths.
+  wire.stop()
   engine.shutdown().catch((e) => {
     log.error('engine.shutdown threw during graceful shutdown', { err: String(e) })
   })
@@ -783,14 +790,20 @@ function registerIpcHandlers(): void {
 
   // ── Brain ────────────────────────────────────────────────────────────────────
   register(IPC.BRAIN_GET, () => engine.getBrainParams())
+  register(IPC.CALIBRATION_GET, () => engine.getCalibration())
+  register(IPC.SELF_EVAL_GET, () => engine.getSelfEvalStatus())
+  register(IPC.SELF_EVAL_SET, validated(SelfEvalSetReq, (req) => engine.setSelfEvalEnabled(req.enabled)))
+  register(IPC.SELF_EVAL_RUN, () => engine.runSelfEvalNow())
+  register(IPC.WIRE_GET, () => wire.snapshot())
+  register(IPC.WIRE_SET, validated(WireSetReq, (req) => wire.setEnabled(req.enabled)))
 
   // ── Credentials / health ─────────────────────────────────────────────────────
   register(IPC.CREDENTIALS_STATUS,     ()                                => engine.getCredentialsStatus())
   register(IPC.CREDENTIALS_GET_MASKED, ()                                => engine.getCredentialsMasked())
   register(IPC.CREDENTIALS_SET,        validated(CredentialsSetReq, (req) => engine.setCredentials(req)))
   register(IPC.CREDENTIALS_CLEAR,      ()                                => engine.clearCredentials())
-  register(IPC.BAIDU_GET_MASKED,       ()                                => engine.getBaiduMasked())
-  register(IPC.BAIDU_SET,              validated(BaiduSetReq, (key)       => engine.setBaiduKey(key)))
+  register(IPC.LLM_CONFIG_GET,         ()                                => engine.getLlmStatus())
+  register(IPC.LLM_CONFIG_SET,         validated(LlmConfigSetReq, (req)   => engine.setLlmConfig(req)))
   register(IPC.ALPACA_RECONNECT,       async ()                          => engine.reconnectAlpaca())
   register(IPC.HEALTH_CHECK,           ()                                => engine.healthCheck())
 
