@@ -2015,6 +2015,21 @@ export class TradingEngine {
     db.updateSession(this.currentSessionId, { tradeCount: db.listOrders(this.currentSessionId).length })
     log.info('learning hook fired', { symbol, realizedPnl: Math.round(realizedPnl * 100) / 100, source })
 
+    // P-013: a close that skips journaling used to be invisible — the vault
+    // note, the JournalPanel ClosedTrade row and the brain SGD step all gate
+    // on `entry`, and the vault note additionally gates on the writer being
+    // enabled. Make the skip loud so the Vault/Trades diagnostic can separate
+    // "no closes happened" from "closes happened but were not journaled".
+    const vaultEnabled = this.vault ? this.vault.stats().enabled : false
+    if (!entry || !vaultEnabled) {
+      log.warn('trade close not journaled', {
+        symbol,
+        source,
+        hasEntryFeatures: Boolean(entry),
+        vaultEnabled,
+      })
+    }
+
     if (this.vault && entry) {
       const syntheticPosition: Position = {
         symbol, quantity, avgPrice: entry.avgPrice,

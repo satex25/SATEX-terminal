@@ -9,6 +9,18 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Added
 
+- **P-013 diagnostics — Vault/Trades write path pinned, unjournaled closes
+  made loud.** `vault-writer.test.ts` (4 new vitest cases) pins the writer
+  half of the trade-close pipeline: `.obsidian` root detection, Trades note
+  materialisation with frontmatter, loss-learnings extraction per the
+  MAY-TACTICS principle, and the disabled no-op. `recordTradeClose` now logs
+  a `trade close not journaled` warn carrying `hasEntryFeatures` +
+  `vaultEnabled` whenever a close skips journaling — the vault note, the
+  JournalPanel row and the brain SGD step all gate on entry features and the
+  skip was previously silent. Runtime evidence (Sessions 41 / Observer 113 /
+  Trades 0 / Tactics 0 / Brain 0 notes) says the writer works and closes
+  never reach it; the P-013 operator diagnostic is now decisive in minutes.
+
 - **THE WIRE — toggleable live world-news desk (operator fun-challenge).**
   The Catalysts quadrant becomes a two-desk surface: CATALYSTS ⇄ ◉ THE WIRE.
   The wire streams real channels — BBC World, NPR, Guardian World, Hacker

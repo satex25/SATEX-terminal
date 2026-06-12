@@ -48,21 +48,36 @@ updated: 2026-06-11
 - **Decision:** **(b)** — decomposing under an active cherry-pick program multiplies conflicts.
 - **Status:** DECIDED
 
-### P-013 · `Vault/Trades/` never populates
-- **Problem:** Paper sessions ran but no trade-outcome notes exist — either autonomous never closed a trade in those sessions or the VaultWriter path is unreached (audit §5). The learning loop's journal depends on this.
-- **Solutions:** (a) diagnostic session: enable autonomous in simulator, watch for `Trades/` note + `learning hook fired` log; (b) add an integration test driving a simulated close through `recordTradeClose` asserting the vault write.
-- **Decision:** **(a) then (b)** — observe first, then pin with a test.
-- **Status:** OPEN (operator can run (a) in minutes)
-
 ### P-014 · `Vault/Manual/` retros vanished
 - **Problem:** The 5 human-written phase retros listed in the May index are gone (pre-2026-06-10; vault is untracked so git can't restore).
 - **Solutions:** (a) recover from machine backup/OneDrive if any; (b) accept loss, note in index.
 - **Decision:** pending operator — only they know if a backup exists.
 - **Status:** OPEN
 
+### P-017 · `docs/vendor/fs-extra/*.md` are 0-byte husks
+- **Problem:** The four fs-extra vendor docs moved in the 2026-06-10 reorg lost their content (0 bytes on disk — file-bridge shrink artifact). Anything citing them dead-ends.
+- **Solutions:** (a) re-fetch the four pages from upstream fs-extra docs; (b) delete the husks and drop the references.
+- **Decision:** **(a)** when next needed — excluded from the 2026-06-11 commit batch so the husks never enter history.
+- **Status:** OPEN
+
+### P-018 · Stale `index.lock` + sandbox bridge corrupting `.git` writes
+- **Problem:** A crashed git process left `.git/index.lock` dated 2026-06-10 08:02 — the reason the entire audit batch sat uncommitted for a day. Separately, the sandbox file bridge NUL-corrupted `.git/index` during a staged write and serves NUL-tails on some mount reads (`CLAUDE.md` and this ledger healed 2026-06-11); the sandbox cannot `unlink` inside the repo (EPERM) but CAN `rename`.
+- **Solutions:** (a) commit via a /tmp clone and `git push` the branch back into the repo (single pack write, no index involvement); (b) operator-side hygiene: delete `.git/index.lock.stale`, `.git/index.corrupt-*`, `.git/claude-probe` and `.git/objects/*/tmp_obj_*` litter; `git reset` if status misbehaves.
+- **Decision:** **(a) executed 2026-06-11** (branch `feat/audit-psd-batch-2026-06-11`); (b) is a one-time operator cleanup.
+- **Status:** SHIPPED (workflow) — operator cleanup pending
+
 ## In progress
 
 *(entries move here when an agent starts work; move to Shipped with commit/PR reference)*
+
+### P-013 · `Vault/Trades/` never populates
+- **Problem:** Paper sessions ran but no trade-outcome notes exist — either autonomous never closed a trade in those sessions or the VaultWriter path is unreached (audit §5). The learning loop's journal depends on this.
+- **Solutions:** (a) diagnostic session: enable autonomous in simulator, watch for `Trades/` note + `learning hook fired` log; (b) add an integration test driving a simulated close through `recordTradeClose` asserting the vault write.
+- **Decision:** **(a) then (b)** — observe first, then pin with a test. *(Agent executed (b) first, 2026-06-11 — it sharpens (a).)*
+- **Evidence (2026-06-11):** vault IS enabled at runtime — `Sessions/` 41 notes, `Observer/` 113, newest 2026-06-11 08:09 — while `Trades/`, `Tactics/`, `Brain/` are all zero. Writer half pinned green by `vault-writer.test.ts` (4 cases: root detection, note materialisation, loss-learnings extraction, disabled no-op). Entry features are captured for every buy-with-quote in `submitOrder`. Leading hypothesis: **no position close has ever flowed through `recordTradeClose`.**
+- **Shipped:** `trade close not journaled` warn in `recordTradeClose` logging `hasEntryFeatures` + `vaultEnabled` — separates "no closes happened" from "closes happened but were not journaled".
+- **Next:** operator runs diagnostic (a), now decisive in minutes: no `learning hook fired` at all → no closes; warn with `hasEntryFeatures: false` → feature-capture gap; a Trades note appears → close P-013.
+- **Status:** IN-PROGRESS
 
 ## Shipped — awaiting verification
 
