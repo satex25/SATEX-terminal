@@ -569,7 +569,29 @@ export class TradingEngine {
         // Day buffer from the active market source (sim or live) — no creds
         // required, works in every data mode. Thin tapes are skipped inside
         // the service with a logged reason.
-        getCandles: async (s) => this.market.getCandles(s, 3600),
+        getCandles: async (s) => {
+          // P-008 (a): fetch 2 days (yesterday + today) of 1-minute bars for multi-session coverage
+          try {
+            const now = new Date()
+            const endDate = now.toISOString().slice(0, 10) // YYYY-MM-DD (today)
+            const startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10) // yesterday
+            const isCrypto = /^(BTC|ETH|SOL|XRP|DOGE|ADA|AVAX|LINK|MATIC|ARB)$/i.test(s)
+            const bars = isCrypto
+              ? await this.market.getCryptoBars(s, '1Min', startDate, endDate)
+              : await this.market.getBars(s, '1Min', startDate, endDate)
+            // Review fix (2026-06-12): the simulator's getBars/getCryptoBars
+            // stubs resolve to [] rather than throwing, so an empty result must
+            // ALSO fall back to the in-memory day buffer — otherwise sim-mode
+            // self-eval silently studies nothing.
+            if (bars.length > 0) return bars
+            log.warn('self-eval multi-day fetch returned no bars — using in-memory buffer', { symbol: s })
+            return this.market.getCandles(s, 3600)
+          } catch (e) {
+            // Fallback to in-memory buffer if historical fetch fails (no creds, market holiday)
+            log.warn('self-eval multi-day fetch failed, falling back to in-memory buffer', { symbol: s, err: String(e) })
+            return this.market.getCandles(s, 3600)
+          }
+        },
         buildStrategies: () => {
           const brainStrat = () => new BrainStrategy(this.brain)
           return [

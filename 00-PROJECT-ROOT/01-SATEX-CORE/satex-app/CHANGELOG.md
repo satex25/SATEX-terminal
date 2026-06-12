@@ -9,6 +9,16 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Added
 
+- **P-008 (a): Multi-day historical bars for nightly self-eval (world-market
+  coverage).** Extended `SelfEvalService.getCandles()` in trading-engine.ts to
+  fetch 2 days (yesterday + today) of 1-minute bars from Alpaca historical API
+  instead of just the in-memory buffer. Detects crypto symbols (BTC/ETH/SOL/etc)
+  and routes through `getCryptoBars()` for crypto data. Falls back gracefully to
+  in-memory buffer if historical fetch fails (market holiday, missing API
+  credentials). This enables the nightly backtest runner to study previous-day
+  context and multi-session trends for Asia/Europe session analysis. All four
+  gates pass: typecheck, lint, test (669 cases), knip (CI on Node 20.19).
+
 - **P-013 diagnostics — Vault/Trades write path pinned, unjournaled closes
   made loud.** `vault-writer.test.ts` (4 new vitest cases) pins the writer
   half of the trade-close pipeline: `.obsidian` root detection, Trades note

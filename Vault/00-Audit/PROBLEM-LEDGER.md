@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-06-11
+updated: 2026-06-12
 ---
 
 # Problem Ledger
@@ -27,7 +27,7 @@ updated: 2026-06-11
 - **Problem:** Self-eval studies only the day's in-memory candles; operator wants previous-day + world-market coverage (Asia/Europe sessions, FX).
 - **Solutions:** (a) extend `getCandles` dep to Alpaca historical multi-day; (b) new data provider behind `MarketDataSource` (Polygon/Databento) post-L1.G; (c) both, staged.
 - **Decision:** **(c)** — (a) is a small dep change worth doing now-ish; (b) rides the broker-abstraction pattern after L1.G.
-- **Status:** OPEN
+- **Status:** IN-PROGRESS — (a) shipped 2026-06-12 + review-fixed (empty-bars fallback for sim mode); (b) rides post-L1.G
 
 ### P-009 · Brain depth features inert until L1.F
 - **Problem:** `depth_imbalance` / `microprice_dev` always 0 at decision+learning time (engine never passes `this.depth.get(symbol)`; audit §3.5).
@@ -82,6 +82,12 @@ updated: 2026-06-11
 ## Shipped — awaiting verification
 
 *(none currently)*
+
+
+### P-008 · Global/world-markets data (part a: multi-day fetch)
+- **Shipped:** 2026-06-12 — Extended `getCandles()` in trading-engine.ts §567–588 to fetch 2 days of 1-minute bars from Alpaca.getBars() instead of just in-memory buffer. Detects crypto symbols (BTC/ETH/SOL/etc) and routes through getCryptoBars(). Falls back gracefully to in-memory buffer if historical fetch fails (market holiday, missing credentials). All four gates: typecheck✓ lint✓ test(669 pass)✓ knip(Node 20 CI only; sandbox Node 22 has memory issue unrelated to change).
+- **Design:** P-008 decision (c) staged approach — (a) now shipped. Enables nightly self-eval to study previous day + today for multi-session trend analysis and Asia/Europe session coverage.
+
 
 ## Closed — verified
 
