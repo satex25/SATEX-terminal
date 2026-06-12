@@ -6,7 +6,7 @@
  * with fewer than 20 overlapping bars.
  */
 import { describe, expect, it } from 'vitest'
-import { alignCloses, correlation } from './risk-gates'
+import { alignCloses, correlation, toLogReturns } from './risk-gates'
 import type { Candle } from '../../shared/types'
 
 function candle(time: number, close: number): Candle {
@@ -102,5 +102,28 @@ describe('correlation — overlap floor and math sanity', () => {
     expect(aligned.b).toHaveLength(30)
     const rho = correlation(aligned.a, aligned.b)
     expect(rho).toBeGreaterThan(0.99) // both linear-increasing
+  })
+})
+
+describe('toLogReturns — P-010 price-vs-return correlation', () => {
+  it('diffs closes into log-returns, guarding non-positive prices', () => {
+    const r = toLogReturns([100, 105, 0, 110, 121])
+    // 0 breaks both adjacent pairs; only 100→105 and 110→121 survive.
+    expect(r).toHaveLength(2)
+    expect(r[0]).toBeCloseTo(Math.log(1.05), 12)
+    expect(r[1]).toBeCloseTo(Math.log(1.1), 12)
+  })
+
+  it('two trending series with independent returns: price-ρ reads ~1, return-ρ reads ~0', () => {
+    // Deterministic pseudo-noise (no RNG in tests).
+    const a: number[] = [100], b: number[] = [100]
+    for (let i = 1; i <= 60; i++) {
+      a.push(a[i - 1]! * (1 + 0.002 + 0.004 * Math.sin(i * 1.7)))
+      b.push(b[i - 1]! * (1 + 0.002 + 0.004 * Math.cos(i * 2.3)))
+    }
+    const priceRho = correlation(a, b)
+    const returnRho = correlation(toLogReturns(a), toLogReturns(b))
+    expect(priceRho).toBeGreaterThan(0.95)            // the pre-fix illusion
+    expect(Math.abs(returnRho)).toBeLessThan(0.35)    // the truth
   })
 })

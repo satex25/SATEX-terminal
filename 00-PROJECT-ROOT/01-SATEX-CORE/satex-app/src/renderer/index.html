@@ -9,8 +9,12 @@
          external <script type="module"> — no inline scripts required. style-src
          retains 'unsafe-inline' because React inline style attributes are
          common and useful; img-src defaults to default-src 'self' so no data:
-         exfiltration channel. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://stream.data.alpaca.markets wss://stream.data.alpaca.markets https://paper-api.alpaca.markets wss://paper-api.alpaca.markets https://api.alpaca.markets wss://api.alpaca.markets https://data.alpaca.markets https://aistudio.baidu.com;" />
+         exfiltration channel.
+         2026-06-10 audit §3.6 — aistudio.baidu.com removed from connect-src.
+         All LLM traffic originates in the MAIN process (services/llm.ts); the
+         renderer never contacts an LLM endpoint, so allowlisting one here only
+         handed an XSS'd renderer a sanctioned exfiltration channel. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://stream.data.alpaca.markets wss://stream.data.alpaca.markets https://paper-api.alpaca.markets wss://paper-api.alpaca.markets https://api.alpaca.markets wss://api.alpaca.markets https://data.alpaca.markets;" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />

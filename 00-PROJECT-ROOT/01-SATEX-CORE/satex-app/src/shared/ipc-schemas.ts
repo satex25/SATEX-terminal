@@ -107,8 +107,21 @@ export const CredentialsSetReq = z.object({
 })
 export type CredentialsSetReq = z.infer<typeof CredentialsSetReq>
 
-export const BaiduSetReq = z.string().min(1).max(512)
-export type BaiduSetReq = z.infer<typeof BaiduSetReq>
+/** Advisory-LLM config (provider-agnostic, OpenAI-compatible endpoint).
+ *  `apiKey` may be empty = keep the previously stored key. Length caps bound
+ *  hostile payloads; URL-shape validation lives in credential-store. */
+export const LlmConfigSetReq = z.object({
+  baseUrl: z.string().min(8).max(300),
+  model:   z.string().min(1).max(120),
+  apiKey:  z.string().max(512),
+}).strict()
+export type LlmConfigSetReq = z.infer<typeof LlmConfigSetReq>
+
+export const SelfEvalSetReq = z.object({ enabled: z.boolean() }).strict()
+export type SelfEvalSetReq = z.infer<typeof SelfEvalSetReq>
+
+export const WireSetReq = z.object({ enabled: z.boolean() }).strict()
+export type WireSetReq = z.infer<typeof WireSetReq>
 
 // ── Live mode ───────────────────────────────────────────────────────────────
 // `confirmPhrase` removed 2026-05-16 (adversarial finding C6). The renderer-

@@ -1,3 +1,12 @@
+---
+type: audit-plan
+title: SATEX Master Fix Plan
+generated: 2026-05-14
+status: historical
+superseded-by: "[[PROBLEM-LEDGER]] + [[2026-06-10-FULL-SYSTEM-AUDIT]]"
+tags: [satex, audit, historical]
+---
+
 # SATEX MASTER FIX PLAN
 
 **Generated:** 2026-05-14

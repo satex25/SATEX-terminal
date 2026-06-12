@@ -51,14 +51,23 @@ export const IPC = {
 
   // Brain / learned params
   BRAIN_GET:          'satex:brain:get',
+  CALIBRATION_GET:    'satex:calibration:get',
+  SELF_EVAL_GET:      'satex:selfeval:get',
+  SELF_EVAL_SET:      'satex:selfeval:set',
+  SELF_EVAL_RUN:      'satex:selfeval:run',
+
+  // THE WIRE — live world-news desk (main-side RSS poller)
+  WIRE_GET:           'satex:wire:get',
+  WIRE_SET:           'satex:wire:set',
+  WIRE_UPDATE:        'satex:wire:update',
 
   // Credentials / health
   CREDENTIALS_STATUS: 'satex:credentials:status',
   CREDENTIALS_GET_MASKED: 'satex:credentials:getMasked',
   CREDENTIALS_SET:    'satex:credentials:set',
   CREDENTIALS_CLEAR:  'satex:credentials:clear',
-  BAIDU_GET_MASKED:   'satex:baidu:getMasked',
-  BAIDU_SET:          'satex:baidu:set',
+  LLM_CONFIG_GET:     'satex:llm:getStatus',
+  LLM_CONFIG_SET:     'satex:llm:set',
   ALPACA_RECONNECT:   'satex:alpaca:reconnect',
   HEALTH_CHECK:       'satex:health:check',
 
@@ -268,6 +277,7 @@ const PUSH_CHANNELS = [
   IPC.FEED_STATUS_UPDATE,
   IPC.UPDATE_AVAILABLE,
   IPC.SUBSECOND_CANDLES_UPDATE,
+  IPC.WIRE_UPDATE,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

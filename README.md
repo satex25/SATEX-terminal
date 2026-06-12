@@ -32,6 +32,8 @@ npm run knip         # dead-code / unused deps
 
 ## Documentation
 
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the one-page system map: workspace layout,
+  runtime architecture, the learning loop, gates, and the program ladder.
 - **[AGENTS.md](AGENTS.md)** — how agents and humans work this repo: the gate bar,
   branch → PR → merge flow, trading-safety guardrails, and the grounded-review routine.
 - **[CHANGELOG](00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CHANGELOG.md)** — release history (see `[0.5.0]`).

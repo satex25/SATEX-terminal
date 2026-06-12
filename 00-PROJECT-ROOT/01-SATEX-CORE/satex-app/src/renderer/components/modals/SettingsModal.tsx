@@ -1,14 +1,16 @@
 /**
  * SATEX — Settings dialog.
  * Sections: Alpaca paper credentials · Alpaca live credentials ·
- *           Baidu AI Studio (ERNIE 5.1) · Display.
+ *           AI Advisor (any OpenAI-compatible provider) ·
+ *           Nightly Self-Evaluation · Display.
  *
  * Paper and live keypairs are stored in separate slots. The active endpoint
  * is selected via the top-right Paper/Live toggle (alpaca-mode.ts).
  */
 import { useEffect, useState } from 'react'
 import { Modal } from '../Modal'
-import { UNIVERSE } from '@shared/constants'
+import { UNIVERSE, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL } from '@shared/constants'
+import type { SelfEvalStatus } from '@shared/types'
 import { useSubsecondStore, type PreferredBucketMs } from '../../stores/subsecondStore'
 import { useThemeStore, THEMES, type ThemeId } from '../../stores/themeStore'
 
@@ -33,10 +35,51 @@ export function SettingsModal({ open, onClose }: Props) {
   const [liveBusy, setLiveBusy] = useState(false)
   const [liveMasked, setLiveMasked] = useState<string>('')
 
-  const [baiduKey, setBaiduKey] = useState('')
-  const [baiduHas, setBaiduHas] = useState(false)
-  const [baiduMsg, setBaiduMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [baiduBusy, setBaiduBusy] = useState(false)
+  // Advisory LLM — provider-agnostic (any OpenAI-compatible endpoint).
+  // 2026-06-10: replaces the hardcoded Baidu/ERNIE slot. The key is stored in
+  // safeStorage main-side; only `configured` + baseUrl/model echo back here.
+  // Prefilled with the house default (Groq) so a fresh setup is paste-key-
+  // and-go; getLlmStatus overwrites with the stored provider when configured.
+  const [llmBaseUrl, setLlmBaseUrl] = useState(DEFAULT_LLM_BASE_URL)
+  const [llmModel, setLlmModel] = useState(DEFAULT_LLM_MODEL)
+  const [llmKey, setLlmKey] = useState('')
+  const [llmHas, setLlmHas] = useState(false)
+  const [llmMsg, setLlmMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [llmBusy, setLlmBusy] = useState(false)
+
+  // Nightly self-eval toggle + status (Settings is the canonical surface).
+  const [seStatus, setSeStatus] = useState<SelfEvalStatus | null>(null)
+  const [seBusy, setSeBusy] = useState(false)
+
+  async function refreshSelfEval() {
+    try {
+      const s = await window.satex?.getSelfEvalStatus?.()
+      if (s) setSeStatus(s)
+    } catch { /* ignore */ }
+  }
+
+  async function toggleSelfEval() {
+    if (!window.satex || !seStatus) return
+    setSeBusy(true)
+    try { setSeStatus(await window.satex.setSelfEvalEnabled(!seStatus.enabled)) }
+    catch { /* ignore */ }
+    setSeBusy(false)
+  }
+
+  async function runSelfEvalNow() {
+    if (!window.satex) return
+    setSeBusy(true)
+    try {
+      await window.satex.runSelfEvalNow()
+      // Poll a few times so the "Running…" → result transition is visible
+      // without a permanent interval.
+      for (const delay of [1500, 4000, 8000]) {
+        setTimeout(() => { void refreshSelfEval() }, delay)
+      }
+      await refreshSelfEval()
+    } catch { /* ignore */ }
+    setSeBusy(false)
+  }
 
   const [zoom, setZoom] = useState(1.0)
 
@@ -84,13 +127,17 @@ export function SettingsModal({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return
-    setPaperMsg(null); setLiveMsg(null); setBaiduMsg(null); setReconnectMsg(null)
+    setPaperMsg(null); setLiveMsg(null); setLlmMsg(null); setReconnectMsg(null)
     void (async () => {
       await refreshMaskedStatus()
       await refreshAlpacaModeStatus()
       try {
-        const baidu = await window.satex?.getBaiduMasked()
-        if (baidu) setBaiduHas(baidu.configured)
+        const llm = await window.satex?.getLlmStatus()
+        if (llm) {
+          setLlmHas(llm.configured)
+          if (llm.configured) { setLlmBaseUrl(llm.baseUrl); setLlmModel(llm.model) }
+        }
+        await refreshSelfEval()
         const z = await window.satex?.getZoom()
         if (z) setZoom(z)
         // A1 Sprint 2 — re-fetch sub-second prefs on open so a hand-edit
@@ -192,22 +239,23 @@ export function SettingsModal({ open, onClose }: Props) {
     setPaperBusy(false); setLiveBusy(false)
   }
 
-  async function saveBaidu() {
+  async function saveLlm() {
     if (!window.satex) return
-    setBaiduBusy(true); setBaiduMsg(null)
+    setLlmBusy(true); setLlmMsg(null)
     try {
-      const res = await window.satex.setBaiduKey(baiduKey)
+      // Empty key = keep the previously stored key (provider/model-only change).
+      const res = await window.satex.setLlmConfig({ baseUrl: llmBaseUrl, model: llmModel, apiKey: llmKey })
       if (res.ok) {
-        setBaiduMsg({ ok: true, text: 'Baidu AI Studio token saved.' })
-        setBaiduKey('')
-        setBaiduHas(true)
+        setLlmMsg({ ok: true, text: `Advisor config saved — ${llmModel}.` })
+        setLlmKey('')
+        setLlmHas(true)
       } else {
-        setBaiduMsg({ ok: false, text: res.reason ?? 'Failed' })
+        setLlmMsg({ ok: false, text: res.reason ?? 'Failed' })
       }
     } catch (e) {
-      setBaiduMsg({ ok: false, text: String(e) })
+      setLlmMsg({ ok: false, text: String(e) })
     }
-    setBaiduBusy(false)
+    setLlmBusy(false)
   }
 
   function setZoomAndApply(z: number) {
@@ -232,8 +280,8 @@ export function SettingsModal({ open, onClose }: Props) {
             marginLeft: 10, fontFamily: 'var(--font-mono)', fontSize: 10,
             padding: '2px 6px', borderRadius: 3,
             background: alpacaConnected ? 'rgba(34, 197, 94, 0.15)' : 'rgba(245, 166, 35, 0.15)',
-            color:      alpacaConnected ? '#22c55e'                : '#f5a623',
-            border:     `1px solid ${alpacaConnected ? '#22c55e' : '#f5a623'}`,
+            color:      alpacaConnected ? 'var(--bb-pos)'          : 'var(--bb-warn)',
+            border:     `1px solid ${alpacaConnected ? 'var(--bb-pos)' : 'var(--bb-warn)'}`,
           }}>
             {alpacaConnected ? `LIVE · Alpaca ${alpacaModeLabel}` : 'SIMULATOR'}
           </span>
@@ -362,26 +410,86 @@ export function SettingsModal({ open, onClose }: Props) {
       </div>
 
       <div className="dialog-section">
-        <div className="dialog-section-title">Baidu AI Studio · ERNIE 5.1 Decision Agent</div>
+        <div className="dialog-section-title">AI Advisor · any OpenAI-compatible provider</div>
         <div className="form-row">
-          <label>Access Token</label>
+          <label>Base URL</label>
+          <input
+            type="text"
+            className="form-input"
+            value={llmBaseUrl}
+            placeholder="https://api.groq.com/openai/v1"
+            onChange={e => setLlmBaseUrl(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <div className="form-row">
+          <label>Model</label>
+          <input
+            type="text"
+            className="form-input"
+            value={llmModel}
+            placeholder="llama-3.1-8b-instant"
+            onChange={e => setLlmModel(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <div className="form-row">
+          <label>API Key</label>
           <input
             type="password"
             className="form-input"
-            value={baiduKey}
-            placeholder={baiduHas ? '••••••••  (stored, enter new to replace)' : 'AI Studio access token'}
-            onChange={e => setBaiduKey(e.target.value)}
+            value={llmKey}
+            placeholder={llmHas ? '••••••••  (stored — leave blank to keep)' : 'provider API key'}
+            onChange={e => setLlmKey(e.target.value)}
             autoComplete="off"
           />
         </div>
         <div className="form-hint">
-          Used by the Baidu ERNIE 5.1 decision agent. Grab a token at <code>aistudio.baidu.com/account/accessToken</code>. The local online-learning brain runs without a token.
+          Advisory rationale only — never gates or routes an order. Works with any OpenAI-compatible
+          endpoint: Groq, OpenAI, OpenRouter, Mistral, DeepSeek, Baidu AI Studio, or a local Ollama
+          (<code>http://127.0.0.1:11434/v1</code>). The local online-learning brain runs without it.
         </div>
-        {baiduMsg && <div className={`form-hint ${baiduMsg.ok ? 'ok' : 'err'}`} style={{ marginTop: 8 }}>{baiduMsg.text}</div>}
+        {llmMsg && <div className={`form-hint ${llmMsg.ok ? 'ok' : 'err'}`} style={{ marginTop: 8 }}>{llmMsg.text}</div>}
         <div style={{ marginTop: 12 }}>
-          <button type="button" className="dialog-btn primary" disabled={baiduBusy || !baiduKey} onClick={saveBaidu}>
-            {baiduBusy ? 'Saving…' : 'Save AI Studio Token'}
+          <button type="button" className="dialog-btn primary" disabled={llmBusy || !llmBaseUrl || !llmModel || (!llmKey && !llmHas)} onClick={saveLlm}>
+            {llmBusy ? 'Saving…' : llmHas ? 'Update Advisor Config' : 'Save Advisor Config'}
           </button>
+        </div>
+      </div>
+
+      <div className="dialog-section">
+        <div className="dialog-section-title">Nightly Self-Evaluation · 02:30 local</div>
+        <div className="form-hint">
+          Re-runs the strategy roster — brain (live learned weights), momentum, mean-reversion,
+          breakout, and the regime-routed ensemble — over the day's bars, regression-checks each
+          against its locked baseline, and writes the verdict to <code>Vault/Backtests</code>.
+          Observational only: it never places, sizes, or gates an order.
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className={`dialog-btn ${seStatus?.enabled ? 'primary' : ''}`}
+            onClick={toggleSelfEval}
+            disabled={seBusy || !seStatus}
+            aria-pressed={!!seStatus?.enabled}
+          >
+            {seStatus ? (seStatus.enabled ? '● Nightly ON' : '○ Nightly OFF') : '…'}
+          </button>
+          <button
+            type="button"
+            className="dialog-btn"
+            onClick={runSelfEvalNow}
+            disabled={seBusy || !!seStatus?.running}
+          >
+            {seStatus?.running ? 'Running…' : 'Run Now'}
+          </button>
+          <span className="form-hint" style={{ marginTop: 0 }}>
+            {seStatus?.lastRun
+              ? `last run ${new Date(seStatus.lastRun.finishedAt).toLocaleTimeString()} — ${seStatus.lastRun.evaluated} evaluated, ${seStatus.lastRun.baselined} baselined, ${seStatus.lastRun.regressions} regression${seStatus.lastRun.regressions === 1 ? '' : 's'} → ${seStatus.lastRun.reportFilename}`
+              : 'no runs yet this boot'}
+          </span>
         </div>
       </div>
 

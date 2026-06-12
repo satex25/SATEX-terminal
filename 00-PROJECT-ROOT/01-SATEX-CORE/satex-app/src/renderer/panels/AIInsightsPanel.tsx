@@ -1,14 +1,15 @@
 /**
  * SATEX — AI Insights Panel
  * Computed indicators, signal bias, EMA stack, RSI/VWAP gating for the focused symbol.
- * Also surfaces the AI brain rationale (local model + optional Baidu ERNIE 5.1).
+ * Also surfaces the AI brain rationale (local model + optional advisory LLM)
+ * and the confidence-calibration health strip (Brier + reliability buckets).
  */
 import { useEffect, useState } from 'react'
 import { useMarketStore } from '../stores/marketStore'
 import { useAccountStore } from '../stores/accountStore'
 import { Ring } from '../components/Ring'
 import { fmt } from '../lib/format'
-import type { AiDecision } from '@shared/types'
+import type { AiDecision, CalibrationSnapshot } from '@shared/types'
 
 export function AIInsightsPanel() {
   const symbol     = useMarketStore(s => s.symbol)
@@ -16,6 +17,7 @@ export function AIInsightsPanel() {
   const indicators = useAccountStore(s => s.indicators.get(symbol))
   const setInds    = useAccountStore(s => s.setIndicators)
   const [decision, setDecision] = useState<AiDecision | null>(null)
+  const [calib, setCalib] = useState<CalibrationSnapshot | null>(null)
 
   useEffect(() => {
     if (!window.satex) return
@@ -39,6 +41,18 @@ export function AIInsightsPanel() {
     const id = setInterval(pull, 12000) // refresh AI rationale every 12s
     return () => { cancelled = true; clearInterval(id) }
   }, [symbol])
+
+  // Calibration health — global (not per-symbol), light 30s cadence.
+  useEffect(() => {
+    if (!window.satex?.getCalibration) return
+    let cancelled = false
+    const pull = () => {
+      window.satex.getCalibration().then(c => { if (!cancelled) setCalib(c) }).catch(() => {})
+    }
+    pull()
+    const id = setInterval(pull, 30000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
 
   if (!indicators || !quote) {
     return (
@@ -87,7 +101,33 @@ export function AIInsightsPanel() {
             </span>
           </div>
           <div className="body" style={{ fontSize: 11, color: 'var(--ink-1)', lineHeight: 1.5 }}>
-            {decision.llmRationale ?? <span style={{ color: 'var(--ink-3)' }}>Local model only — add Baidu AI Studio token for ERNIE 5.1 rationale.</span>}
+            {decision.llmRationale ?? <span style={{ color: 'var(--ink-3)' }}>Local model only — configure an AI advisor in Settings for narrated rationale.</span>}
+          </div>
+        </div>
+      )}
+
+      {calib && calib.samples > 0 && (
+        <div className="ai-stream">
+          <div className="head" style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>CALIBRATION</span>
+            <span style={{ color: calib.multiplier < 1 ? 'var(--warn)' : 'var(--ink-3)' }}>
+              Brier {calib.brierScore !== null ? calib.brierScore.toFixed(3) : '—'}
+              {' · ×'}{calib.multiplier.toFixed(2)}
+              {' · n='}{calib.samples}{calib.samples < calib.minSamples ? `/${calib.minSamples} warmup` : ''}
+            </span>
+          </div>
+          <div className="body" style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 24 }}>
+            {calib.buckets.map((b) => {
+              const gap = b.n > 0 ? Math.abs(b.winRate - b.avgConfidence) : 0
+              const color = b.n === 0 ? 'var(--line-2)' : gap < 0.15 ? 'var(--bull)' : gap < 0.3 ? 'var(--warn)' : 'var(--bear)'
+              return (
+                <div
+                  key={b.lo}
+                  title={`${(b.lo * 100).toFixed(0)}–${(b.hi * 100).toFixed(0)}% claimed · won ${(b.winRate * 100).toFixed(0)}% (n=${b.n})`}
+                  style={{ flex: 1, height: b.n === 0 ? 3 : Math.min(24, 6 + b.n * 2), background: color, opacity: b.n === 0 ? 0.5 : 0.9, borderRadius: 1 }}
+                />
+              )
+            })}
           </div>
         </div>
       )}

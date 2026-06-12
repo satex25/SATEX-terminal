@@ -306,29 +306,60 @@ export function getAlpacaCredsMasked(): CredentialsMaskedStatus {
   }
 }
 
-// ── Baidu AI Studio (ERNIE 5.1) ───────────────────────────────────────────
-const BAIDU_FILE = 'baidu-aistudio-key.bin'
+// ── Advisory LLM (provider-agnostic, OpenAI-compatible) ──────────────────
+// 2026-06-10 — replaces the hardcoded Baidu-only slot. Any provider speaking
+// the OpenAI chat-completions convention plugs in via { baseUrl, model, key }.
+// The key never leaves safeStorage; baseUrl/model ride in the same encrypted
+// blob for simplicity. services/llm.ts is the only consumer of the key.
+const LLM_FILE = 'llm-config.bin'
+interface StoredLlm { baseUrl: string; model: string; key: string }
 
-export function getBaiduKey(): string | null {
+/** Legacy Baidu AI Studio slot (pre-adapter era). Read-only: an existing
+ *  ERNIE token keeps working untouched until the user saves a new LLM config. */
+const BAIDU_FILE = 'baidu-aistudio-key.bin'
+const LEGACY_BAIDU_BASE_URL = 'https://aistudio.baidu.com/llm/lmapi/v3'
+const LEGACY_BAIDU_MODEL    = 'ernie-5.1'
+
+function getLegacyBaiduKey(): string | null {
   return readEncrypted<StoredBaidu>(file(BAIDU_FILE))?.key ?? null
 }
 
-export function setBaiduKey(key: string): { ok: boolean; reason?: string } {
-  const k = key.trim()
-  if (k.length < 20) return { ok: false, reason: 'Access token looks too short — paste the full AI Studio token.' }
+export function getLlmConfig(): { baseUrl: string; model: string; apiKey: string } | null {
+  const stored = readEncrypted<StoredLlm>(file(LLM_FILE))
+  if (stored) return { baseUrl: stored.baseUrl, model: stored.model, apiKey: stored.key }
+  const baidu = getLegacyBaiduKey()
+  if (baidu) return { baseUrl: LEGACY_BAIDU_BASE_URL, model: LEGACY_BAIDU_MODEL, apiKey: baidu }
+  return null
+}
+
+export function setLlmConfig(req: { baseUrl: string; model: string; apiKey: string }): { ok: boolean; reason?: string } {
+  const baseUrl = req.baseUrl.trim().replace(/\/+$/, '')
+  const model   = req.model.trim()
+  let key       = req.apiKey.trim()
+  if (!/^https?:\/\//.test(baseUrl)) return { ok: false, reason: 'Base URL must start with http:// or https://' }
+  if (!model) return { ok: false, reason: 'Model name is required.' }
+  if (!key) {
+    // Empty key = "keep my stored key, just change provider/model".
+    const existing = getLlmConfig()
+    if (!existing?.apiKey) return { ok: false, reason: 'API key required — no previously stored key to reuse.' }
+    key = existing.apiKey
+  }
   try {
-    writeEncrypted(file(BAIDU_FILE), { key: k })
+    writeEncrypted(file(LLM_FILE), { baseUrl, model, key } satisfies StoredLlm)
   } catch (e) {
     if (e instanceof SecureStorageUnavailableError) {
-      return { ok: false, reason: 'OS secure-storage unavailable — token cannot be saved on this system. Check your OS keychain, then retry.' }
+      return { ok: false, reason: 'OS secure-storage unavailable — key cannot be saved on this system. Check your OS keychain, then retry.' }
     }
-    log.error('baidu key write failed', { err: String(e) })
-    return { ok: false, reason: `Failed to save token: ${String(e)}` }
+    log.error('llm config write failed', { err: String(e) })
+    return { ok: false, reason: `Failed to save config: ${String(e)}` }
   }
-  log.info('baidu ai-studio key saved')
+  log.info('llm config saved', { baseUrl, model })  // never log the key
   return { ok: true }
 }
 
-export function getBaiduMasked(): { configured: boolean } {
-  return { configured: !!getBaiduKey() }
+export function getLlmStatus(): { configured: boolean; baseUrl: string; model: string } {
+  const cfg = getLlmConfig()
+  return cfg
+    ? { configured: true, baseUrl: cfg.baseUrl, model: cfg.model }
+    : { configured: false, baseUrl: '', model: '' }
 }

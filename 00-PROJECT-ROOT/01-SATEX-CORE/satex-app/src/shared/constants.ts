@@ -131,6 +131,12 @@ export const HISTORICAL_BARS_FALLBACK_SYMBOLS: readonly string[] = [
 
 export const ALPACA_PAPER_HOST = 'paper-api.alpaca.markets'
 
+/** Default advisory-LLM provider (2026-06-10): Groq free tier — fastest
+ *  OpenAI-compatible inference for a one-sentence rationale; swap via
+ *  Settings → AI Advisor without code changes if it ever disappoints. */
+export const DEFAULT_LLM_BASE_URL = 'https://api.groq.com/openai/v1'
+export const DEFAULT_LLM_MODEL    = 'llama-3.1-8b-instant'
+
 export function findUniverseEntry(symbol: string): UniverseEntry | undefined {
   return UNIVERSE.find((u) => u.symbol === symbol)
 }

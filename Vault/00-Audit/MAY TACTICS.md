@@ -1,3 +1,11 @@
+---
+type: reference
+title: MAY TACTICS — Institutional Quant Tactics Library
+generated: 2026-05-14
+status: living-reference
+tags: [satex, tactics, research, reference]
+---
+
 # MAY TACTICS — Institutional Quant Tactics Library
 
 **Last updated:** 2026-05-14

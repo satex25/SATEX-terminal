@@ -1,0 +1,32 @@
+filters:
+  and:
+    - file.inFolder("Vault/Trades")
+    - type == "trade-close"
+views:
+  - type: table
+    name: All trades
+    order:
+      - file.name
+      - symbol
+      - outcome
+      - pnl
+      - holdMinutes
+      - regimeAtEntry
+      - closedAt
+    sort:
+      - property: closedAt
+        direction: DESC
+  - type: table
+    name: Losses (learn from these)
+    filters:
+      and:
+        - outcome == "loss"
+    order:
+      - file.name
+      - symbol
+      - pnl
+      - regimeAtEntry
+      - closedAt
+    sort:
+      - property: pnl
+        direction: ASC

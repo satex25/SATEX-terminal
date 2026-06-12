@@ -13,9 +13,12 @@ trading path** via Alpaca. Treat it as production financial software, not a toy.
 
 ## Repo map
 
+- **System map:** `ARCHITECTURE.md` (workspace + runtime + learning loop — keep it current)
 - **App (THE app, nested):** `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`
 - **CI:** `.github/workflows/ci.yml`
-- **Vault (Obsidian, runtime data — untracked by design):** `Vault/`
+- **Vault (Obsidian, runtime data — untracked by design):** `Vault/` — incl.
+  `Backtests/` (nightly self-eval + baselines) and `Learnings/` (capped session notes)
+- **Reference dumps (gitignored):** `90-REFERENCE/`
 - **Default branch:** `master` · **Remote:** github.com/satex25/satex-trading
 
 ## The gate bar — all four must be green
@@ -77,6 +80,25 @@ Touching any of the above requires a human in the loop and explicit PR sign-off.
   session today).
 - Clean up what you create: disconnect observers, clear timers, cancel in-flight
   async on unmount (a real `ResizeObserver` leak shipped once — see PR #6).
+
+## The PSD loop — continuous problem → solution → decision (MANDATORY, 2026-06-10)
+
+Operator directive: green gates are the FLOOR, not the goal. A passing typecheck
+does not mean the operator is looking at a world-class quant terminal. Every agent
+session runs this loop:
+
+1. **Boot:** read `Vault/00-Audit/PROBLEM-LEDGER.md` — the living problem queue.
+   Pick up DECIDED/IN-PROGRESS entries before inventing new work.
+2. **PSD every problem** (the `/problem-solution-decision` skill is the template):
+   evidenced PROBLEM (file:line or repro) → **≥2 candidate SOLUTIONS with
+   trade-offs** → DECISION with rationale. No solution ships undecided.
+3. **Mid-task findings enter the ledger immediately.** An unrecorded problem is a
+   lost problem. Never delete entries — solved ones sink to §Closed with evidence.
+4. **Close:** update statuses (OPEN → DECIDED → IN-PROGRESS → SHIPPED → VERIFIED),
+   stamp commits/PRs, and leave the next agent a runnable starting point.
+5. **The bar after gates pass:** does this change make a live trading session
+   calmer, faster, more legible? Features are tools for the operator's mind —
+   ease-at-the-open is the product. Review, revise, re-review before handing off.
 
 ## Verify, don't confabulate
 

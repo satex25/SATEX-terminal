@@ -43,7 +43,7 @@ import { DepthBookPanel } from './panels/DepthBookPanel'
 import { RegimeDashboardPanel } from './panels/RegimeDashboardPanel'
 import { ExecTicketPanel } from './panels/ExecTicketPanel'
 import { PortfolioMiniPanel } from './panels/PortfolioMiniPanel'
-import { CatalystsPanel } from './panels/CatalystsPanel'
+import { NewsDeskPanel } from './panels/NewsDeskPanel'
 import { RiskGatePanel } from './panels/RiskGatePanel'
 import { SystemLogsPanel } from './panels/SystemLogsPanel'
 import { ChartPanel } from './panels/ChartPanel'
@@ -303,7 +303,7 @@ export default function App() {
       <div className="bb-secondary-row">
         <div className="bb-sec-portfolio"><PortfolioMiniPanel /></div>
         <span className="bb-divider-v" />
-        <div className="bb-sec-catalysts"><CatalystsPanel /></div>
+        <div className="bb-sec-catalysts"><NewsDeskPanel /></div>
         <span className="bb-divider-v" />
         <div className="bb-sec-risk"><RiskGatePanel /></div>
         <span className="bb-divider-v" />
