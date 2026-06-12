@@ -1,3 +1,12 @@
+---
+type: audit
+title: SATEX Production Handoff (v0.3.0 forensic baseline)
+generated: 2026-05-14
+status: historical
+superseded-by: "[[2026-06-10-FULL-SYSTEM-AUDIT]]"
+tags: [satex, audit, historical]
+---
+
 # SATEX TRADING INTELLIGENCE TERMINAL — PRODUCTION HANDOFF DOCUMENT
 
 **Generated:** 2026-05-14

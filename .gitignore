@@ -123,9 +123,12 @@ RUBBISH/
 #   Observer = continuous-observer checkpoints (one every ~10 min)
 #   Sessions = session-close artifacts
 #   Settings = app-persisted workspace layout + per-symbol subsecond prefs
-Vault/Observer/
-Vault/Sessions/
-Vault/Settings/
+Vault/Observer/*
+!Vault/Observer/README.md
+Vault/Sessions/*
+!Vault/Sessions/README.md
+Vault/Settings/*
+!Vault/Settings/README.md
 
 # Superpowers brainstorming visual-companion mockups (transient design aids)
 .superpowers/
@@ -142,3 +145,11 @@ Vault/Learnings/*
 
 # node_modules as a SYMLINK (sandbox dev shims) — the dir-only pattern above misses it
 node_modules
+
+# Machine-written trade/tactics/brain notes (runtime data) -- READMEs stay tracked.
+Vault/Trades/*
+!Vault/Trades/README.md
+Vault/Tactics/*
+!Vault/Tactics/README.md
+Vault/Brain/*
+!Vault/Brain/README.md

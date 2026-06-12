@@ -1,0 +1,28 @@
+views:
+  - type: table
+    name: Session learnings
+    filters:
+      and:
+        - file.inFolder("Vault/Learnings")
+        - type == "learnings"
+    order:
+      - file.name
+      - session
+      - date
+    sort:
+      - property: date
+        direction: DESC
+    limit: 15
+  - type: table
+    name: Nightly self-evals
+    filters:
+      and:
+        - file.inFolder("Vault/Backtests")
+        - type == "self-eval"
+    order:
+      - file.name
+      - date
+    sort:
+      - property: date
+        direction: DESC
+    limit: 15

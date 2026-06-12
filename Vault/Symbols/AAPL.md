@@ -1,23 +1,35 @@
 ---
 symbol: AAPL
-sector:
+sector: "Consumer tech (mega-cap)"
+type: symbol
 notes-since: 2026-05-12
 tags: [satex, symbol, watchlist]
 aliases: [AAPL]
 ---
 
-# AAPL
+# AAPL — Consumer tech (mega-cap)
 
-> Auto-generated symbol page. SATEX watchlist member since 2026-05-12.
+> Watchlist member since 2026-05-12 (source: `AUTONOMOUS_WATCHLIST` in `src/shared/constants.ts`).
+> Every machine note that mentions AAPL backlinks here — check the **backlinks pane** for the full history.
 
-## Price Context
+## Mentions across the vault
 
-*No live data — connect to market-data subsystem when available.*
+```query
+AAPL path:"Vault" -path:"Vault/Symbols" -path:"Vault/Observer"
+```
 
-## Session References
+## Trades on this symbol
 
-<!-- Auto-populated by session-writer patch — see Step 3 -->
+Auto-fills once trade notes flow — [[../00-Audit/PROBLEM-LEDGER|P-013]].
+
+```query
+AAPL path:"Vault/Trades"
+```
+
+## Operator notes
+
+- 
 
 ## Related
 
-[[00-INDEX]]
+[[HOME]] · [[Vault/00-INDEX|Index]] · [[NVDA]] · [[AMD]] · [[MSFT]] · [[TSLA]] · [[META]] · [[IWM]]

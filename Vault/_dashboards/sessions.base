@@ -1,0 +1,18 @@
+filters:
+  and:
+    - file.inFolder("Vault/Sessions")
+    - type == "session-end"
+views:
+  - type: table
+    name: Session closes
+    order:
+      - file.name
+      - outcome
+      - realizedPnl
+      - tradeCount
+      - drawdownPct
+      - endingEquity
+    sort:
+      - property: file.name
+        direction: DESC
+    limit: 20
