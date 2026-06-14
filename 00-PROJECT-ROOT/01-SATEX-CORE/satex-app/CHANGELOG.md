@@ -126,6 +126,18 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **`fmt.k()` leaked raw float noise on sub-1000 values (P-019).** The compact
+  number formatter returned `String(v)` unrounded below 1,000, so fractional
+  inputs rendered IEEE-754 artifacts (a size of `0.1 + 0.2` showed as
+  `0.30000000000000004`) while the K/M/B branches all rounded. It now rounds
+  sub-1000 non-integers to 3 significant figures — consistent with the suffixed
+  branches and noise-free (`0.3`); integers still pass through unchanged. Affects
+  the four operator surfaces that read it: ChartPanel volume, MarketsOverview
+  volume + notional, and the Time & Sales size tape. New `format.test.ts` pins
+  all six helpers (15 cases incl. null / NaN / Infinity and the float-noise
+  case); the lib previously had zero coverage. All four gates green: typecheck,
+  lint, test (63 files / 684 cases), knip.
+
 - **PatternLearner duplicate-SGD updates (P-001, audit §3.3).** Each observation
   inside the 5-min lookback received the same gradient step on ~8 consecutive
   30s cycles (effective LR ≈ 8×, sample counts inflated ~8×). A per-symbol

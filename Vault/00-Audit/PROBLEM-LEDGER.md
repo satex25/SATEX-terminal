@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-06-12
+updated: 2026-06-14
 ---
 
 # Problem Ledger
@@ -66,6 +66,12 @@ updated: 2026-06-12
 - **Decision:** **(a) executed 2026-06-11** (branch `feat/audit-psd-batch-2026-06-11`); (b) is a one-time operator cleanup.
 - **Status:** SHIPPED (workflow) — operator cleanup pending
 
+### P-020 · Two deliberate-looking display choices worth an operator ruling
+- **Problem:** Surfaced while reviewing the render layer; both look intentional, so not changed autonomously. (1) `useClocks.ts:36` labels the second clock “CST” but hard-codes UTC−6 with “no DST shift — matches the mockup”; during US daylight time (e.g. today, 2026-06-14) Central is CDT/UTC−5, so the clock reads one hour off its own label. (2) `fmt.money()` (`format.ts:22`) uses a Unicode minus `−` for losses but an ASCII `+` for gains, while `fmt.signed()` uses ASCII for both — an inter-formatter sign-glyph inconsistency.
+- **Solutions:** clock — (a) keep fixed UTC−6 but relabel to “UTC−6”; (b) make it true America/Chicago (DST-aware) with an honest CST/CDT label. money — (a) standardize on ASCII `+/-`; (b) standardize on Unicode `+/−`; (c) leave as-is (deliberate for headline PnL).
+- **Decision:** defer to operator — both are taste/legibility calls, not single-answer defects. Recorded so they are not lost.
+- **Status:** OPEN (operator ruling)
+
 ## In progress
 
 *(entries move here when an agent starts work; move to Shipped with commit/PR reference)*
@@ -81,12 +87,20 @@ updated: 2026-06-12
 
 ## Shipped — awaiting verification
 
-*(none currently)*
+### P-019 · `fmt.k()` leaks raw IEEE-754 float noise on sub-1000 values
+- **Problem:** The centralized compact formatter `fmt.k()` (`src/renderer/lib/format.ts:34`) returned `String(v)` unrounded for `|v| < 1000`, while the ≥1e3 branches round to fixed decimals. Fractional inputs therefore rendered float artifacts — a Time & Sales size of `0.1 + 0.2` showed as `0.30000000000000004`. Live on four operator surfaces: ChartPanel volume (`ChartPanel.tsx:1145`), MarketsOverview volume + notional (`MarketsOverviewPanel.tsx:186-187`), Time & Sales size tape (`TimeSalesPanel.tsx:115`). Crypto volumes/sizes are fractional, so it fires in normal use. The lib also had zero test coverage.
+- **Solutions:** (a) round the sub-1000 branch to 3 significant figures (`String(Number(v.toPrecision(3)))`), integers passing through — consistent with the K/M/B sig-fig style, zero call-site churn; (b) magnitude-split rounding (1 dp for |v|≥1, more precision for sub-1 crypto) — more faithful but more edge-cases; (c) dedicated `qty()` formatter re-routing the four call-sites — biggest blast radius (4 existing files → bridge-corruption risk) for marginal gain.
+- **Decision:** **(a)** — smallest, safest change (one function body + one new test file, no existing call-site edits → lowest bridge risk), kills the noise, preserves integers and small-crypto precision (`0.25`→“0.25”), matches the formatter's existing compact intent. Off the trading-safety perimeter (pure display helper).
+- **Shipped:** 2026-06-14 — `format.ts` `k()` rounds sub-1000 non-integers to 3 sig figs; new `src/renderer/lib/format.test.ts` pins all six helpers (15 cases incl. null/NaN/Infinity, sign paths, the float-noise case). Left UNSTAGED for operator review per AGENTS.md.
+- **Gate verification (2026-06-14, standing agent, /tmp sandbox @ committed `461f4b0` + 2 files):** typecheck✓ lint✓ test(63 files / 684 pass; was 62/669)✓ knip✓ (Node-20 shim — clean, no OOM this run). Real exit codes all 0.
+- **Status:** SHIPPED — awaiting operator commit/merge (deterministic; gates + tests are the verification).
 
 
 ### P-008 · Global/world-markets data (part a: multi-day fetch)
-- **Shipped:** 2026-06-12 — Extended `getCandles()` in trading-engine.ts §567–588 to fetch 2 days of 1-minute bars from Alpaca.getBars() instead of just in-memory buffer. Detects crypto symbols (BTC/ETH/SOL/etc) and routes through getCryptoBars(). Falls back gracefully to in-memory buffer if historical fetch fails (market holiday, missing credentials). All four gates: typecheck✓ lint✓ test(669 pass)✓ knip(Node 20 CI only; sandbox Node 22 has memory issue unrelated to change).
+- **Shipped:** 2026-06-12 — Extended `getCandles()` in trading-engine.ts §567–588 to fetch 2 days of 1-minute bars from Alpaca.getBars() instead of just in-memory buffer. Detects crypto symbols (BTC/ETH/SOL/etc) and routes through getCryptoBars(). Falls back gracefully to in-memory buffer if historical fetch fails (market holiday, missing credentials).
+- **Gate verification (2026-06-13, standing agent):** typecheck✓ lint✓ test(62 files / 669 pass)✓ knip(Node 20 CI; sandbox Node 22 OOM expected). Branch `feat/audit-psd-batch-2026-06-11` at HEAD `461f4b0`.
 - **Design:** P-008 decision (c) staged approach — (a) now shipped. Enables nightly self-eval to study previous day + today for multi-session trend analysis and Asia/Europe session coverage.
+- **Next:** Awaiting operator diagnostic session to verify end-to-end in live self-eval execution.
 
 
 ## Closed — verified
@@ -120,3 +134,15 @@ ERNIE timeout · CSP exfil channel · CLAUDE.md drift · provider-agnostic LLM (
 Brier calibration (downgrade-only) · nightly self-eval + Settings toggle · LEARNINGS notes (capped) ·
 type scale (277 decls → 9 tokens) · theme leaks · vault reorg + ARCHITECTURE.md.
 Evidence: all four gates green, 651/651 tests; `Vault/00-Audit/2026-06-10-FULL-SYSTEM-AUDIT.md`.
+
+### Session: 2026-06-13 daily PSD (standing agent)
+- **Work:** Boot, verify ledger, assess gate status, update ledger
+- **Findings:** MIT License integration complete (GitHub + local package.json verified). All gates green: typecheck✓ lint✓ test(62/669)✓ knip(Node 22 OOM, expected; Node 20 CI OK). P-008(a) shipped 2026-06-12, gates verified 2026-06-13. P-013 awaiting operator diagnostic (autonomous work complete). No remaining autonomous DECIDED/IN-PROGRESS work.
+- **Evidence:** Branch `feat/audit-psd-batch-2026-06-11` @ `461f4b0`; typecheck clean; eslint clean; 669 tests PASS (34.90s); knip fails on oxc-parser memory (Node 22 sandbox ≠ CI Node 20).
+- **Status:** Session closed — next PSD cycle clear to proceed with operator diagnostics on P-013 or fresh DECIDED work.
+
+### Session: 2026-06-14 daily PSD (standing agent)
+- **Work:** Boot; classified the working tree (142 changed = 2 real diffs [package.json license, prior ledger note] + 140 CRLF churn — left untouched); grounded survey of the safe render/display layer; shipped P-019; logged P-020.
+- **Shipped:** P-019 — `fmt.k()` float-noise fix + first-ever `format.test.ts` (15 cases). All four gates green in /tmp sandbox: typecheck✓ lint✓ test(63/684)✓ knip✓ (exit 0; Node-20 shim, no OOM this run). Branch `feat/audit-psd-batch-2026-06-11` @ `461f4b0`; changes UNSTAGED per AGENTS.md.
+- **Findings:** P-020 (clock DST label + money sign-glyph) logged OPEN for operator ruling. No other autonomous DECIDED work remains (P-009/P-013 → human sign-off / runtime; P-011/P-012 deferred by their own decisions; P-008b → post-L1.G).
+- **Status:** Session closed.

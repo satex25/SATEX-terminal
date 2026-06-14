@@ -4,7 +4,7 @@
   "private": true,
   "description": "SATEX — Smart Autonomous Trading EXperience. Institutional-grade autonomous trading terminal.",
   "author": "SATEX Engineering",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "main": "out/main/index.js",
   "type": "commonjs",
   "engines": {
