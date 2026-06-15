@@ -727,10 +727,12 @@ export class TradingEngine {
     // callback drives cancel-all + flatten-all + arm-kill-switch.
     this.fundedAccount = new FundedAccountService({
       onFlatten: (reason) => this.onEodFlatten(reason),
+      getEquity: () => this.om.getAccount().equity,
     })
     this.fundedAccount.hydrate()
     this.fundedAccount.onUpdate((s) => { for (const fn of this.fundedListeners) fn(s) })
     this.fundedTickTimer = setInterval(() => this.fundedTick(), 60_000)
+    this.fundedTick() // immediate first tick — eliminates 60 s boot blind window
 
     // Risk gates — 6 baseline + 5 funded-overlay gauges.
     this.riskGates = new RiskGatesService({

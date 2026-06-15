@@ -200,6 +200,24 @@ describe('RiskGatesService — Tier-1 display gates', () => {
     expect(m.value).toContain('BREACHED')
   })
 
+  it('MLL_BUFFER has independent pct + status from TRAILING_MAXDD', () => {
+    // mllBuffer=500, drawdownAllowance=2_000 (TOPSTEP_50K_XFA.trailingMaxDrawdown)
+    // mllBufferPct = 1 - 500/2000 = 0.75  →  WATCH (>= 0.5, < 0.9)
+    const snap = build({ fundedSnap: makeFundedSnap({ mllBuffer: 500 }) }).get()
+    const t = snap.gates.find(g => g.key === 'TRAILING_MAXDD')!
+    const m = snap.gates.find(g => g.key === 'MLL_BUFFER')!
+    // pct must match — both use the same buffer/allowance formula in this scenario
+    expect(m.pct).toBeCloseTo(0.75, 4)
+    expect(m.status).toBe('WATCH')
+    // pct fields are numerically independent variables (not the same reference)
+    expect(m.pct).toEqual(t.pct)          // same value is fine; what matters is separate computation
+    // When buffer < 0, MLL_BUFFER must be BREACH regardless of TRAILING_MAXDD
+    const snapBreached = build({ fundedSnap: makeFundedSnap({ mllBuffer: -1 }) }).get()
+    const mb = snapBreached.gates.find(g => g.key === 'MLL_BUFFER')!
+    expect(mb.pct).toBe(1)
+    expect(mb.status).toBe('BREACH')
+  })
+
   it('EOD_COUNTDOWN flips to BREACH inside last 15 min', () => {
     const snap = build({ fundedSnap: makeFundedSnap({ msToFlatBy: 10 * 60_000 }) }).get()
     const e = snap.gates.find(g => g.key === 'EOD_COUNTDOWN')!

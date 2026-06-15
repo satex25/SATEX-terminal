@@ -17,6 +17,7 @@ function buildService(opts?: { initial?: FundedAccountStored }) {
   const { store, state } = inMemoryStore(opts?.initial)
   const svc = new FundedAccountService({
     onFlatten: (r) => flattens.push(r),
+    getEquity: () => 50_000,
     store,
   })
   return { svc, flattens, state }

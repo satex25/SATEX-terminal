@@ -335,6 +335,8 @@ export class RiskGatesService {
     let trailingMaxDdPct = 0
     let trailingMaxDdStatus: RiskGateStatus = 'OK'
     let trailingMaxDdValue = 'n/a · no profile'
+    let mllBufferPct = 0
+    let mllBufferStatus: RiskGateStatus = 'OK'
     let mllBufferValue = 'n/a · no profile'
     let newsBlackoutPct = 0
     let newsBlackoutStatus: RiskGateStatus = 'OK'
@@ -357,10 +359,13 @@ export class RiskGatesService {
       trailingMaxDdStatus = statusForPct(trailingMaxDdPct, 0.5, 0.9)
       trailingMaxDdValue = `−$${used.toFixed(0)} / $${drawdownAllowance.toFixed(0)} buf${fundedSnap.mllLocked ? ' · locked' : ''}`
 
-      // MLL_BUFFER: literal dollar buffer.
+      // MLL_BUFFER: literal dollar buffer remaining before MLL breach.
       mllBufferValue = buffer >= 0
         ? `$${Math.round(buffer).toLocaleString()} above MLL ($${Math.round(fundedSnap.currentMll).toLocaleString()})`
         : `BREACHED — $${Math.round(-buffer).toLocaleString()} below MLL`
+      // pct: fraction of drawdown allowance consumed from the MLL side (independent of trailingMaxDd)
+      mllBufferPct = buffer <= 0 ? 1 : Math.min(1, Math.max(0, 1 - (buffer / Math.max(1, drawdownAllowance))))
+      mllBufferStatus = buffer < 0 ? 'BREACH' : statusForPct(mllBufferPct, 0.5, 0.9)
 
       // NEWS_BLACKOUT: 1.0 when in blackout, 0.0 otherwise.
       if (blackout?.inBlackout) {
@@ -411,7 +416,7 @@ export class RiskGatesService {
       { key: 'SESSION_VAR',      label: 'SESSION VAR (95%)', pct: varPct,        status: varStatus,       value: varValue },
       // ── Tier-1 funded-account gates ─────────────────────────────────────
       { key: 'TRAILING_MAXDD',   label: 'TRAILING MaxDD',    pct: trailingMaxDdPct, status: trailingMaxDdStatus, value: trailingMaxDdValue },
-      { key: 'MLL_BUFFER',       label: 'MLL BUFFER',        pct: trailingMaxDdPct, status: trailingMaxDdStatus, value: mllBufferValue },
+      { key: 'MLL_BUFFER',       label: 'MLL BUFFER',        pct: mllBufferPct,     status: mllBufferStatus,     value: mllBufferValue },
       { key: 'NEWS_BLACKOUT',    label: 'NEWS BLACKOUT',     pct: newsBlackoutPct,  status: newsBlackoutStatus,  value: newsBlackoutValue },
       { key: 'MAX_CONTRACTS',    label: 'MAX CONTRACTS',     pct: maxContractsPct,  status: maxContractsStatus,  value: maxContractsValue },
       { key: 'EOD_COUNTDOWN',    label: 'EOD COUNTDOWN',     pct: eodCountdownPct,  status: eodCountdownStatus,  value: eodCountdownValue },

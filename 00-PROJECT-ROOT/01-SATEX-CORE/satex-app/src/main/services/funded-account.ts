@@ -25,6 +25,9 @@ export interface FundedAccountDeps {
   /** Trading-engine-owned callback that cancels every pending order
    *  and market-flattens every open position. EOD service fires this. */
   onFlatten: (reason: string) => void
+  /** Returns the current account equity so broadcast() snapshots reflect live
+   *  balance rather than a hard-coded 0. Engine supplies this; tests mock it. */
+  getEquity: () => number
   /** Optional store injection for tests. Production uses default file path. */
   store?: FundedAccountStore
 }
@@ -135,7 +138,7 @@ export class FundedAccountService {
 
   private broadcast(): void {
     for (const fn of this.listeners) {
-      try { fn(this.snapshot(0, new Date())) }
+      try { fn(this.snapshot(this.deps.getEquity(), new Date())) }
       catch (e) { log.warn('funded listener threw', { err: String(e) }) }
     }
   }
