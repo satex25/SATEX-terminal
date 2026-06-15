@@ -127,3 +127,123 @@ describe('toLogReturns — P-010 price-vs-return correlation', () => {
     expect(Math.abs(returnRho)).toBeLessThan(0.35)    // the truth
   })
 })
+
+// ─── Tier-1 (D.9) — funded-account display gates ──────────────────────────
+import { RiskGatesService } from './risk-gates'
+import { TOPSTEP_50K_XFA } from '@shared/funded/topstep-50k-xfa'
+import type { FundedAccountSnapshot } from '@shared/funded/types'
+
+describe('RiskGatesService — Tier-1 display gates', () => {
+  function makeFundedSnap(over?: Partial<FundedAccountSnapshot>): FundedAccountSnapshot {
+    return {
+      active: true, profile: TOPSTEP_50K_XFA,
+      highestEodBalance: 50_000, currentMll: 48_000, mllLocked: false,
+      mllBuffer: 2_500,
+      today: '2026-05-29',
+      msToFlatBy: 4 * 3600_000,
+      ledger: [], computedAt: Date.now(),
+      ...over,
+    }
+  }
+
+  function build(over?: {
+    fundedSnap?: FundedAccountSnapshot | null
+    blackout?: { inBlackout: boolean; triggeringEvent: { label: string } | null; msToEvent: number | null } | null
+  }) {
+    return new RiskGatesService({
+      getAccount: () => ({
+        equity: 50_500, cash: 50_500, buyingPower: 200_000,
+        openPositions: [], dailyPnl: 500, dailyLossLimitPct: 0.02,
+        mode: 'paper' as const, killSwitchArmed: false, sessionStartedAt: 0,
+      }),
+      getQuote: () => undefined,
+      getCandles: () => [],
+      getPnlSnapshots: () => [],
+      getSessionStartEquity: () => 50_000,
+      getFundedSnapshot: over?.fundedSnap === null ? undefined : (() => over?.fundedSnap ?? makeFundedSnap()),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getBlackout: over?.blackout === null ? undefined : (() => (over?.blackout ?? { inBlackout: false, triggeringEvent: null, msToEvent: null }) as any),
+    })
+  }
+
+  it('emits all 11 gates (6 existing + 5 new)', () => {
+    const svc = build()
+    const snap = svc.get()
+    expect(snap.gates).toHaveLength(11)
+    const keys = snap.gates.map(g => g.key)
+    expect(keys).toContain('TRAILING_MAXDD')
+    expect(keys).toContain('MLL_BUFFER')
+    expect(keys).toContain('NEWS_BLACKOUT')
+    expect(keys).toContain('MAX_CONTRACTS')
+    expect(keys).toContain('EOD_COUNTDOWN')
+  })
+
+  it('TRAILING_MAXDD pct reflects buffer used / drawdown allowance', () => {
+    const snap = build({ fundedSnap: makeFundedSnap({ mllBuffer: 500 }) }).get()
+    const t = snap.gates.find(g => g.key === 'TRAILING_MAXDD')!
+    expect(t.pct).toBeCloseTo(0.75, 4)
+    expect(t.status).toBe('WATCH')
+  })
+
+  it('NEWS_BLACKOUT pct=1 + BREACH status when in blackout', () => {
+    const snap = build({
+      blackout: { inBlackout: true, triggeringEvent: { label: 'US CPI' }, msToEvent: 30_000 },
+    }).get()
+    const n = snap.gates.find(g => g.key === 'NEWS_BLACKOUT')!
+    expect(n.pct).toBe(1)
+    expect(n.status).toBe('BREACH')
+    expect(n.value).toContain('US CPI')
+    expect(n.value).toContain('30s before')
+  })
+
+  it('MLL_BUFFER shows BREACHED string when buffer is negative', () => {
+    const snap = build({ fundedSnap: makeFundedSnap({ mllBuffer: -500 }) }).get()
+    const m = snap.gates.find(g => g.key === 'MLL_BUFFER')!
+    expect(m.value).toContain('BREACHED')
+  })
+
+  it('MLL_BUFFER has independent pct + status from TRAILING_MAXDD', () => {
+    // mllBuffer=500, drawdownAllowance=2_000 (TOPSTEP_50K_XFA.trailingMaxDrawdown)
+    // mllBufferPct = 1 - 500/2000 = 0.75  →  WATCH (>= 0.5, < 0.9)
+    const snap = build({ fundedSnap: makeFundedSnap({ mllBuffer: 500 }) }).get()
+    const t = snap.gates.find(g => g.key === 'TRAILING_MAXDD')!
+    const m = snap.gates.find(g => g.key === 'MLL_BUFFER')!
+    // pct must match — both use the same buffer/allowance formula in this scenario
+    expect(m.pct).toBeCloseTo(0.75, 4)
+    expect(m.status).toBe('WATCH')
+    // pct fields are numerically independent variables (not the same reference)
+    expect(m.pct).toEqual(t.pct)          // same value is fine; what matters is separate computation
+    // When buffer < 0, MLL_BUFFER must be BREACH regardless of TRAILING_MAXDD
+    const snapBreached = build({ fundedSnap: makeFundedSnap({ mllBuffer: -1 }) }).get()
+    const mb = snapBreached.gates.find(g => g.key === 'MLL_BUFFER')!
+    expect(mb.pct).toBe(1)
+    expect(mb.status).toBe('BREACH')
+  })
+
+  it('EOD_COUNTDOWN flips to BREACH inside last 15 min', () => {
+    const snap = build({ fundedSnap: makeFundedSnap({ msToFlatBy: 10 * 60_000 }) }).get()
+    const e = snap.gates.find(g => g.key === 'EOD_COUNTDOWN')!
+    expect(e.status).toBe('BREACH')
+    expect(e.value).toContain('T-10m')
+  })
+
+  it('all 5 funded gates show "n/a · no profile" when fundedSnap is null', () => {
+    const svc = new RiskGatesService({
+      getAccount: () => ({
+        equity: 50_000, cash: 50_000, buyingPower: 200_000,
+        openPositions: [], dailyPnl: 0, dailyLossLimitPct: 0.02,
+        mode: 'paper' as const, killSwitchArmed: false, sessionStartedAt: 0,
+      }),
+      getQuote: () => undefined,
+      getCandles: () => [],
+      getPnlSnapshots: () => [],
+      getSessionStartEquity: () => 50_000,
+      getFundedSnapshot: () => null,
+    })
+    const snap = svc.get()
+    for (const key of ['TRAILING_MAXDD', 'MLL_BUFFER', 'NEWS_BLACKOUT', 'MAX_CONTRACTS', 'EOD_COUNTDOWN'] as const) {
+      const g = snap.gates.find(g2 => g2.key === key)!
+      expect(g.value).toContain('n/a')
+    }
+  })
+})

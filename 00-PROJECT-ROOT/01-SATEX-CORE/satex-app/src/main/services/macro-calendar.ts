@@ -11,6 +11,7 @@
  * don't scrape live feeds here; that's a future Phase 10.5 hookup.
  */
 import type { MacroEvent, MacroImpact, MacroSnapshot } from '@shared/types'
+import { isInBlackout, type BlackoutResult } from './blackout-window'
 import { createLogger } from './logger'
 
 const log = createLogger('macro')
@@ -149,6 +150,15 @@ export class MacroCalendarService {
   reportActual(id: string, actual: string): void {
     this.actuals.set(id, actual)
     this.recompute()
+  }
+
+  /** True iff any event of the given impact levels falls inside ±windowMs
+   *  of `nowMs`. Pure delegation to blackout-window — wrapped here so
+   *  consumers don't need to know the MacroCalendarService's internal
+   *  snapshot shape. Tier-1 D.3. */
+  checkBlackout(nowMs: number, impacts: MacroImpact[], windowMs: number): BlackoutResult {
+    if (!this.snapshot) this.recompute()
+    return isInBlackout(nowMs, this.snapshot!.events, impacts, windowMs)
   }
 
   private recompute(): void {
