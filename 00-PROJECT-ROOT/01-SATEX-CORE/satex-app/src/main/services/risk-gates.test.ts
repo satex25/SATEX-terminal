@@ -125,6 +125,8 @@ describe('toLogReturns — P-010 price-vs-return correlation', () => {
     const returnRho = correlation(toLogReturns(a), toLogReturns(b))
     expect(priceRho).toBeGreaterThan(0.95)            // the pre-fix illusion
     expect(Math.abs(returnRho)).toBeLessThan(0.35)    // the truth
+  })
+})
 
 // ─── Tier-1 (D.9) — funded-account display gates ──────────────────────────
 import { RiskGatesService } from './risk-gates'
