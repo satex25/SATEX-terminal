@@ -59,6 +59,7 @@ describe('FundedAccountService — hydration', () => {
     const { svc } = buildService({
       initial: {
         activeProfileId: 'topstep-50k-xfa',
+        lastEodFiredDate: null,
         ledger: [
           { date: '2026-05-27', equity: 50_400, recordedAt: 0 },
           { date: '2026-05-28', equity: 50_900, recordedAt: 0 },
@@ -74,7 +75,7 @@ describe('FundedAccountService — hydration', () => {
 
   it('survives a stored profile id that no longer exists', () => {
     const { svc } = buildService({
-      initial: { activeProfileId: 'retired-profile-id', ledger: [], updatedAt: 0 },
+      initial: { activeProfileId: 'retired-profile-id', lastEodFiredDate: null, ledger: [], updatedAt: 0 },
     })
     svc.hydrate()
     expect(svc.getProfile()).toBeNull()
@@ -155,5 +156,30 @@ describe('FundedAccountService — EOD wiring', () => {
     const { svc, flattens } = buildService()
     svc.tick(new Date('2026-05-29T20:15:00Z'))
     expect(flattens).toHaveLength(0)
+  })
+})
+
+// ─── P0-C / Bug-1 regression + P1-B coverage ───────────────────────────────
+describe('FundedAccountService — broadcast() and tick() listener coverage', () => {
+  it('T1: broadcast() passes non-zero mllBuffer to listener after setProfile (B1 regression)', () => {
+    const { svc } = buildService()
+    const snaps: import('@shared/funded/types').FundedAccountSnapshot[] = []
+    svc.onUpdate(s => snaps.push(s))
+    svc.setProfile('topstep-50k-xfa') // triggers broadcast
+    expect(snaps.length).toBeGreaterThan(0)
+    const last = snaps[snaps.length - 1]!
+    // getEquity returns 50_000, MLL at new account = 48_000, buffer = 2_000
+    expect(last.active).toBe(true)
+    expect(last.mllBuffer).toBeGreaterThan(0)
+  })
+
+  it('T2: tick() calls broadcast() so listener receives updated msToFlatBy (P1-B)', () => {
+    const { svc } = buildService()
+    svc.setProfile('topstep-50k-xfa')
+    const snaps: import('@shared/funded/types').FundedAccountSnapshot[] = []
+    svc.onUpdate(s => snaps.push(s))
+    const before = snaps.length
+    svc.tick(new Date('2026-05-29T15:00:00Z')) // before cutoff — no flatten
+    expect(snaps.length).toBe(before + 1)
   })
 })

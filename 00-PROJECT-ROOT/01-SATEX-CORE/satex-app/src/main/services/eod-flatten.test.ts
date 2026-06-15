@@ -147,3 +147,54 @@ describe('EodFlattenService.reset', () => {
     expect(calls).toHaveLength(2)
   })
 })
+
+// ─── P0-C: hydrate + restart-past-cutoff coverage ──────────────────────────
+describe('EodFlattenService.hydrate — P0-C restart-past-cutoff', () => {
+  it('T3: hydrate(lastFiredDate) prevents re-flatten on restart past cutoff', () => {
+    const calls: string[] = []
+    const svc = new EodFlattenService({
+      getFlatBy: () => TOPSTEP,
+      onFlat: (r) => calls.push(r),
+    })
+    // Simulate a pre-restart state: flatten already fired for 2026-05-29
+    svc.hydrate('2026-05-29')
+    // Restart tick at 20:30 (past cutoff, same day) — must NOT re-fire
+    svc.tick(new Date('2026-05-29T20:30:00Z'))
+    expect(calls).toHaveLength(0)
+  })
+
+  it('T3b: hydrate with null still fires on the next cutoff', () => {
+    const calls: string[] = []
+    const svc = new EodFlattenService({
+      getFlatBy: () => TOPSTEP,
+      onFlat: (r) => calls.push(r),
+    })
+    svc.hydrate(null)
+    svc.tick(new Date('2026-05-29T20:15:00Z'))
+    expect(calls).toHaveLength(1)
+  })
+
+  it('T3c: setLastFiredDate callback is invoked when flatten fires', () => {
+    const persisted: string[] = []
+    const svc = new EodFlattenService({
+      getFlatBy: () => TOPSTEP,
+      onFlat: () => {},
+      setLastFiredDate: (d) => persisted.push(d),
+    })
+    svc.tick(new Date('2026-05-29T20:15:00Z'))
+    expect(persisted).toEqual(['2026-05-29'])
+  })
+})
+
+// ─── P2-C: computeMsToFlatBy non-mod-5 cutoff accuracy ─────────────────────
+describe('computeMsToFlatBy — T4 non-mod-5 cutoff', () => {
+  it('T4: returns ms to a non-round cutoff (16:13) within 5-min probe tolerance', () => {
+    const custom: FlatByConfig = { hour: 16, minute: 13, tz: 'America/New_York' }
+    // 2026-05-29T18:00:00Z = 14:00 ET — 2h 13m before cutoff
+    const now = new Date('2026-05-29T18:00:00Z')
+    const ms = computeMsToFlatBy(now, custom)
+    // Should find a probe in the [16:13, 16:18) window → ~133 min away
+    expect(ms).toBeGreaterThan(120 * 60_000)  // at least 2h out
+    expect(ms).toBeLessThan(145 * 60_000)     // within 5-min probe tolerance
+  })
+})

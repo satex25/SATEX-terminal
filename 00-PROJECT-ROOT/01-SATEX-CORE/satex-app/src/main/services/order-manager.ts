@@ -244,10 +244,21 @@ export class OrderManager {
     if (ctx?.liveMode && ctx.assetClass !== 'crypto' && !this.isMarketOpen)
       return { ok: false, reason: 'US equity market is closed', gate: 'market-closed' }
 
-    // Gate 3: daily loss limit
+    // Gate 3: daily loss limit — enforces the tighter of:
+    //   (a) the session-scoped percentage cap (dailyLossLimitPct × sessionStart)
+    //   (b) the funded-profile's absolute dollar cap (profile.dailyLossLimit)
+    // P0-A fix: funded profiles were previously using only (a), ignoring (b).
+    // A $100K session with a $1K DLL profile was allowing a $2K daily loss.
     const dailyLoss = this.sessionStartEquity - this.account.equity
-    if (dailyLoss >= this.sessionStartEquity * this.account.dailyLossLimitPct)
-      return { ok: false, reason: `Daily loss limit reached (${(this.account.dailyLossLimitPct * 100).toFixed(1)}%)`, gate: 'daily-loss' }
+    const pctLimit = this.sessionStartEquity * this.account.dailyLossLimitPct
+    const absoluteLimit = ctx?.fundedProfile?.dailyLossLimit ?? Infinity
+    const effectiveDll = Math.min(pctLimit, absoluteLimit)
+    if (dailyLoss >= effectiveDll) {
+      const reason = absoluteLimit < pctLimit
+        ? `Daily loss limit reached — funded-account cap $${absoluteLimit.toFixed(0)}`
+        : `Daily loss limit reached (${(this.account.dailyLossLimitPct * 100).toFixed(1)}%)`
+      return { ok: false, reason, gate: 'daily-loss' }
+    }
 
     const refPrice = ctx?.refPrice && ctx.refPrice > 0 ? ctx.refPrice : (this.account.equity / Math.max(1, req.quantity))
     const notional = refPrice * req.quantity

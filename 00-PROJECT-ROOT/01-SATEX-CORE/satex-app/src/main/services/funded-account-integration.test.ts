@@ -404,3 +404,39 @@ describe('Full pipeline: EquityHWMService -> MLL -> OrderManager gate 9', () => 
     expect(allowed.gate).not.toBe('funded-mll')
   })
 })
+
+// =============================================================================
+// T6 — P1-A: recordEod fires exactly once per EOD day (not per fill/position)
+// =============================================================================
+describe('T6 — P1-A recordEod debounce: once per EOD day', () => {
+  it('T6: EquityHWMService.recordEod is idempotent on the same trading-day key', () => {
+    // Simulate what onEodFlatten does: call recordEod multiple times with
+    // different equity snapshots as positions close one by one.
+    // The ledger must end up with exactly one entry for the day.
+    const persistCalls: number[] = []
+    const hwm = new EquityHWMService({
+      getProfile: () => TOPSTEP_50K_XFA,
+      persist: (ledger) => persistCalls.push(ledger.length),
+    })
+
+    const eodTime = new Date('2026-06-02T20:11:00Z') // 16:11 ET — past flat-by
+
+    // Simulate 3 positions closing in sequence (equity changes each time)
+    hwm.recordEod(50_300, eodTime) // first fill settles (3 positions open)
+    hwm.recordEod(50_500, eodTime) // second fill (2 positions open)
+    hwm.recordEod(50_800, eodTime) // third fill (all closed, final equity)
+
+    // Ledger must have exactly ONE entry for this trading day
+    expect(hwm.getLedger()).toHaveLength(1)
+    // Final equity wins (last write wins for same-day key)
+    expect(hwm.getLedger()[0]!.equity).toBe(50_800)
+    // persist() was called 3 times (once per recordEod call) but ledger length is 1
+    expect(persistCalls).toHaveLength(3)
+    expect(persistCalls.every(n => n === 1)).toBe(true)
+
+    // A second EOD call the next day adds a second entry
+    const day2 = new Date('2026-06-03T20:11:00Z')
+    hwm.recordEod(51_000, day2)
+    expect(hwm.getLedger()).toHaveLength(2)
+  })
+})

@@ -80,15 +80,31 @@ export function computeMsToFlatBy(now: Date, flatBy: FlatByConfig): number {
 export interface EodFlattenDeps {
   getFlatBy: () => FlatByConfig | null
   onFlat: (reason: string) => void
+  /** Optional: called when lastFiredDate changes so callers can persist it
+   *  across app restarts. When omitted, fired-date is in-memory only. */
+  setLastFiredDate?: (date: string) => void
 }
 
 export class EodFlattenService {
   /** Date key (YYYY-MM-DD in profile tz) of the most recent fire. Resets
    *  every new day. Prevents a single cutoff from firing repeatedly when
-   *  the tick interval is shorter than the post-cutoff window. */
+   *  the tick interval is shorter than the post-cutoff window. Persisted
+   *  via deps.setLastFiredDate so it survives app restarts (P0-C). */
   private lastFiredDate: string | null = null
 
   constructor(private readonly deps: EodFlattenDeps) {}
+
+  /** Restore last-fired date from persisted storage (call from
+   *  FundedAccountService.hydrate before the first tick fires). */
+  hydrate(date: string | null): void {
+    this.lastFiredDate = date
+  }
+
+  /** Read the in-memory (or persisted) last-fired date. Used by
+   *  FundedAccountService.persist() to include in the saved state. */
+  getLastFiredDate(): string | null {
+    return this.lastFiredDate
+  }
 
   tick(now: Date): void {
     const flatBy = this.deps.getFlatBy()
@@ -98,6 +114,7 @@ export class EodFlattenService {
     const today = tradingDayKey(now, flatBy.tz)
     if (this.lastFiredDate === today) return
     this.lastFiredDate = today
+    this.deps.setLastFiredDate?.(today) // persist so restart past cutoff doesn't re-fire
     log.warn('EOD flatten fired', { date: today, flatBy })
     this.deps.onFlat(`eod-${today}`)
   }
@@ -107,6 +124,7 @@ export class EodFlattenService {
     if (!flatBy) return
     const today = tradingDayKey(now, flatBy.tz)
     this.lastFiredDate = today
+    this.deps.setLastFiredDate?.(today)
     log.warn('EOD flatten manually triggered', { date: today, reason })
     this.deps.onFlat(reason)
   }

@@ -13,6 +13,7 @@ import { OrderManager, type OrderValidationContext } from './order-manager'
 import { FixedBpsSlippageModel, SpreadHalfPlusImpactModel } from '../backtest/slippage-model'
 import type { OrderRequest, StrategySignal } from '../../shared/types'
 import type { AccountSnapshot } from '../../shared/broker/account-syncer'
+import { TOPSTEP_50K_XFA } from '../../shared/funded/topstep-50k-xfa'
 
 function baseBuy(overrides?: Partial<OrderRequest>): OrderRequest {
   return {
@@ -170,6 +171,26 @@ describe('OrderManager — C2: session equity baseline rebase', () => {
     const res = om.validate(baseBuy({ quantity: 1 }), liveCtx({ refPrice: 100 }))
     expect(res.ok).toBe(false)
     expect(res.gate).toBe('daily-loss')
+  })
+
+  it('T5: Gate 3 funded DLL — absolute cap wins when tighter than pct limit (P0-A)', () => {
+    // Session: $100K start, 2% pct limit = $2K DLL. Funded profile cap = $1K → must win.
+    om.setMarketOpen(true)
+    om.syncFromSnapshot({ equity: 100_000, cash: 100_000, buyingPower: 200_000, positions: [], observedAt: Date.now() })
+    om.setSessionStartEquity(100_000)
+    // Use the real preset — dailyLossLimit=1_000 already; avoids missing fields crashing Gates 10-11.
+    const fundedProfile = TOPSTEP_50K_XFA
+    // Pin nowMs to 10:30 AM ET so Gate 12 (flatBy 16:10 ET) never fires.
+    const nowMs = new Date('2026-06-16T14:30:00.000Z').getTime() // 10:30 AM ET
+    // Loss = $900 < $1K abs cap — should pass
+    om.syncFromSnapshot({ equity: 99_100, cash: 99_100, buyingPower: 198_200, positions: [], observedAt: nowMs })
+    expect(om.validate(baseBuy({ quantity: 1 }), liveCtx({ refPrice: 50, fundedProfile, nowMs })).ok).toBe(true)
+    // Loss = $1_100 > $1K abs cap (but < $2K pct cap) — must reject with funded reason
+    om.syncFromSnapshot({ equity: 98_900, cash: 98_900, buyingPower: 197_800, positions: [], observedAt: nowMs })
+    const res = om.validate(baseBuy({ quantity: 1 }), liveCtx({ refPrice: 50, fundedProfile, nowMs }))
+    expect(res.ok).toBe(false)
+    expect(res.gate).toBe('daily-loss')
+    expect(res.reason).toContain('funded-account cap')
   })
 })
 

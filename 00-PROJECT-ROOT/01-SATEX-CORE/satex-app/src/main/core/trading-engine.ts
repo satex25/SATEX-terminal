@@ -389,15 +389,8 @@ export class TradingEngine {
       this.broadcastOrders()
       this.broadcastAccount()
       this.onOrderFillForLearning(order, position)
-      // Tier-1 D.10: every post-cutoff fill updates today's EOD ledger entry.
-      // The FundedAccountService no-ops when no profile is active.
-      const profile = this.fundedAccount?.getProfile()
-      if (profile) {
-        const now = new Date()
-        if (isPastFlatBy(now, profile.flatBy)) {
-          this.fundedAccount.recordEod(this.om.getAccount().equity, now)
-        }
-      }
+      // EOD balance is recorded in onEodFlatten (once per day, after all
+      // positions settle) — not per fill (P1-A: eliminates N disk writes).
     })
     this.om.onKillSwitch(() => {
       log.warn('kill switch triggered — broadcasting account state')
@@ -1052,8 +1045,27 @@ export class TradingEngine {
    *  then market-flattens every open position. Arms the kill switch so the
    *  next session requires explicit user re-arm. */
   private onEodFlatten(reason: string): void {
+    // P2-B: In live mode, fire broker-side cancel requests before local OM
+    // state cleanup. Fire-and-forget keeps flatten synchronous; failures are
+    // logged but do not block the local state change. In paper/sim mode,
+    // this.session is null so the block is skipped entirely.
+    if (this.session) {
+      const pendingIds = this.om.getOrders()
+        .filter(o => o.status === 'pending')
+        .map(o => o.id)
+      for (const id of pendingIds) {
+        this.session.orders.cancel(id).catch((err: unknown) => {
+          log.warn('EOD flatten: broker cancel failed', { id, err: String(err) })
+        })
+      }
+    }
     const cancelled = this.om.cancelAllOrders()
     const flattened = this.om.flattenAllPositions((symbol) => this.market.getQuote(symbol))
+    // P1-A: record EOD balance exactly once after all positions close,
+    // not once per fill (eliminates N persist() calls per flatten cycle).
+    if (this.fundedAccount.getProfile()) {
+      this.fundedAccount.recordEod(this.om.getAccount().equity, new Date())
+    }
     this.om.armKillSwitch(`eod-flatten:${reason}`)
     log.warn('EOD flatten executed', { reason, cancelled, flattened })
   }
@@ -1127,9 +1139,23 @@ export class TradingEngine {
       ...(this.fundedAccount.getProfile()
           ? { fundedMll: this.fundedAccount.snapshot(this.om.getAccount().equity, new Date()).currentMll }
           : {}),
-      ...(this.fundedAccount.getProfile() && req.stopLoss && quote
-          ? { worstCaseLossDollar: Math.abs((quote.last - req.stopLoss) * req.quantity) }
-          : {}),
+      // P0-B: validate stop direction — inverted stops (buy with stop above
+      // price, or sell with stop below) would produce a positive Math.abs
+      // value that silently passes Gate 9. When invalid, omit the field so
+      // Gate 9 falls back to comparing raw equity against MLL (safe).
+      ...((() => {
+        if (!this.fundedAccount.getProfile() || req.stopLoss == null || !quote) return {}
+        const stopValid = req.side === 'buy'
+          ? req.stopLoss < quote.last
+          : req.stopLoss > quote.last
+        if (!stopValid) {
+          log.warn('funded: stop direction inverted — omitting worst-case projection', {
+            symbol: req.symbol, side: req.side, stop: req.stopLoss, last: quote.last,
+          })
+          return {}
+        }
+        return { worstCaseLossDollar: Math.abs((quote.last - req.stopLoss) * req.quantity) }
+      })()),
       currentPositionQty: this.om.getAccount().openPositions.find(p => p.symbol === req.symbol)?.quantity ?? 0,
       macroEvents: (this.fundedAccount.getProfile()?.newsBlackoutImpacts.length ?? 0) > 0
           ? this.macro.get().events

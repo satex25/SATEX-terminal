@@ -48,6 +48,8 @@ export class FundedAccountService {
     this.eod = new EodFlattenService({
       getFlatBy: (): FlatByConfig | null => this.profile?.flatBy ?? null,
       onFlat: (reason) => this.deps.onFlatten(reason),
+      // P0-C: persist fired-date so restarts past cutoff don't re-trigger.
+      setLastFiredDate: (_date) => this.persist(this.hwm.getLedger()),
     })
   }
 
@@ -61,9 +63,12 @@ export class FundedAccountService {
       }
     }
     this.hwm.hydrate(stored.ledger)
+    // P0-C: restore the last EOD fired date so we don't re-flatten on restart.
+    this.eod.hydrate(stored.lastEodFiredDate ?? null)
     log.info('funded-account hydrated', {
       profile: this.profile?.id ?? null,
       ledgerEntries: stored.ledger.length,
+      lastEodFiredDate: stored.lastEodFiredDate ?? null,
     })
   }
 
@@ -96,6 +101,7 @@ export class FundedAccountService {
 
   tick(now: Date): void {
     this.eod.tick(now)
+    this.broadcast() // refresh msToFlatBy countdown display every engine tick
   }
 
   triggerFlatten(now: Date, reason: string): void {
@@ -146,6 +152,7 @@ export class FundedAccountService {
   private persist(ledger: EquityHwmLedgerEntry[]): void {
     this.store.save({
       activeProfileId: this.profile?.id ?? null,
+      lastEodFiredDate: this.eod.getLastFiredDate(), // P0-C
       ledger,
       updatedAt: Date.now(),
     })

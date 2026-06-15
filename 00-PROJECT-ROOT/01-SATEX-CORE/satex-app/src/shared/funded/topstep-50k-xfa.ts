@@ -19,7 +19,7 @@ export const TOPSTEP_50K_XFA: FundedAccountProfile = {
   id: 'topstep-50k-xfa',
   name: 'Topstep $50K Express Funded Account',
   firm: 'topstep',
-  phase: 'combine',
+  phase: 'funded',
 
   initialBalance: 50_000,
 

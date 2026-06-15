@@ -69,15 +69,42 @@ describe('FundedAccountStore.load', () => {
 describe('FundedAccountStore.save', () => {
   it('writes pretty JSON', () => {
     const { store, fs } = buildStore()
-    store.save({ activeProfileId: 'x', ledger: [], updatedAt: 0 })
+    store.save({ activeProfileId: 'x', lastEodFiredDate: null, ledger: [], updatedAt: 0 })
     expect(fs.last).toContain('  ')
     expect(fs.last).toContain('"activeProfileId": "x"')
   })
 
   it('stamps updatedAt on every save', () => {
     const { store, fs } = buildStore()
-    store.save({ activeProfileId: 'x', ledger: [], updatedAt: 0 })
+    store.save({ activeProfileId: 'x', lastEodFiredDate: null, ledger: [], updatedAt: 0 })
     const parsed = JSON.parse(fs.last!)
     expect(parsed.updatedAt).toBeGreaterThan(0)
+  })
+})
+
+// ─── T7: lastEodFiredDate persistence (P0-C) ────────────────────────────────
+describe('FundedAccountStore — lastEodFiredDate (P0-C)', () => {
+  it('T7a: saves and loads lastEodFiredDate', () => {
+    const { store } = buildStore()
+    store.save({ activeProfileId: null, lastEodFiredDate: '2026-05-29', ledger: [], updatedAt: 0 })
+    expect(store.load().lastEodFiredDate).toBe('2026-05-29')
+  })
+
+  it('T7b: null lastEodFiredDate round-trips correctly', () => {
+    const { store } = buildStore()
+    store.save({ activeProfileId: null, lastEodFiredDate: null, ledger: [], updatedAt: 0 })
+    expect(store.load().lastEodFiredDate).toBeNull()
+  })
+
+  it('T7c: sanitize drops invalid date strings', () => {
+    const { store, fs } = buildStore()
+    fs.last = JSON.stringify({ activeProfileId: null, lastEodFiredDate: 'not-a-date', ledger: [], updatedAt: 0 })
+    expect(store.load().lastEodFiredDate).toBeNull()
+  })
+
+  it('T7d: missing lastEodFiredDate in legacy JSON returns null', () => {
+    const { store, fs } = buildStore()
+    fs.last = JSON.stringify({ activeProfileId: null, ledger: [], updatedAt: 0 })
+    expect(store.load().lastEodFiredDate).toBeNull()
   })
 })
