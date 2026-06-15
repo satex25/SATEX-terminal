@@ -19,14 +19,20 @@ export interface FundedAccountStored {
   /** Persisted EOD-flatten date key (YYYY-MM-DD in profile tz).
    *  Prevents re-triggering the EOD flatten on app restart past cutoff. */
   lastEodFiredDate: string | null
+  /** Tier-1 D-2 — manually-advanced phase ('combine' | 'funded' | 'activated'). */
+  activePhase?: string | null
   ledger: EquityHwmLedgerEntry[]
+  /** Tier-1 D-2 — per-day P&L for the consistency / profit-target / min-days trackers. */
+  dailyPnl?: Array<{ date: string; realizedPnl: number; tradeCount: number; updatedAt: number }>
   updatedAt: number
 }
 
 const EMPTY: FundedAccountStored = {
   activeProfileId: null,
   lastEodFiredDate: null,
+  activePhase: null,
   ledger: [],
+  dailyPnl: [],
   updatedAt: 0,
 }
 
@@ -61,6 +67,18 @@ function isLedgerEntry(x: unknown): x is EquityHwmLedgerEntry {
     && typeof e.recordedAt === 'number'
 }
 
+function isDailyEntry(x: unknown): x is { date: string; realizedPnl: number; tradeCount: number; updatedAt: number } {
+  if (!x || typeof x !== 'object') return false
+  const e = x as Record<string, unknown>
+  return typeof e.date === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(e.date as string)
+    && typeof e.realizedPnl === 'number'
+    && Number.isFinite(e.realizedPnl as number)
+    && typeof e.tradeCount === 'number'
+    && (e.tradeCount as number) >= 0
+    && typeof e.updatedAt === 'number'
+}
+
 function sanitize(raw: unknown): FundedAccountStored {
   if (!raw || typeof raw !== 'object') return { ...EMPTY }
   const r = raw as Record<string, unknown>
@@ -69,10 +87,15 @@ function sanitize(raw: unknown): FundedAccountStored {
     && /^\d{4}-\d{2}-\d{2}$/.test(r.lastEodFiredDate as string)
     ? r.lastEodFiredDate as string
     : null
+  const activePhase = typeof r.activePhase === 'string'
+    && ['combine', 'funded', 'activated'].includes(r.activePhase as string)
+    ? r.activePhase as string : null
   const rawLedger = Array.isArray(r.ledger) ? r.ledger : []
   const ledger = rawLedger.filter(isLedgerEntry) as EquityHwmLedgerEntry[]
+  const rawDaily = Array.isArray(r.dailyPnl) ? r.dailyPnl : []
+  const dailyPnl = rawDaily.filter(isDailyEntry)
   const updatedAt = typeof r.updatedAt === 'number' ? r.updatedAt : 0
-  return { activeProfileId, lastEodFiredDate, ledger, updatedAt }
+  return { activeProfileId, lastEodFiredDate, activePhase, ledger, dailyPnl, updatedAt }
 }
 
 export class FundedAccountStore {

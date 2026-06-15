@@ -156,6 +156,7 @@ const satexApi = {
   setFundedAccountProfile: (profileId: string | null)             => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_SET_PROFILE, { profileId }) as Promise<{ ok: boolean; reason?: string }>,
   clearFundedAccount:    ()                                       => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_CLEAR) as Promise<{ ok: boolean }>,
   triggerFundedFlat:     (reason: string)                         => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_TRIGGER_FLAT, { reason }) as Promise<{ ok: true }>,
+  advanceFundedPhase:    (phase: 'combine' | 'funded' | 'activated') => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_ADVANCE_PHASE, { phase }) as Promise<{ ok: boolean; reason?: string }>,
 
   // ── Replay engine (Phase 9) ────────────────────────────────────────────────
   replay: {
