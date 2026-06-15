@@ -80,7 +80,6 @@ import { SystemLogsService } from '../services/system-logs'
 import { DepthFeedService } from '../services/depth-feed'
 import { EdgarService } from '../services/edgar'
 import { FundedAccountService } from '../services/funded-account'
-import { isPastFlatBy } from '../services/eod-flatten'
 import type { BlackoutResult } from '../services/blackout-window'
 import type { FundedAccountSnapshot } from '@shared/funded/types'
 import type {

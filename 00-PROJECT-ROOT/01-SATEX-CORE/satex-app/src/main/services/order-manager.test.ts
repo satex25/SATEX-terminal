@@ -515,7 +515,6 @@ describe('OrderManager — slippage model injection (G-11, 2026-05-29)', () => {
 })
 
 // ─── Tier-1 (D.8) — Topstep funded-account gates 9-13 ─────────────────────
-import { TOPSTEP_50K_XFA } from '@shared/funded/topstep-50k-xfa'
 import type { MacroEvent } from '@shared/types'
 
 describe('OrderManager — Tier-1 Topstep gates (D.8)', () => {

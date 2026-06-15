@@ -24,6 +24,7 @@ describe('FundedAccountStore.load', () => {
     const { store } = buildStore()
     const written: FundedAccountStored = {
       activeProfileId: 'topstep-50k-xfa',
+      lastEodFiredDate: null,
       ledger: [{ date: '2026-05-29', equity: 50_500, recordedAt: 0 }],
       updatedAt: 0,
     }
