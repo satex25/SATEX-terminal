@@ -9,6 +9,18 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Added
 
+- **P-013: simulator / OrderManager close trigger pinned (pure extraction).**
+  Extracted `TradingEngine.onOrderFillForLearning` into the pure
+  `handleOrderFillForLearning` helper (`order-fill-learning-router.ts`),
+  mirroring the existing `onOrderEvent → handleOrderEvent` split, and added
+  `order-fill-learning-router.test.ts` (8 vitest cases) covering position-flat
+  detection, direct-vs-fallback entry resolution, the no-entry skip path
+  (`hasEntryFeatures:false`), and the `fillPrice ?? 0` guard. Behaviour-exact;
+  the engine now delegates. Pins the *simulator* close path — sibling of the
+  already-tested bracket-child path — so the P-013 `Vault/Trades/` diagnostic
+  can rule out trigger-routing as the cause. Gates green in sandbox: typecheck,
+  lint, vitest (84 files / 1034 cases), knip.
+
 - **P-008 (a): Multi-day historical bars for nightly self-eval (world-market
   coverage).** Extended `SelfEvalService.getCandles()` in trading-engine.ts to
   fetch 2 days (yesterday + today) of 1-minute bars from Alpaca historical API

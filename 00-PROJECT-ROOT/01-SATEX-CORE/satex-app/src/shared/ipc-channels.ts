@@ -247,6 +247,16 @@ export const IPC = {
    *  local mirror without a follow-up GET. Disk write-through happens via the
    *  engine's onSubsecondPrefChanged listener wired in main. */
   SUBSECOND_PREFS_SET: 'satex:a1:subsecondPrefsSet',
+
+  // ── P-021: Funded account programme ──────────────────────────────────────
+  /** Push: FundedAccountSnapshot. Emitted on every engine tick and on all
+   *  funded-account state transitions (MLL move, EOD ledger append, etc.).
+   *  Renderer's fundedAccountStore hydrates from this channel. */
+  FUNDED_ACCOUNT_UPDATE: 'satex:funded:accountUpdate',
+  /** Invoke (renderer → main, reason: string): emergency flatten — force-close
+   *  all open positions and cancel pending orders immediately. The reason
+   *  string is logged to the audit trail. Returns { ok: boolean }. */
+  FUNDED_TRIGGER_FLAT:   'satex:funded:triggerFlat',
 } as const
 
 // Runtime array kept solely for the PushChannel type derivation below — the
@@ -278,6 +288,7 @@ const PUSH_CHANNELS = [
   IPC.UPDATE_AVAILABLE,
   IPC.SUBSECOND_CANDLES_UPDATE,
   IPC.WIRE_UPDATE,
+  IPC.FUNDED_ACCOUNT_UPDATE,
 ] as const
 
 export type PushChannel = (typeof PUSH_CHANNELS)[number]

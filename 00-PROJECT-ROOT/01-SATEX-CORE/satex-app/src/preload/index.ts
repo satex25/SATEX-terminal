@@ -246,6 +246,19 @@ const satexApi = {
   setSubsecondPref: (symbol: string, bucketMs: 250 | 500) =>
     ipcRenderer.invoke(IPC.SUBSECOND_PREFS_SET, { symbol, bucketMs }) as Promise<Record<string, 250 | 500>>,
 
+  // ── Funded account programme (P-021) ────────────────────────────────────────
+  /** Subscribe to funded-account state pushes. Emitted on every engine tick
+   *  and on all funded-account transitions (MLL move, EOD close, flat). */
+  onFundedAccountUpdate: (cb: (s: import('@shared/funded/types').FundedAccountSnapshot) => void) =>
+    on<import('@shared/funded/types').FundedAccountSnapshot>(IPC.FUNDED_ACCOUNT_UPDATE, cb),
+  /** Seed the fundedAccountStore on mount (post-subscribe pattern). */
+  getFundedAccount: () =>
+    ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_UPDATE) as Promise<import('@shared/funded/types').FundedAccountSnapshot | null>,
+  /** Emergency flatten — force-close all positions and cancel pending orders.
+   *  The reason string is written to the audit log. */
+  triggerFundedFlat: (reason: string) =>
+    ipcRenderer.invoke(IPC.FUNDED_TRIGGER_FLAT, reason) as Promise<{ ok: boolean; reason?: string }>,
+
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {
     /** Stream of closed-trade records — one event per position close. */
