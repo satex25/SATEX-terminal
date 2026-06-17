@@ -64,7 +64,7 @@ function drawLine(
   ctx.stroke()
 }
 
-function renderDrawing(
+export function renderDrawing(
   ctx:       CanvasRenderingContext2D,
   drawing:   Drawing,
   transform: ViewportTransform,

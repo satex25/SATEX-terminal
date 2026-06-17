@@ -13,7 +13,36 @@
     "src/**/*.{ts,tsx}",
     "!**/*.d.ts"
   ],
+  "ignore": [
+    "src/main/services/alpaca-mode.ts",
+    "src/main/services/auto-update.ts",
+    "src/main/services/depth-feed.ts",
+    "src/main/services/edgar.ts",
+    "src/main/services/env.ts",
+    "src/main/services/indicator-settings.ts",
+    "src/main/services/macro-calendar.ts",
+    "src/main/services/market-observer.ts",
+    "src/main/services/regime.ts",
+    "src/main/services/self-eval-store.ts",
+    "src/main/services/system-logs.ts",
+    "src/main/services/tactics.ts",
+    "src/main/services/workspace-state.ts",
+    "src/renderer/panels/FundedAccountPanel.tsx",
+    "src/renderer/stores/fundedAccountStore.ts"
+  ],
   "ignoreDependencies": [
     "playwright"
-  ]
+  ],
+  "rules": {
+    "files":         "error",
+    "dependencies":  "error",
+    "unresolved":    "error",
+    "exports":       "warn",
+    "types":         "warn",
+    "duplicates":    "warn",
+    "enumMembers":   "warn",
+    "classMembers":  "warn",
+    "nsExports":     "warn",
+    "nsTypes":       "warn"
+  }
 }

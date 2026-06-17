@@ -10,7 +10,7 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { z, type ZodTypeAny } from 'zod'
 import { TradingEngine } from './core/trading-engine'
-import { enableFileSink } from './services/logger'
+import { enableFileSink } from './services/system/logger'
 import { IPC } from '@shared/ipc-channels'
 import {
   OrderSubmitReq, OrderCancelReq, KillSwitchReq, CandlesGetReq, SymbolOnlyReq,
@@ -20,16 +20,17 @@ import {
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq, HistoricalBarsReq,
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
   WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
+  ChartDrawingsGetReq, ChartDrawingsSetReq, ChartPngExportReq,
 } from '@shared/ipc-schemas'
-import { loadEnv } from './services/env'
-import { createLogger } from './services/logger'
-import { IndicatorSettingsService } from './services/indicator-settings'
-import { WorkspaceStateService } from './services/workspace-state'
-import { SubsecondPrefsService } from './services/subsecond-prefs'
-import { migratePlaintextEnvLocalCreds } from './services/credential-store'
-import { isLive } from './services/live-mode'
-import { AutoUpdateService } from './services/auto-update'
-import { WireFeedService, defaultFetchText } from './services/wire-feed'
+import { loadEnv } from './services/system/env'
+import { createLogger } from './services/system/logger'
+import { IndicatorSettingsService } from './services/system/indicator-settings'
+import { WorkspaceStateService } from './services/system/workspace-state'
+import { SubsecondPrefsService } from './services/subsecond/subsecond-prefs'
+import { migratePlaintextEnvLocalCreds } from './services/system/credential-store'
+import { isLive } from './services/execution/live-mode'
+import { AutoUpdateService } from './services/system/auto-update'
+import { WireFeedService, defaultFetchText } from './services/market-data/wire-feed'
 
 // Migrate plaintext Alpaca keys out of userData/.env.local into safeStorage
 // BEFORE dotenv runs. If keys are migrated the file is rewritten (or deleted)
@@ -1010,6 +1011,64 @@ function registerIpcHandlers(): void {
   register(IPC.UPDATE_INSTALL, () => {
     autoUpdate.quitAndInstall()
   })
+
+  // ── L1.D — Chart interaction layer (CHART-03/04/08/09 · 2026-06-16) ───────
+  // Drawings are stored ephemeral-first (D4): persisted on explicit operator
+  // save action only, not autosaved on every stroke. Storage path mirrors the
+  // subsecond-prefs precedent: Vault/Settings/chart-drawings.md (markdown +
+  // JSON fence, human-readable, hand-editable).
+  register(IPC.CHART_DRAWINGS_GET, validated(ChartDrawingsGetReq, async ({ symbol }) => {
+    try {
+      const fs   = await import('node:fs')
+      const path = await import('node:path')
+      const vaultRoot = resolveVaultProjectRoot()
+      const file = path.join(vaultRoot, 'Vault', 'Settings', 'chart-drawings.json')
+      if (!fs.existsSync(file)) return { drawings: null }
+      const raw  = fs.readFileSync(file, 'utf8')
+      const all  = JSON.parse(raw) as Record<string, unknown>
+      return { drawings: (all[symbol] ?? null) }
+    } catch (e) {
+      log.warn('chart drawings get failed', { symbol, err: String(e) })
+      return { drawings: null }
+    }
+  }))
+
+  register(IPC.CHART_DRAWINGS_SET, validated(ChartDrawingsSetReq, async ({ symbol, drawings }) => {
+    try {
+      const fs   = await import('node:fs')
+      const path = await import('node:path')
+      const vaultRoot = resolveVaultProjectRoot()
+      const dir  = path.join(vaultRoot, 'Vault', 'Settings')
+      fs.mkdirSync(dir, { recursive: true })
+      const file = path.join(dir, 'chart-drawings.json')
+      let all: Record<string, unknown> = {}
+      if (fs.existsSync(file)) {
+        try { all = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { /* corrupt file — start fresh */ }
+      }
+      all[symbol] = drawings
+      fs.writeFileSync(file, JSON.stringify(all, null, 2), 'utf8')
+      log.info('chart drawings saved', { symbol, count: drawings.length })
+      return { ok: true as const }
+    } catch (e) {
+      log.error('chart drawings set failed', { symbol, err: String(e) })
+      return { ok: false as const, reason: String(e) }
+    }
+  }))
+
+  register(IPC.CHART_PNG_EXPORT, validated(ChartPngExportReq, async ({ filename, data }) => {
+    try {
+      const fs   = await import('node:fs')
+      const path = await import('node:path')
+      const dir  = app.getPath('downloads')
+      const file = path.join(dir, filename)
+      fs.writeFileSync(file, Buffer.from(data))
+      log.info('chart PNG exported', { path: file, bytes: data.length })
+      return { ok: true as const, path: file }
+    } catch (e) {
+      log.error('chart PNG export failed', { filename, err: String(e) })
+      return { ok: false as const, reason: String(e) }
+    }
+  }))
 
   log.info('IPC handlers registered', { count: Object.keys(IPC).length })
 }

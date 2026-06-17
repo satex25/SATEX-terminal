@@ -200,6 +200,24 @@ export const IPC = {
    *  partial state safely requires a separate confirmation UX. */
   SNAPSHOT_EXPORT:    'satex:snapshot:export',
 
+  // -- L1.D -- Chart interaction layer (CHART-03/04/08/09 - 2026-06-16) ----------
+  /** Invoke (renderer -> main): get persisted drawings for a symbol.
+   *  Request: ChartDrawingsGetReq ({ symbol: string }).
+   *  Response: ChartDrawingsRes ({ drawings: Drawing[] | null }). */
+  CHART_DRAWINGS_GET: 'satex:chart:drawingsGet',
+
+  /** Invoke (renderer -> main): persist drawings for a symbol.
+   *  Request: ChartDrawingsSetReq ({ symbol: string, drawings: Drawing[] }).
+   *  Response: void. Written to Vault/Settings/chart-drawings.json (ephemeral-
+   *  first D4 -- only on explicit operator save, not autosave-on-stroke). */
+  CHART_DRAWINGS_SET: 'satex:chart:drawingsSet',
+
+  /** Invoke (renderer -> main): export composited chart PNG to Downloads.
+   *  Request: ChartPngExportReq ({ filename: string, data: number[] }).
+   *  Response: { path: string } -- absolute path where the PNG was written. */
+  CHART_PNG_EXPORT:   'satex:chart:pngExport',
+
+
   // ── B3 (2026-05-18) — Per-asset-class feed status ────────────────────────
   /** Push: { equity: 'live'|'simulator'|'off', futures: 'live'|'synthetic',
    *  crypto: 'live'|'off' }. Renderer's WatchlistPanel reads this to render a
