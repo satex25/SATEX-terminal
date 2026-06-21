@@ -10,7 +10,7 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { z, type ZodTypeAny } from 'zod'
 import { TradingEngine } from './core/trading-engine'
-import { enableFileSink } from './services/system/logger'
+import { enableFileSink } from './services/logger'
 import { IPC } from '@shared/ipc-channels'
 import {
   OrderSubmitReq, OrderCancelReq, KillSwitchReq, CandlesGetReq, SymbolOnlyReq,
@@ -22,15 +22,15 @@ import {
   WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
   ChartDrawingsGetReq, ChartDrawingsSetReq, ChartPngExportReq,
 } from '@shared/ipc-schemas'
-import { loadEnv } from './services/system/env'
-import { createLogger } from './services/system/logger'
-import { IndicatorSettingsService } from './services/system/indicator-settings'
-import { WorkspaceStateService } from './services/system/workspace-state'
-import { SubsecondPrefsService } from './services/subsecond/subsecond-prefs'
-import { migratePlaintextEnvLocalCreds } from './services/system/credential-store'
-import { isLive } from './services/execution/live-mode'
-import { AutoUpdateService } from './services/system/auto-update'
-import { WireFeedService, defaultFetchText } from './services/market-data/wire-feed'
+import { loadEnv } from './services/env'
+import { createLogger } from './services/logger'
+import { IndicatorSettingsService } from './services/indicator-settings'
+import { WorkspaceStateService } from './services/workspace-state'
+import { SubsecondPrefsService } from './services/subsecond-prefs'
+import { migratePlaintextEnvLocalCreds } from './services/credential-store'
+import { isLive } from './services/live-mode'
+import { AutoUpdateService } from './services/auto-update'
+import { WireFeedService, defaultFetchText } from './services/wire-feed'
 
 // Migrate plaintext Alpaca keys out of userData/.env.local into safeStorage
 // BEFORE dotenv runs. If keys are migrated the file is rewritten (or deleted)

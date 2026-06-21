@@ -42,11 +42,18 @@ import type { IChartApi } from 'lightweight-charts'
 import { CrosshairReadout } from '../chart/overlay/CrosshairReadout'
 import { MultiTFOverlay } from '../chart/MultiTFOverlay'
 import { OrderFlowTape } from '../chart/flow/OrderFlowTape'
-import { exportChartPng } from '../chart/export'
+// NOTE: '../chart/export' is intentionally NOT statically imported. It does
+// `import { ipcRenderer } from 'electron'`, which vite externalises to a shim
+// that references `__dirname` — that throws at module-evaluation time in the
+// renderer and blanks the entire chart panel. We dynamic-import the module
+// from the PNG button's handler so any failure is scoped to that one action.
+// TODO: add a `chart.pngExport` bridge to preload and refactor export.ts to
+// use it instead of ipcRenderer.
 import { useTradesStore, ensureTradesSubscription } from '../chart/flow/tradesStore'
 import { CanvasOverlay, type CanvasOverlayHandle } from '../chart/overlay/CanvasOverlay'
 import { deriveTransform, type ViewportTransform } from '../chart/overlay/ViewportTransform'
-import { DrawingLayer, renderDrawing } from '../chart/drawing/DrawingLayer'
+import { DrawingLayer }  from '../chart/drawing/DrawingLayer'
+import { renderDrawing } from '../chart/drawing/drawing-renderer'
 import { DrawingToolbar } from '../chart/drawing/DrawingToolbar'
 import { useDrawingStore } from '../chart/drawing/drawingStore'
 import { drawingInView, nextDrawingId, type Drawing } from '../chart/drawing/DrawingModel'
@@ -1360,14 +1367,19 @@ export function ChartPanel() {
             </button>
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 const chart = chartRef.current as IChartApi | null
                 if (!chart) return
-                void exportChartPng({
-                  chart,
-                  overlayCanvas: overlayHandleRef.current?.canvas ?? null,
-                  webglCanvas:   null,
-                })
+                try {
+                  const mod = await import('../chart/export')
+                  await mod.exportChartPng({
+                    chart,
+                    overlayCanvas: overlayHandleRef.current?.canvas ?? null,
+                    webglCanvas:   null,
+                  })
+                } catch (e) {
+                  console.warn('[chart] PNG export unavailable (pending preload bridge):', e)
+                }
               }}
               title="Export the current chart as a PNG (Downloads folder)"
             >

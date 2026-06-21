@@ -2325,9 +2325,13 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   display: flex; align-items: center; gap: 6px;
   padding: 3px 8px; background: var(--bb-surf-1);
 }
-.bb-session-icon  { color: var(--bb-accent); font-size: var(--text-md); }
+.bb-session-icon  { color: var(--bb-accent); font-size: var(--text-md); animation: bb-session-glow 4s ease-in-out infinite; }
 .bb-session-name  { color: var(--bb-txt); font-size: var(--text-sm); letter-spacing: 0.14em; font-weight: 600; }
 .bb-session-suffix{ color: var(--bb-txt-mute); font-size: var(--text-xs); }
+@keyframes bb-session-glow {
+  0%, 100% { text-shadow: none; }
+  50%       { text-shadow: 0 0 10px color-mix(in srgb, var(--bb-accent) 45%, transparent); }
+}
 
 /* ---- Stat pill -------------------------------------------------------- */
 .bb-stat-pill { display: inline-flex; align-items: center; gap: 6px; }
@@ -2376,14 +2380,37 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .bb-bot-item { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .bb-bot-k    { color: var(--bb-txt-mute); letter-spacing: 0.14em; font-size: var(--text-xs); }
 .bb-bot-v    { color: var(--bb-txt-dim); }
+.bb-bot-sep  { width: 1px; height: 16px; background: var(--bb-line-2); flex-shrink: 0; align-self: center; }
+.bb-log-live { color: var(--bb-accent); animation: bb-log-pulse 2.5s ease-in-out infinite; }
+@keyframes bb-log-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.42; }
+}
 
 /* ---- Panel head ------------------------------------------------------- */
 .bb-panel-head {
   padding: 8px 10px 6px;
-  display: flex; align-items: baseline;
+  display: flex; align-items: center;
 }
 .bb-panel-title { color: var(--bb-txt); font-size: var(--text-sm); letter-spacing: 0.22em; font-weight: 600; }
 .bb-panel-meta  { margin-left: auto; font-size: var(--text-xs); color: var(--bb-txt-mute); letter-spacing: 0.12em; }
+/* Live indicator dot — renders before title when live={true} on <PanelHead> */
+.bb-panel-live-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--bb-pos); flex-shrink: 0;
+  margin-right: 7px; align-self: center;
+  animation: bb-panel-live-pulse 2s ease-in-out infinite;
+}
+@keyframes bb-panel-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bb-pos) 50%, transparent); }
+  50%       { box-shadow: 0 0 0 3px color-mix(in srgb, var(--bb-pos) 0%, transparent); }
+}
+/* Badge label — pass as right={<span className="bb-panel-badge">LABEL</span>} */
+.bb-panel-badge {
+  font-size: var(--text-2xs); letter-spacing: 0.18em;
+  padding: 1px 5px; border: 1px solid var(--bb-line-2);
+  color: var(--bb-txt-mute); margin-right: 8px;
+}
 
 /* ---- Watchlist -------------------------------------------------------- */
 .bb-watchlist {
