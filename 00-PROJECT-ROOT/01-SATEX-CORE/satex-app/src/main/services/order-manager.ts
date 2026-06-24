@@ -16,8 +16,11 @@
  */
 const MAX_QUOTE_AGE_MS = 5_000
 import type {
-  Account, Order, OrderRequest, OrderStatus, OrderValidationResult, Position, StrategySignal
+  Account, Order, OrderRequest, OrderStatus, OrderValidationResult, Position, StrategySignal,
+  MacroEvent,
 } from '@shared/types'
+import type { FundedAccountProfile } from '@shared/funded/types'
+import { checkAllowedAssetClass, checkMaxContracts } from '@shared/funded/checks'
 import {
   BUYING_POWER_MULT, DAILY_LOSS_LIMIT_PCT, MAX_OPEN_POSITIONS,
   MAX_POSITION_CONCENTRATION, DEFAULT_EQUITY
@@ -45,11 +48,26 @@ export interface OrderValidationContext {
   signalConfidence?: number
   /** Asset class — crypto bypasses the market-hours gate. */
   assetClass?: 'equity' | 'index' | 'future' | 'crypto'
+  // ── Tier-1 funded-account fields (2026-05-29) ──────────────────────────
+  /** Active funded-account profile. Undefined = no overlay → gates 9-13 skipped. */
+  fundedProfile?: FundedAccountProfile
+  /** Current Maximum Loss Limit in dollars (from EquityHWMService.computeMll). */
+  fundedMll?: number
+  /** Worst-case loss if this order's stop-loss is hit, in dollars. */
+  worstCaseLossDollar?: number
+  /** Signed quantity of the EXISTING position in this symbol. */
+  currentPositionQty?: number
+  /** Latest macro events for Gate 10 (news blackout). */
+  macroEvents?: MacroEvent[]
+  /** Wall-clock used for tz-aware checks. Defaults to Date.now(). */
+  nowMs?: number
 }
 import { orderId } from './id-generator'
 import { createLogger } from './logger'
 import type { SlippageModel } from '../backtest/slippage-model'
 import { ZeroSlippageModel } from '../backtest/slippage-model'
+import { isInBlackout } from './blackout-window'
+import { isPastFlatBy } from './eod-flatten'
 
 const log = createLogger('order-manager')
 
@@ -226,15 +244,26 @@ export class OrderManager {
     if (ctx?.liveMode && ctx.assetClass !== 'crypto' && !this.isMarketOpen)
       return { ok: false, reason: 'US equity market is closed', gate: 'market-closed' }
 
-    // Gate 3: daily loss limit
+    // Gate 3: daily loss limit — enforces the tighter of:
+    //   (a) the session-scoped percentage cap (dailyLossLimitPct × sessionStart)
+    //   (b) the funded-profile's absolute dollar cap (profile.dailyLossLimit)
+    // P0-A fix: funded profiles were previously using only (a), ignoring (b).
+    // A $100K session with a $1K DLL profile was allowing a $2K daily loss.
     const dailyLoss = this.sessionStartEquity - this.account.equity
-    if (dailyLoss >= this.sessionStartEquity * this.account.dailyLossLimitPct)
-      return { ok: false, reason: `Daily loss limit reached (${(this.account.dailyLossLimitPct * 100).toFixed(1)}%)`, gate: 'daily-loss' }
+    const pctLimit = this.sessionStartEquity * this.account.dailyLossLimitPct
+    const absoluteLimit = ctx?.fundedProfile?.dailyLossLimit ?? Infinity
+    const effectiveDll = Math.min(pctLimit, absoluteLimit)
+    if (dailyLoss >= effectiveDll) {
+      const reason = absoluteLimit < pctLimit
+        ? `Daily loss limit reached — funded-account cap $${absoluteLimit.toFixed(0)}`
+        : `Daily loss limit reached (${(this.account.dailyLossLimitPct * 100).toFixed(1)}%)`
+      return { ok: false, reason, gate: 'daily-loss' }
+    }
+
+    const refPrice = ctx?.refPrice && ctx.refPrice > 0 ? ctx.refPrice : (this.account.equity / Math.max(1, req.quantity))
+    const notional = refPrice * req.quantity
 
     if (req.side === 'buy') {
-      const refPrice = ctx?.refPrice && ctx.refPrice > 0 ? ctx.refPrice : (this.account.equity / Math.max(1, req.quantity))
-      const notional = refPrice * req.quantity
-
       // Gate 4: max open positions
       const openCount = this.positions.size
       if (openCount >= MAX_OPEN_POSITIONS && !this.positions.has(req.symbol))
@@ -248,7 +277,79 @@ export class OrderManager {
       // Gate 6: buying power
       if (notional > this.account.buyingPower)
         return { ok: false, reason: 'Insufficient buying power', gate: 'buying-power' }
+    }
 
+    // ── Tier-1 funded-account gates 9-13 (fire for BOTH buys and sells) ──
+    if (ctx?.fundedProfile) {
+      const profile = ctx.fundedProfile
+      const nowMs = ctx.nowMs ?? Date.now()
+      const existingQty = ctx.currentPositionQty ?? (this.positions.get(req.symbol)?.quantity ?? 0)
+
+      // Gate 9: trailing MaxDD. If the worst-case stop loss would drop
+      // equity below MLL, refuse. When worstCaseLossDollar is missing, fall
+      // back to checking current equity directly (a bare market order with
+      // no stop is risk-unbounded; trading-engine attaches worstCase
+      // whenever a stop is present).
+      if (typeof ctx.fundedMll === 'number') {
+        const projectedEquity = this.account.equity - (ctx.worstCaseLossDollar ?? 0)
+        if (projectedEquity < ctx.fundedMll) {
+          return {
+            ok: false,
+            reason: `Trailing MaxDD breach — would drop equity to ${projectedEquity.toFixed(0)} vs MLL ${ctx.fundedMll.toFixed(0)}`,
+            gate: 'funded-mll',
+          }
+        }
+      }
+
+      // Gate 10: news blackout
+      if (ctx.macroEvents && profile.newsBlackoutImpacts.length > 0) {
+        const bl = isInBlackout(nowMs, ctx.macroEvents, profile.newsBlackoutImpacts, profile.newsBlackoutWindowMs)
+        if (bl.inBlackout) {
+          const direction = (bl.msToEvent ?? 0) >= 0 ? 'before' : 'after'
+          const seconds = Math.abs(Math.round((bl.msToEvent ?? 0) / 1000))
+          return {
+            ok: false,
+            reason: `News blackout — ${bl.triggeringEvent?.label ?? 'event'} (${seconds}s ${direction})`,
+            gate: 'funded-blackout',
+          }
+        }
+      }
+
+      // Gate 11: max contracts
+      const mc = checkMaxContracts(req.symbol, req.side, req.quantity, existingQty, profile)
+      if (!mc.ok) {
+        return {
+          ok: false,
+          reason: `Position size cap — ${req.symbol} resulting abs ${mc.resultingAbs} > cap ${mc.cap}`,
+          gate: 'funded-max-contracts',
+        }
+      }
+
+      // Gate 12: post-EOD-flat. No NEW entries after the configured flat-by
+      // time. Closing trades (reducing absolute position size) are still
+      // allowed even after the cutoff.
+      const opening = existingQty === 0
+        || (existingQty > 0 && req.side === 'buy')
+        || (existingQty < 0 && req.side === 'sell')
+      if (opening && isPastFlatBy(new Date(nowMs), profile.flatBy)) {
+        return {
+          ok: false,
+          reason: `Post-EOD cutoff — flat-by ${profile.flatBy.hour}:${String(profile.flatBy.minute).padStart(2, '0')} ${profile.flatBy.tz} passed`,
+          gate: 'funded-eod',
+        }
+      }
+
+      // Gate 13: asset class allowed
+      if (ctx.assetClass && !checkAllowedAssetClass(ctx.assetClass, profile)) {
+        return {
+          ok: false,
+          reason: `Asset class '${ctx.assetClass}' not allowed by ${profile.name}`,
+          gate: 'funded-asset-class',
+        }
+      }
+    }
+
+    if (req.side === 'buy') {
       // Gate 7: live-mode notional cap (live mode only)
       if (ctx?.liveMode && ctx.notionalCap > 0 && notional > ctx.notionalCap)
         return { ok: false, reason: `Notional $${notional.toFixed(0)} exceeds live cap $${ctx.notionalCap}`, gate: 'notional-cap' }
@@ -308,6 +409,42 @@ export class OrderManager {
     order.status = 'canceled'
     log.info('order canceled', { id, traceId: order.traceId })
     for (const cb of this.fillCbs) cb(order, null)
+  }
+
+  /** Cancel every pending order. Used by the EOD flatten and the panic
+   *  button. Each cancelled order fires the fill-callback with `null`
+   *  position so listeners can update accordingly. Returns the count. */
+  cancelAllOrders(): number {
+    let count = 0
+    for (const order of Array.from(this.orders.values())) {
+      if (order.status !== 'pending') continue
+      order.status = 'canceled'
+      log.info('order canceled by cancelAll', { id: order.id, traceId: order.traceId })
+      for (const cb of this.fillCbs) cb(order, null)
+      count++
+    }
+    return count
+  }
+
+  /** Market-flatten every open position. Caller supplies a getQuote so the
+   *  fill price reflects the current market. Each fill triggers applyFill
+   *  exactly as a normal close would. Returns the number of positions
+   *  flattened. */
+  flattenAllPositions(getQuote: (symbol: string) => { last: number } | undefined): number {
+    let count = 0
+    for (const pos of Array.from(this.positions.values())) {
+      const quote = getQuote(pos.symbol)
+      const fillPrice = quote?.last ?? pos.avgPrice
+      const side: 'buy' | 'sell' = pos.quantity > 0 ? 'sell' : 'buy'
+      const qty = Math.abs(pos.quantity)
+      const closeOrder = this.createOrder(
+        { symbol: pos.symbol, side, type: 'market', quantity: qty, source: 'eod-flatten' },
+        'pending',
+      )
+      this.fillOrder(closeOrder.id, fillPrice)
+      count++
+    }
+    return count
   }
 
   onOrderFill(fn: OrderFillCallback): () => void { this.fillCbs.add(fn); return () => this.fillCbs.delete(fn) }

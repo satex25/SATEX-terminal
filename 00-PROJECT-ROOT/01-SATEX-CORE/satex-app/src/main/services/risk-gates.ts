@@ -21,6 +21,8 @@ import type {
   RiskGate, RiskGatesSnapshot, RiskGateStatus,
   PnlSnapshot,
 } from '@shared/types'
+import type { FundedAccountSnapshot } from '@shared/funded/types'
+import type { BlackoutResult } from './blackout-window'
 import { createLogger } from './logger'
 
 const log = createLogger('risk')
@@ -57,7 +59,7 @@ const DEFAULTS: RiskGatesConfig = {
   sessionVarTarget:    12_000,
 }
 
-interface RiskGatesDeps {
+export interface RiskGatesDeps {
   getAccount:    () => Account
   getQuote:      (symbol: string) => Quote | undefined
   getCandles:    (symbol: string, limit?: number) => Candle[]
@@ -70,6 +72,11 @@ interface RiskGatesDeps {
    *  service used the imported DEFAULT_EQUITY constant, which silently
    *  diverged from OM enforcement by up to 10× once C2 rebased OM. */
   getSessionStartEquity: () => number
+  // ── Tier-1 (D.9) ────────────────────────────────────────────────────────
+  /** Active funded account snapshot, or null if no profile active. */
+  getFundedSnapshot?: (currentEquity: number, now: Date) => FundedAccountSnapshot | null
+  /** Current news-blackout result, or null if no profile. */
+  getBlackout?: () => BlackoutResult | null
 }
 
 function statusForPct(pct: number, watch: number, breach: number): RiskGateStatus {
@@ -321,6 +328,126 @@ export class RiskGatesService {
       ? `$${Math.round(varDollar).toLocaleString()} / ${(cfg.sessionVarTarget / 1000).toFixed(0)}k tgt`
       : `n/a · need ≥${MIN_SNAPS} snapshots (${snaps.length})`
 
+    // ── Tier-1 (D.9) — funded-account display gates ────────────────────────
+    const fundedSnap = this.deps.getFundedSnapshot?.(account.equity, new Date()) ?? null
+    const blackout   = this.deps.getBlackout?.() ?? null
+
+    let trailingMaxDdPct = 0
+    let trailingMaxDdStatus: RiskGateStatus = 'OK'
+    let trailingMaxDdValue = 'n/a · no profile'
+    let mllBufferPct = 0
+    let mllBufferStatus: RiskGateStatus = 'OK'
+    let mllBufferValue = 'n/a · no profile'
+    let newsBlackoutPct = 0
+    let newsBlackoutStatus: RiskGateStatus = 'OK'
+    let newsBlackoutValue = 'n/a · no profile'
+    let maxContractsPct = 0
+    let maxContractsStatus: RiskGateStatus = 'OK'
+    let maxContractsValue = 'n/a · no profile'
+    let eodCountdownPct = 0
+    let eodCountdownStatus: RiskGateStatus = 'OK'
+    let eodCountdownValue = 'n/a · no profile'
+
+    if (fundedSnap?.active && fundedSnap.profile) {
+      const profile = fundedSnap.profile
+
+      // TRAILING_MAXDD: pct of the trailingMaxDrawdown buffer that's been used.
+      const buffer = fundedSnap.mllBuffer
+      const drawdownAllowance = profile.trailingMaxDrawdown
+      const used = Math.max(0, drawdownAllowance - buffer)
+      trailingMaxDdPct = Math.min(1, used / Math.max(1, drawdownAllowance))
+      trailingMaxDdStatus = statusForPct(trailingMaxDdPct, 0.5, 0.9)
+      trailingMaxDdValue = `−$${used.toFixed(0)} / $${drawdownAllowance.toFixed(0)} buf${fundedSnap.mllLocked ? ' · locked' : ''}`
+
+      // MLL_BUFFER: literal dollar buffer remaining before MLL breach.
+      mllBufferValue = buffer >= 0
+        ? `$${Math.round(buffer).toLocaleString()} above MLL ($${Math.round(fundedSnap.currentMll).toLocaleString()})`
+        : `BREACHED — $${Math.round(-buffer).toLocaleString()} below MLL`
+      // pct: fraction of drawdown allowance consumed from the MLL side (independent of trailingMaxDd)
+      mllBufferPct = buffer <= 0 ? 1 : Math.min(1, Math.max(0, 1 - (buffer / Math.max(1, drawdownAllowance))))
+      mllBufferStatus = buffer < 0 ? 'BREACH' : statusForPct(mllBufferPct, 0.5, 0.9)
+
+      // NEWS_BLACKOUT: 1.0 when in blackout, 0.0 otherwise.
+      if (blackout?.inBlackout) {
+        newsBlackoutPct = 1
+        newsBlackoutStatus = 'BREACH'
+        const direction = (blackout.msToEvent ?? 0) >= 0 ? 'before' : 'after'
+        const seconds = Math.abs(Math.round((blackout.msToEvent ?? 0) / 1000))
+        newsBlackoutValue = `${blackout.triggeringEvent?.label ?? 'event'} · ${seconds}s ${direction}`
+      } else {
+        newsBlackoutValue = `clear · ${profile.newsBlackoutImpacts.join('+') || '∅'} impact · ±${Math.round(profile.newsBlackoutWindowMs / 1000)}s`
+      }
+
+      // MAX_CONTRACTS: worst current/cap ratio across all open positions.
+      let worstRatio = 0
+      let worstSymbol = '—'
+      for (const p of account.openPositions) {
+        const cap = profile.maxContracts[p.symbol] ?? profile.defaultMaxContracts
+        const ratio = Math.abs(p.quantity) / Math.max(1, cap)
+        if (ratio > worstRatio) {
+          worstRatio = ratio
+          worstSymbol = p.symbol
+        }
+      }
+      maxContractsPct = Math.min(1, worstRatio)
+      maxContractsStatus = statusForPct(maxContractsPct, 0.8, 1.0)
+      maxContractsValue = account.openPositions.length === 0
+        ? `0 / — (no positions)`
+        : `${worstSymbol} ${Math.round(worstRatio * 100)}% of cap`
+
+      // EOD_COUNTDOWN: ms-to-flatby normalized against a session length base.
+      const ms = fundedSnap.msToFlatBy
+      const totalSessionMs = 6.5 * 3600_000
+      eodCountdownPct = Math.max(0, Math.min(1, 1 - (ms / totalSessionMs)))
+      eodCountdownStatus = ms < 15 * 60_000 ? 'BREACH'
+                         : ms < 60 * 60_000 ? 'WATCH'
+                         : 'OK'
+      eodCountdownValue = ms <= 0
+        ? `EOD passed (${profile.flatBy.hour}:${String(profile.flatBy.minute).padStart(2, '0')} ${profile.flatBy.tz})`
+        : `T-${Math.floor(ms / 60_000)}m to ${profile.flatBy.hour}:${String(profile.flatBy.minute).padStart(2, '0')}`
+    }
+
+    // ── Tier-1 D-2 — payout-rule advisory gauges ───────────────────────────
+    let consistencyPct = 0
+    let consistencyStatus: RiskGateStatus = 'OK'
+    let consistencyValue = 'n/a · no profile'
+    let profitTargetPct = 0
+    let profitTargetStatus: RiskGateStatus = 'OK'
+    let profitTargetValue = 'n/a · no profile'
+    let minDaysPct = 0
+    let minDaysStatus: RiskGateStatus = 'OK'
+    let minDaysValue = 'n/a · no profile'
+    let phaseValue = 'n/a · no profile'
+
+    if (fundedSnap?.active && fundedSnap.profile) {
+      const profile = fundedSnap.profile
+      const pm = fundedSnap.payoutMetrics
+
+      const consistencyTarget = profile.consistencyMaxDayFraction
+      if (consistencyTarget > 0) {
+        consistencyPct = Math.min(1, pm.consistencyRatio / consistencyTarget)
+        consistencyStatus = pm.consistencyOk ? statusForPct(consistencyPct, 0.7, 0.95) : 'BREACH'
+        consistencyValue = `${(pm.consistencyRatio * 100).toFixed(0)}% of profit · cap ${(consistencyTarget * 100).toFixed(0)}%`
+      } else {
+        consistencyValue = `${(pm.consistencyRatio * 100).toFixed(0)}% · not enforced (Combine)`
+      }
+
+      profitTargetPct = pm.profitTargetProgress
+      profitTargetStatus = pm.profitTargetReached ? 'OK' : 'WATCH'
+      profitTargetValue = `$${Math.round(pm.totalProfit).toLocaleString()} / $${profile.profitTarget.toLocaleString()} (${Math.round(profitTargetPct * 100)}%)`
+
+      const minDays = profile.minTradingDays
+      if (minDays > 0) {
+        minDaysPct = Math.min(1, pm.tradingDaysCount / minDays)
+        minDaysStatus = pm.minDaysSatisfied ? 'OK' : 'WATCH'
+        minDaysValue = `${pm.tradingDaysCount} / ${minDays} required`
+      } else {
+        minDaysValue = `${pm.tradingDaysCount} days · no minimum`
+      }
+
+      phaseValue = `${pm.phase.toUpperCase()}${pm.profitTargetReached ? ' · target hit' : ''}`
+    }
+
     const gates: RiskGate[] = [
       { key: 'DAILY_LOSS_LIMIT', label: 'DAILY LOSS LIMIT',  pct: dailyLossPct,  status: dailyLossStatus, value: dailyLossValue },
       { key: 'POSITION_COUNT',   label: 'POSITION COUNT',    pct: posPct,        status: posStatus,       value: posValue },
@@ -328,6 +455,17 @@ export class RiskGatesService {
       { key: 'GROSS_LEVERAGE',   label: 'GROSS LEVERAGE',    pct: grossPct,      status: grossStatus,     value: grossValue },
       { key: 'CORRELATION',      label: 'CORRELATION ρ̄',    pct: corrPct,       status: corrStatus,      value: corrValue },
       { key: 'SESSION_VAR',      label: 'SESSION VAR (95%)', pct: varPct,        status: varStatus,       value: varValue },
+      // ── Tier-1 funded-account gates ─────────────────────────────────────
+      { key: 'TRAILING_MAXDD',   label: 'TRAILING MaxDD',    pct: trailingMaxDdPct, status: trailingMaxDdStatus, value: trailingMaxDdValue },
+      { key: 'MLL_BUFFER',       label: 'MLL BUFFER',        pct: mllBufferPct,     status: mllBufferStatus,     value: mllBufferValue },
+      { key: 'NEWS_BLACKOUT',    label: 'NEWS BLACKOUT',     pct: newsBlackoutPct,  status: newsBlackoutStatus,  value: newsBlackoutValue },
+      { key: 'MAX_CONTRACTS',    label: 'MAX CONTRACTS',     pct: maxContractsPct,  status: maxContractsStatus,  value: maxContractsValue },
+      { key: 'EOD_COUNTDOWN',    label: 'EOD COUNTDOWN',     pct: eodCountdownPct,  status: eodCountdownStatus,  value: eodCountdownValue },
+      // ── Tier-1 D-2 payout-rule advisory gauges ──────────────────────────
+      { key: 'CONSISTENCY',      label: 'CONSISTENCY',       pct: consistencyPct,   status: consistencyStatus,   value: consistencyValue },
+      { key: 'PROFIT_TARGET',    label: 'PROFIT TARGET',     pct: profitTargetPct,  status: profitTargetStatus,  value: profitTargetValue },
+      { key: 'MIN_TRADING_DAYS', label: 'MIN TRADING DAYS',  pct: minDaysPct,       status: minDaysStatus,       value: minDaysValue },
+      { key: 'EVAL_PHASE',       label: 'EVAL PHASE',        pct: 0,                status: 'OK',                value: phaseValue },
     ]
 
     let okCount = 0, watchCount = 0, breachCount = 0

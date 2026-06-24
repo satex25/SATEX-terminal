@@ -253,11 +253,11 @@ const satexApi = {
     on<import('@shared/funded/types').FundedAccountSnapshot>(IPC.FUNDED_ACCOUNT_UPDATE, cb),
   /** Seed the fundedAccountStore on mount (post-subscribe pattern). */
   getFundedAccount: () =>
-    ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_UPDATE) as Promise<import('@shared/funded/types').FundedAccountSnapshot | null>,
+    ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_GET) as Promise<import('@shared/funded/types').FundedAccountSnapshot | null>,
   /** Emergency flatten — force-close all positions and cancel pending orders.
    *  The reason string is written to the audit log. */
   triggerFundedFlat: (reason: string) =>
-    ipcRenderer.invoke(IPC.FUNDED_TRIGGER_FLAT, reason) as Promise<{ ok: boolean; reason?: string }>,
+    ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_TRIGGER_FLAT, { reason }) as Promise<{ ok: boolean; reason?: string }>,
 
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {

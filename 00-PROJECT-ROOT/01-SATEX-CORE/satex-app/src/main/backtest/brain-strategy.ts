@@ -36,7 +36,7 @@ export class BrainStrategy implements Strategy {
 
   decide(snap: StrategySnapshot): StrategySignal | null {
     if (snap.indicators.atr14 <= 0) return null
-    const decision = this.brain.decisionFromLocal(snap.quote, snap.indicators)
+    const decision = this.brain.decisionFromLocal(snap.quote, snap.indicators, snap.depth)
     if (decision.bias === 'neutral' || decision.confidence < this.config.threshold) return null
 
     const dir = decision.bias === 'bullish' ? 1 : -1

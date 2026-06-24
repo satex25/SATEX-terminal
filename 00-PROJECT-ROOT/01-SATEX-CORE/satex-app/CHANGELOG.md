@@ -9,6 +9,11 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **CHANGELOG.md: bridge-artifact duplicate-header repair (2026-06-24).** Line 56
+  had the Chart-interaction-layer bullet header doubled by the file bridge during the
+  2026-06-22 session write. Fixed via Python byte-level replacement. No logic change.
+  Gates: typecheck✅ lint✅ (0 warnings) test✅ (79/934) knip✅ (EXIT:0).
+
 - **P-023: `DrawingLayer.tsx` fast-refresh warning eliminated.** `renderDrawing`
   and its `drawLine` / colour-constant dependencies extracted into a new sibling
   file `drawing-renderer.ts`. `DrawingLayer.tsx` now exports only the React
@@ -37,6 +42,63 @@ changes alongside fixes during the v0.x stabilization series.
   that one action. TODO: add a `chart.pngExport` preload bridge.
 
 ### Added
+
+- **L1.F / P-009: Brain depth wiring + regime-aware ensemble confidence fusion.**
+  Two bugs prevented L2 order-book features from contributing to live decisions:
+  (1) `brain.decide()` never received `this.depth.get(symbol)` — `depth_imbalance`
+  and `microprice_dev` were always 0. (2) Brain confidence had no awareness of
+  market regime — a 0.7 signal in a strong trend looked identical to a 0.7 in chop.
+
+  **P-009 fix** (`services/brain.ts`): `decisionFromLocal()` and `decide()` now
+  accept an optional `depth?: DepthSnapshot` parameter and pass it to
+  `this.features()`. Engine calls `this.brain.decide(symbol, quote, ind, depth)`.
+  Backtest path (`brain-strategy.ts`) updated in lockstep to pass `snap.depth`.
+  Depth microstructure features fire when L2 data is available; degrade to 0 when absent.
+
+  **L1.F ensemble fuser** (`src/main/core/ensemble-fuser.ts`): New pure module that
+  scales brain confidence by a regime × EMA-alignment multiplier before calibration:
+
+  | Regime      | Alignment          | Multiplier |
+  |-------------|--------------------|------------|
+  | trend_up    | bullish (with trend) | × 1.20   |
+  | trend_up    | bearish (vs trend)   | × 0.65   |
+  | trend_down  | bearish (with trend) | × 1.20   |
+  | trend_down  | bullish (vs trend)   | × 0.65   |
+  | range       | counter-trend EMA   | × 1.10    |
+  | range       | trend-following EMA | × 0.75    |
+  | chop/unknown| any                 | pass-through |
+
+  Engine wiring in `getAiDecision()`: `depth` wired → `brain.decide()` →
+  `fuseWithRegime(confidence, bias, regime, ind)` → `calibration.calibrate(fused)`.
+  24 unit tests in `ensemble-fuser.test.ts` (isEmaAligned × 6, isAlignedWithRegime × 7,
+  fuseWithRegime × 11). All four gates green.
+
+- **P-024: PRNG and ID-generator test coverage (2026-06-24).** `mulberry32`
+  PRNG (`rng.ts`) and the ID generator (`id-generator.ts`) had zero test coverage
+  despite being foundational utilities: the PRNG feeds the simulator tick stream
+  and its determinism claim (“same seed → identical tick stream”) was unverified;
+  `orderId`/`sessionId` are used by every trade and session. Added `rng.test.ts`
+  (13 tests: [0,1) bounds, same-seed determinism, nextInt range + coverage,
+  Box-Muller mean ≈ 0 over N=10k, seed-0 and fractional-seed edge cases,
+  `randomSeed` uint32 invariant) and `id-generator.test.ts` (8 tests: prefix
+  format, base-36 suffix, 100-call uniqueness, orderId/sessionId canonical
+  prefixes). +21 tests total.
+  Gates: typecheck✅ lint✅ (0 warnings) test✅ (81 files / 955 tests) knip✅ (EXIT:0).
+
+- **P-013 (re-ship 2026-06-22): Simulator bracket execution engine.** Autonomous
+  paper positions now close automatically when stop-loss or take-profit is hit.
+  `checkBracketHit(position, currentPrice)` is a pure function in the new
+  `src/main/core/simulator-bracket.ts`: returns a `BracketHitResult`
+  (`level`, `closeSide`, `price`) or `null`; handles both long and short
+  positions; stop-loss takes priority on simultaneous cross (conservative).
+  `TradingEngine.checkSimulatorBracket(symbol, price)` is called from
+  `onQuotesBatch` when `this.alpaca === null` (simulator/replay only — Alpaca
+  handles bracket children server-side in live/paper mode). Fill synthesised
+  via `om.createOrder + om.fillOrder` at the exact bracket price; flows through
+  `onOrderFillForLearning → recordTradeClose → VaultWriter` so
+  `Vault/Trades/` populates on every closed paper trade. 14 unit tests in
+  `simulator-bracket.test.ts`. Gates: typecheck✅ lint✅ (0 warnings)
+  test✅ (79/934) knip✅ (CI Node-20).
 
 - **Chart interaction layer — CHART-03/20 (L1.D, 2026-06-16).** Full implementation
   of the chart interaction surface committed on `feat/chart-interaction-layer`:

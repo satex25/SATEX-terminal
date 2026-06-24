@@ -21,6 +21,7 @@ import {
   IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
   WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
   ChartDrawingsGetReq, ChartDrawingsSetReq, ChartPngExportReq,
+  FundedAccountSetProfileReq, FundedAccountTriggerFlatReq, FundedAccountAdvancePhaseReq,
 } from '@shared/ipc-schemas'
 import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
@@ -982,6 +983,13 @@ function registerIpcHandlers(): void {
   register(IPC.LOGS_GET,        ()                                       => engine.getLogsTail())
   register(IPC.DEPTH_GET,       validated(OptionalSymbolReq, (symbol)    => engine.getDepth(symbol)))
   register(IPC.DEPTH_SUBSCRIBE, validated(SymbolOnlyReq,     (symbol)    => { engine.subscribeDepth(symbol); return { ok: true } }))
+
+  // ── Tier-1 (D.10, 2026-05-29) — funded-account compliance overlay ──────
+  register(IPC.FUNDED_ACCOUNT_GET,          () => engine.getFundedAccount())
+  register(IPC.FUNDED_ACCOUNT_SET_PROFILE,  validated(FundedAccountSetProfileReq,  ({ profileId }) => engine.setFundedAccountProfile(profileId)))
+  register(IPC.FUNDED_ACCOUNT_CLEAR,        () => engine.setFundedAccountProfile(null))
+  register(IPC.FUNDED_ACCOUNT_TRIGGER_FLAT, validated(FundedAccountTriggerFlatReq, ({ reason }) => { engine.triggerFundedFlat(reason); return { ok: true as const } }))
+  register(IPC.FUNDED_ACCOUNT_ADVANCE_PHASE, validated(FundedAccountAdvancePhaseReq, ({ phase }) => engine.advanceFundedPhase(phase)))
 
   // ── B9 (2026-05-19) — CSP violation report sink ─────────────────────────────
   // Receives the renderer's `securitypolicyviolation` events, validates the
