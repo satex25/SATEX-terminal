@@ -9,11 +9,14 @@ import type { ReactNode } from 'react'
 interface Props {
   title: string
   right?: ReactNode
+  /** Renders a pulsing green dot before the title — use when the panel has a live data feed. */
+  live?: boolean
 }
 
-export function PanelHead({ title, right }: Props) {
+export function PanelHead({ title, right, live }: Props) {
   return (
     <div className="bb-panel-head">
+      {live && <span className="bb-panel-live-dot" />}
       <span className="bb-panel-title">{title}</span>
       <span className="bb-panel-meta">{right}</span>
     </div>

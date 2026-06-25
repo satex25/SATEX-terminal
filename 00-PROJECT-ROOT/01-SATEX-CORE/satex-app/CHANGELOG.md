@@ -7,7 +7,100 @@ changes alongside fixes during the v0.x stabilization series.
 
 ## Unreleased (v0.6 "Black Box")
 
+### Fixed
+
+- **P-023: `DrawingLayer.tsx` fast-refresh warning eliminated.** `renderDrawing`
+  and its `drawLine` / colour-constant dependencies extracted into a new sibling
+  file `drawing-renderer.ts`. `DrawingLayer.tsx` now exports only the React
+  component; `ChartPanel.tsx` imports `renderDrawing` from the new module.
+  Resolves the sole `react-refresh/only-export-components` lint warning; lint
+  gate now exits 0 with 0 warnings. Gates: typecheck✅ lint✅ (0 warnings) test✅
+  (111/1304) knip✅.
+
+- **P-021: Repo corruption diagnosis & package.json restoration (2026-06-17).**
+  Standing agent detected file-bridge shrink artifacts on boot: `package.json`
+  truncated at `typescript-eslint: "^8.59.` (resolved via bash write + JSON validation).
+  `.git/packed-refs` had unterminated line (fixed via truncation to last complete line,
+  3863→3605 bytes); git still FAILED on "ambiguous HEAD" (branch `feat/chart-interaction-layer`
+  unresolvable). Four test files structurally corrupted: `calibration.test.ts`,
+  `pattern-learner.test.ts` (each −1 closing brace); `replay-source.test.ts`,
+  `tick-recorder.test.ts` (each −2 braces). Gates BLOCKED pending operator restoration
+  from remote. P-021 logged with recovery path: `git checkout
+  src/main/services/{intelligence,market-data}/*test.ts`.
+
+- **ChartPanel.tsx: PNG export crash fix.** `export.ts` uses
+  `import { ipcRenderer } from 'electron'` which Vite externalises to a
+  shim referencing `__dirname`; that threw at module-evaluation time in the
+  sandboxed renderer and blanked the entire chart panel on load. Changed the
+  static `import { exportChartPng }` to a dynamic `import('../chart/export')`
+  scoped to the PNG button's async handler, so any failure is isolated to
+  that one action. TODO: add a `chart.pngExport` preload bridge.
+
 ### Added
+
+- **Chart interaction layer — CHART-03/20 (L1.D, 2026-06-16).** Full implementation
+  of the chart interaction surface committed on `feat/chart-interaction-layer`:
+
+  *Core chart engine:*
+  `DrawingModel.ts` (discriminated union: line/hline/vline/rect/fibonacci/annotation),
+  `drawingStore.ts` (Zustand, ephemeral-first D4 — save on explicit operator action only),
+  `DrawingLayer.tsx` (canvas renderer; hit-test; undo/redo), `CanvasOverlay.tsx` + 
+  `CrosshairReadout.tsx` (2D overlay, price+time readout, no ResizeObserver leak),
+  `NavController.ts` (keyboard j/k/+/-, wheel, pointer drag, idempotent destroy),
+  `overlay/ViewportTransform.ts` + `overlay/lod.ts` (time/price↔pixel, LOD decimation),
+  `OrderFlowTape.tsx` (live trade tape).
+
+  *Multi-TF overlay (CHART-06):* Second LWC v5 pane in absolute overlay with isolated
+  `NavController`; cursor sync via `unsubscribeCrosshairMove(handler)` (LWC v5 pattern);
+  shared-Y toggle; full cleanup (chart.remove, navRef.destroy, ro.disconnect).
+
+  *PNG/SVG export (CHART-08):* IIFE-wrapped LWC screenshot composite (LWC base +
+  WebGL + 2D overlay) → `CHART_PNG_EXPORT` IPC → Downloads. SVG export serialises
+  drawings using `DrawingModel` discriminated fields (`.a`/`.b` for line, `.price` for
+  hline, `.anchor` for annotation). No `anchors[]` array — discriminated union fields only.
+
+  *WebGL sublayer:*
+  `webgl/footprint.ts` (buy/sell cell aggregation, POC tracking, mixed/real/inferred
+  provenance, binary-search candle assignment) + 11 tests;
+  `webgl/volume-profile.ts` (TPO horizontal histogram, value-area 70%, POC) + 11 tests;
+  `webgl/WebGLRenderer.ts` (GPU pipeline lifecycle, texture atlas);
+  `webgl/vol-heatmap.ts` (GPU-accelerated volatility heatmap).
+
+  *Chart indicator additions (CHART-15..20):*
+  `chart-types.ts` (Renko/LineBreak/Kagi transforms) + tests;
+  `vol-surface.ts` (realized vol surface, annualised stdev) + tests;
+  `correlation.ts` (Pearson, rolling, matrix) + tests;
+  `indicator-graph.ts` (no-code pipeline DAG, visual alerts) + tests;
+  `patterns.ts` (H&S, inverse H&S, wedge, flag) + tests;
+  `block-prints.ts` (large-trade proxy detector) + tests.
+
+  *IPC wiring:* `CHART_DRAWINGS_GET` / `CHART_DRAWINGS_SET` / `CHART_PNG_EXPORT`
+  channels in `ipc-channels.ts`; `ChartDrawingsGetReq`, `ChartDrawingsSetReq`,
+  `ChartPngExportReq` Zod schemas in `ipc-schemas.ts`; 3 handlers in `main/index.ts`
+  (drawings R/W to `Vault/Settings/chart-drawings.json`, PNG write to Downloads).
+
+  *Gates:* typecheck NODE=0 WEB=0, lint 0 errors, vitest 50✓/12✗ (12 pre-existing
+  replay-source sqlite3 sandbox-only), knip exit 0.
+
+- **`scripts/` operator tooling.** `scripts/cleanup-root.ps1` removes all verified
+  root noise in one run (git bundles, one-shot bats, stale PR bodies, garbage .txt
+  files, chrome-devtools-mcp residue, root duplicate policy docs, HOME.md relocation).
+  `scripts/flatten-wrapper.ps1` (DryRun-safe) executes the §3.5 one-way wrapper
+  flatten when all open branches are merged and CI is green.
+
+### Added
+
+- **P-013: simulator / OrderManager close trigger pinned (pure extraction).**
+  Extracted `TradingEngine.onOrderFillForLearning` into the pure
+  `handleOrderFillForLearning` helper (`order-fill-learning-router.ts`),
+  mirroring the existing `onOrderEvent → handleOrderEvent` split, and added
+  `order-fill-learning-router.test.ts` (8 vitest cases) covering position-flat
+  detection, direct-vs-fallback entry resolution, the no-entry skip path
+  (`hasEntryFeatures:false`), and the `fillPrice ?? 0` guard. Behaviour-exact;
+  the engine now delegates. Pins the *simulator* close path — sibling of the
+  already-tested bracket-child path — so the P-013 `Vault/Trades/` diagnostic
+  can rule out trigger-routing as the cause. Gates green in sandbox: typecheck,
+  lint, vitest (84 files / 1034 cases), knip.
 
 - **P-008 (a): Multi-day historical bars for nightly self-eval (world-market
   coverage).** Extended `SelfEvalService.getCandles()` in trading-engine.ts to
@@ -125,6 +218,18 @@ changes alongside fixes during the v0.x stabilization series.
   tracked follow-up.
 
 ### Fixed
+
+- **`fmt.k()` leaked raw float noise on sub-1000 values (P-019).** The compact
+  number formatter returned `String(v)` unrounded below 1,000, so fractional
+  inputs rendered IEEE-754 artifacts (a size of `0.1 + 0.2` showed as
+  `0.30000000000000004`) while the K/M/B branches all rounded. It now rounds
+  sub-1000 non-integers to 3 significant figures — consistent with the suffixed
+  branches and noise-free (`0.3`); integers still pass through unchanged. Affects
+  the four operator surfaces that read it: ChartPanel volume, MarketsOverview
+  volume + notional, and the Time & Sales size tape. New `format.test.ts` pins
+  all six helpers (15 cases incl. null / NaN / Infinity and the float-noise
+  case); the lib previously had zero coverage. All four gates green: typecheck,
+  lint, test (63 files / 684 cases), knip.
 
 - **PatternLearner duplicate-SGD updates (P-001, audit §3.3).** Each observation
   inside the 5-min lookback received the same gradient step on ~8 consecutive

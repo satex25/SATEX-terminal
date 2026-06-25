@@ -51,6 +51,7 @@ export function BottomBar() {
       <Item k="SHARPE"       v="2.10 · rolling" />
       <Item k="GROSS · NET"  v={`${grossPct.toFixed(1)}% of equity`} />
       <span style={{ flex: 1 }} />
+      <span className="bb-bot-sep" />
       <Item k="DXY" v={dxyQuote
         ? <>
             <span className="bb-bot-v">{dxyQuote.last.toFixed(2)}</span>{' '}
@@ -67,7 +68,7 @@ export function BottomBar() {
             </span>
           </>
         : '—'} />
-      <Item k="LOG" v={<span style={{ color: 'var(--bb-accent)' }}>● tape · ok</span>} />
+      <Item k="LOG" v={<span className="bb-log-live">● tape · ok</span>} />
     </div>
   )
 }

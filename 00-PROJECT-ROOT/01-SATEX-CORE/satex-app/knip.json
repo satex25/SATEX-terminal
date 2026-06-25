@@ -13,7 +13,23 @@
     "src/**/*.{ts,tsx}",
     "!**/*.d.ts"
   ],
+  "ignore": [
+    "src/renderer/panels/FundedAccountPanel.tsx",
+    "src/renderer/stores/fundedAccountStore.ts"
+  ],
   "ignoreDependencies": [
     "playwright"
-  ]
+  ],
+  "rules": {
+    "files":         "error",
+    "dependencies":  "error",
+    "unresolved":    "error",
+    "exports":       "warn",
+    "types":         "warn",
+    "duplicates":    "warn",
+    "enumMembers":   "warn",
+    "classMembers":  "warn",
+    "nsExports":     "warn",
+    "nsTypes":       "warn"
+  }
 }

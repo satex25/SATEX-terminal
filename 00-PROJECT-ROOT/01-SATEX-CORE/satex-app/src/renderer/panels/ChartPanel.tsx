@@ -37,7 +37,27 @@ import {
   HISTORICAL_BARS_FALLBACK_SYMBOLS, UNIVERSE, isSubsecondTimeframe,
   type ChartTimeframe,
 } from '@shared/constants'
-import type { Candle, ReplayStatus, SubSecondCandle } from '@shared/types'
+import type { Candle, ReplayStatus, SubSecondCandle, Trade } from '@shared/types'
+import type { IChartApi } from 'lightweight-charts'
+import { CrosshairReadout } from '../chart/overlay/CrosshairReadout'
+import { MultiTFOverlay } from '../chart/MultiTFOverlay'
+import { OrderFlowTape } from '../chart/flow/OrderFlowTape'
+// NOTE: '../chart/export' is intentionally NOT statically imported. It does
+// `import { ipcRenderer } from 'electron'`, which vite externalises to a shim
+// that references `__dirname` — that throws at module-evaluation time in the
+// renderer and blanks the entire chart panel. We dynamic-import the module
+// from the PNG button's handler so any failure is scoped to that one action.
+// TODO: add a `chart.pngExport` bridge to preload and refactor export.ts to
+// use it instead of ipcRenderer.
+import { useTradesStore, ensureTradesSubscription } from '../chart/flow/tradesStore'
+import { CanvasOverlay, type CanvasOverlayHandle } from '../chart/overlay/CanvasOverlay'
+import { deriveTransform, type ViewportTransform } from '../chart/overlay/ViewportTransform'
+import { DrawingLayer }  from '../chart/drawing/DrawingLayer'
+import { renderDrawing } from '../chart/drawing/drawing-renderer'
+import { DrawingToolbar } from '../chart/drawing/DrawingToolbar'
+import { useDrawingStore } from '../chart/drawing/drawingStore'
+import { drawingInView, nextDrawingId, type Drawing } from '../chart/drawing/DrawingModel'
+import { FootprintLayer } from '../chart/webgl/FootprintLayer'
 import { useSubsecondStore } from '../stores/subsecondStore'
 import { useThemeStore } from '../stores/themeStore'
 import {
@@ -179,6 +199,23 @@ export function ChartPanel() {
   const [warnings, setWarnings] = useState<string[]>([])
 
   const [tf, setTf] = useState<ChartTimeframe>('5s')
+  // CHART-06/10/08 toolbar toggles + live trade source.
+  const [mtfOpen,  setMtfOpen]  = useState(false)
+  const [tapeOpen, setTapeOpen] = useState(false)
+  useEffect(() => { ensureTradesSubscription() }, [])
+  const trades: readonly Trade[] = useTradesStore(s => s.bySymbol[symbol] ?? [])
+  // CHART-03/04/05/09 — drawing layer wiring. transform is re-derived whenever
+  // LWC's visible range changes (pan/zoom) so drawings stay aligned.
+  const [drawOpen,  setDrawOpen]  = useState(false)
+  const [transform, setTransform] = useState<ViewportTransform | null>(null)
+  const overlayHandleRef          = useRef<CanvasOverlayHandle | null>(null)
+  const canvasWrapRef             = useRef<HTMLDivElement | null>(null)
+  const drawings                  = useDrawingStore(s => s.drawings[symbol] ?? [])
+  const activeTool                = useDrawingStore(s => s.activeTool)
+  const addDrawing                = useDrawingStore(s => s.addDrawing)
+  const pendingAnchorRef          = useRef<{ time: number; price: number } | null>(null)
+  // CHART-12 — WebGL footprint overlay (currently MVP tint).
+  const [footOpen, setFootOpen]   = useState(false)
   const bucketSec = CHART_TIMEFRAME_SECONDS[tf]
   // A1 (v0.4.4) — sub-second mode is crypto-only. `showSub` gates every
   // sub-second-specific branch: hydration fetch, view builder, in-flight
@@ -700,6 +737,95 @@ export function ChartPanel() {
     return () => { cancelled = true }
   }, [symbol, pivotsOn])
 
+  // CHART-09 — keep ViewportTransform fresh on pan/zoom. LWC's
+  // subscribeVisibleLogicalRangeChange fires on every user gesture; we
+  // re-derive and set state so CanvasOverlay.onDraw + DrawingLayer see
+  // current coordinates. Initial derive on mount; cleanup unsubscribes.
+  // NOTE (post-push UI verification): If drawings drift during fast pan, raise
+  // the throttle or move to a per-rAF re-derive driven from inside onDraw.
+  useEffect(() => {
+    const chart = chartRef.current as IChartApi | null
+    const container = canvasWrapRef.current
+    if (!chart || !container) return
+    const refresh = (): void => setTransform(deriveTransform(chart, container))
+    refresh()
+    let ts: ReturnType<IChartApi['timeScale']> | null = null
+    try {
+      ts = chart.timeScale()
+      ts.subscribeVisibleLogicalRangeChange(refresh)
+    } catch { /* chart not ready yet */ }
+    return () => {
+      try { ts?.unsubscribeVisibleLogicalRangeChange(refresh) } catch { /* already disposed */ }
+    }
+    // view.length is the proxy for "chart has data now" so the first transform
+    // derive lands after candles populate; symbol triggers re-derive on switch.
+  }, [view.length, symbol])
+
+  // CHART-03/04 — pointer router: when a drawing tool is active, capture
+  // clicks on the chart canvas wrapper, translate to price/time via the
+  // current transform, and persist via drawingStore. Two-anchor tools (line,
+  // rect, fib) collect the first anchor in pendingAnchorRef and finalize on
+  // the second click.
+  const onChartCanvasClick = (e: React.MouseEvent<HTMLDivElement>): void => {
+    if (!drawOpen || activeTool === 'select' || !transform) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x    = e.clientX - rect.left
+    const y    = e.clientY - rect.top
+    const time  = transform.xToTime(x)
+    const price = transform.yToPrice(y)
+    if (!Number.isFinite(time) || !Number.isFinite(price)) return
+
+    if (activeTool === 'hline') {
+      const d: Drawing = { id: nextDrawingId(), kind: 'hline', symbol, price, selected: false, locked: false }
+      addDrawing(symbol, d); return
+    }
+    if (activeTool === 'vline') {
+      const d: Drawing = { id: nextDrawingId(), kind: 'vline', symbol, time, selected: false, locked: false }
+      addDrawing(symbol, d); return
+    }
+    if (activeTool === 'annotation') {
+      const text = window.prompt('Annotation text:', '') ?? ''
+      if (!text) return
+      const d: Drawing = {
+        id: nextDrawingId(), kind: 'annotation', symbol,
+        anchor: { time, price }, text, selected: false, locked: false,
+      }
+      addDrawing(symbol, d); return
+    }
+    // Two-anchor tools: first click stashes; second click commits.
+    const pending = pendingAnchorRef.current
+    if (pending === null) {
+      pendingAnchorRef.current = { time, price }
+      return
+    }
+    pendingAnchorRef.current = null
+    if (activeTool === 'line') {
+      const d: Drawing = {
+        id: nextDrawingId(), kind: 'line', symbol,
+        a: pending, b: { time, price }, extend: false, selected: false, locked: false,
+      }
+      addDrawing(symbol, d); return
+    }
+    if (activeTool === 'rect') {
+      const d: Drawing = {
+        id: nextDrawingId(), kind: 'rect', symbol,
+        topLeft:     { time: Math.min(pending.time, time), price: Math.max(pending.price, price) },
+        bottomRight: { time: Math.max(pending.time, time), price: Math.min(pending.price, price) },
+        fillOpacity: 0.1, selected: false, locked: false,
+      }
+      addDrawing(symbol, d); return
+    }
+    if (activeTool === 'fibonacci') {
+      const d: Drawing = {
+        id: nextDrawingId(), kind: 'fibonacci', symbol,
+        high: pending.price > price ? pending : { time, price },
+        low:  pending.price > price ? { time, price } : pending,
+        selected: false, locked: false,
+      }
+      addDrawing(symbol, d); return
+    }
+  }
+
   // ── Indicator reconciliation ────────────────────────────────────────────────
   // Single source of truth: read indicatorStore + regime + candles, sync the
   // chart to match. Add missing series, remove unwanted, refresh data, update
@@ -1201,6 +1327,65 @@ export function ChartPanel() {
               LEGEND
             </button>
           </div>
+          {/* CHART-06/10/08 — flow tape + multi-TF overlay + PNG export. */}
+          <div className="seg" role="group" aria-label="Chart interaction layer">
+            <button
+              type="button"
+              className={tapeOpen ? 'on' : ''}
+              onClick={() => setTapeOpen(o => !o)}
+              aria-pressed={tapeOpen}
+              title="Toggle order-flow tape (live prints, right-edge panel)"
+            >
+              TAPE
+            </button>
+            <button
+              type="button"
+              className={mtfOpen ? 'on' : ''}
+              onClick={() => setMtfOpen(o => !o)}
+              aria-pressed={mtfOpen}
+              title="Toggle a second timeframe overlay pane at the chart bottom"
+            >
+              MTF
+            </button>
+            <button
+              type="button"
+              className={drawOpen ? 'on' : ''}
+              onClick={() => setDrawOpen(o => !o)}
+              aria-pressed={drawOpen}
+              title="Toggle the drawing toolbar (lines, rects, fib, annotations)"
+            >
+              DRAW
+            </button>
+            <button
+              type="button"
+              className={footOpen ? 'on' : ''}
+              onClick={() => setFootOpen(o => !o)}
+              aria-pressed={footOpen}
+              title="Toggle the WebGL footprint overlay (MVP tint)"
+            >
+              FOOT
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const chart = chartRef.current as IChartApi | null
+                if (!chart) return
+                try {
+                  const mod = await import('../chart/export')
+                  await mod.exportChartPng({
+                    chart,
+                    overlayCanvas: overlayHandleRef.current?.canvas ?? null,
+                    webglCanvas:   null,
+                  })
+                } catch (e) {
+                  console.warn('[chart] PNG export unavailable (pending preload bridge):', e)
+                }
+              }}
+              title="Export the current chart as a PNG (Downloads folder)"
+            >
+              PNG
+            </button>
+          </div>
 
           <div className="chart-histday" role="group" aria-label="Historical day replay">
             {inReplay ? (
@@ -1304,7 +1489,12 @@ export function ChartPanel() {
           IPC trades-tick; FootprintAggregator handles the bid/ask split. */}
       <DeltaStrip symbol={symbol} height={28} label={`Δ · ${symbol}`} />
 
-      <div className="chart-canvas-wrap">
+      <div
+        className="chart-canvas-wrap"
+        ref={canvasWrapRef}
+        onClick={onChartCanvasClick}
+        style={{ cursor: drawOpen && activeTool !== 'select' ? 'crosshair' : undefined }}
+      >
         <div ref={containerRef} className="chart-canvas" />
         {inReplay && (
           <div className={`chart-replay-badge ${replayMode === 'paused' ? 'paused' : 'playing'}`} aria-hidden>
@@ -1403,6 +1593,78 @@ export function ChartPanel() {
             <span><i>ASK</i><b>{fmt.px(quote.ask, dp)}</b></span>
             <span><i>VWAP</i><b>{fmt.px(quote.vwap, dp)}</b></span>
           </div>
+        )}
+
+        {/* CHART-05 — OHLCV-on-crosshair readout. No-op when crosshair leaves
+            the chart (component returns null). Renders pinned to top of
+            chart-canvas-wrap via its own .chart-crosshair-readout class. */}
+        <CrosshairReadout chart={chartRef.current} candles={view} dp={dp} />
+
+        {/* CHART-09 — overlay canvas + DrawingLayer wiring. CanvasOverlay
+            provides a DPR-aware, resize-synced canvas with a per-frame rAF
+            that clears and calls onDraw. We route renderDrawing through
+            onDraw so drawings repaint every frame (no flicker during pan/
+            zoom). DrawingLayer is mounted with canvas={null} as a no-op
+            marker — keeps the React component referenced for future use
+            without competing with CanvasOverlay's rAF on the same canvas.
+            TODO(post-push UI): if DrawingLayer's effect-based rAF proves
+            preferable (e.g. once we drop CanvasOverlay's clear loop), swap
+            to pass overlayHandleRef.current?.canvas here. */}
+        <CanvasOverlay
+          ref={overlayHandleRef}
+          containerRef={canvasWrapRef}
+          zIndex={11}
+          pointerEvents="none"
+          onDraw={(ctx, w, h, dpr) => {
+            if (!transform) return
+            const accent = readCssVar('--bb-ambient') || '#e94b3c'
+            const fromTime = transform.xToTime(0)
+            const toTime   = transform.xToTime(transform.rect.width)
+            const maxPrice = transform.yToPrice(0)
+            const minPrice = transform.yToPrice(transform.rect.height)
+            for (const d of drawings) {
+              if (drawingInView(d, fromTime, toTime, minPrice, maxPrice)) {
+                renderDrawing(ctx, d, transform, dpr, accent)
+              }
+            }
+            // mark w/h as used — the rAF loop hands them in for any future
+            // overlay annotations that need viewport metrics directly.
+            void w; void h
+          }}
+        />
+        <DrawingLayer transform={null} symbol={symbol} canvas={null} />
+
+        {/* CHART-03 — drawing toolbar. Gated by the DRAW toolbar button. */}
+        {drawOpen && <DrawingToolbar symbol={symbol} />}
+
+        {/* CHART-12 — WebGL footprint overlay. Renderer is created/destroyed
+            by the FootprintLayer's effect when `enabled` flips. */}
+        <FootprintLayer containerRef={canvasWrapRef} enabled={footOpen} />
+
+        {/* CHART-10 — order-flow tape, gated behind the TAPE toolbar button.
+            Absolutely positioned along the right edge so it overlays without
+            disturbing the existing chart-canvas layout. */}
+        {tapeOpen && (
+          <div
+            style={{ position: 'absolute', top: 0, right: 0, height: '100%', zIndex: 12, pointerEvents: 'auto' }}
+            aria-label="Order flow tape"
+          >
+            <OrderFlowTape trades={trades} isSyntheticFeed={isSynthetic} />
+          </div>
+        )}
+
+        {/* CHART-06 — multi-timeframe overlay pane. Component positions itself
+            absolute:bottom inside chart-canvas-wrap. Only mounted when both the
+            toggle is open AND the primary chart instance exists. */}
+        {mtfOpen && chartRef.current !== null && (
+          <MultiTFOverlay
+            primaryChart={chartRef.current as IChartApi}
+            candles={view}
+            timeframe={tf}
+            sharedY={false}
+            onClose={() => setMtfOpen(false)}
+            darkMode
+          />
         )}
       </div>
     </div>

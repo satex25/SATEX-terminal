@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { getEnv } from '../services/env'
 import { evaluateDataSourceSwitch } from './data-source-guard'
 import { handleOrderEvent } from './order-event-router'
+import { handleOrderFillForLearning } from './order-fill-learning-router'
 import { AlpacaClient } from '../services/alpaca'
 import type { AlpacaConfig, AlpacaTick } from '../services/alpaca'
 import { AlpacaBrokerSession } from '../services/alpaca/broker-session'
@@ -2114,24 +2115,15 @@ export class TradingEngine {
    * tactics and feed SGD update into brain using the captured entry features.
    */
   private onOrderFillForLearning(order: Order, position: Position | null): void {
-    if (order.status !== 'filled') return
-    const { side, symbol, quantity } = order.request
-    // Position-flat detection: sell that resulted in no position
-    if (side === 'sell' && !position) {
-      const entry = this.entryFeatures.get(order.id) ?? null
-      // Some sell orders are opened directly without a paired entry (e.g. close
-      // of an Alpaca-synced position). Walk back through entryFeatures looking
-      // for any open entry on this symbol when there is no direct match.
-      const fallbackPair = entry ? null : this.findOpenEntryForSymbol(symbol)
-      const fallbackId = entry ? order.id : fallbackPair?.[0] ?? null
-      const fallback   = entry ?? (fallbackPair ? fallbackPair[1] : null)
-      const fillPrice = order.fillPrice ?? 0
-      this.recordTradeClose({
-        symbol, quantity, fillPrice,
-        entry: fallback, entryId: fallbackId,
-        order, source: 'order-manager',
-      })
-    }
+    // Delegate to the pure handleOrderFillForLearning helper so the
+    // position-flat detection + entry-fallback resolution is unit-testable
+    // without instantiating the full engine. Mirrors onOrderEvent ->
+    // handleOrderEvent. See order-fill-learning-router.ts + its test (P-013).
+    handleOrderFillForLearning({
+      entryFeatures:          this.entryFeatures,
+      findOpenEntryForSymbol: (s) => this.findOpenEntryForSymbol(s),
+      recordTradeClose:       (args) => this.recordTradeClose(args),
+    }, order, position)
   }
 
   /**

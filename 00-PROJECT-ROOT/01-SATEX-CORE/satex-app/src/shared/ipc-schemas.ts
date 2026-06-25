@@ -300,6 +300,46 @@ export const SubsecondPrefsSetReq = z.object({
 }).strict()
 export type SubsecondPrefsSetReq = z.infer<typeof SubsecondPrefsSetReq>
 
+// -- L1.D -- Chart interaction layer (CHART-03/04/08/09 - 2026-06-16) ----------
+
+/** GET persisted drawings for a symbol.
+ *  Returns null if no drawings are stored yet (not an error). */
+export const ChartDrawingsGetReq = z.object({
+  symbol: SymbolS,
+}).strict()
+export type ChartDrawingsGetReq = z.infer<typeof ChartDrawingsGetReq>
+
+/** SET (persist) drawings for a symbol. Overwrites any existing stored
+ *  drawings. Drawings are stored ephemeral-first (D4) -- only called on
+ *  explicit operator save, never on every stroke. */
+export const ChartDrawingsSetReq = z.object({
+  symbol:   SymbolS,
+  drawings: z.array(z.object({
+    id:        z.string().uuid(),
+    kind:      z.enum(['line', 'hline', 'vline', 'rect', 'fib', 'annotation']),
+    a:         z.object({ time: z.number(), price: z.number() }).optional(),
+    b:         z.object({ time: z.number(), price: z.number() }).optional(),
+    price:     z.number().optional(),
+    time:      z.number().optional(),
+    anchor:    z.object({ time: z.number(), price: z.number() }).optional(),
+    topLeft:   z.object({ time: z.number(), price: z.number() }).optional(),
+    bottomRight: z.object({ time: z.number(), price: z.number() }).optional(),
+    high:      z.object({ time: z.number(), price: z.number() }).optional(),
+    low:       z.object({ time: z.number(), price: z.number() }).optional(),
+    text:      z.string().max(500).optional(),
+    color:     z.string().max(32),
+    lineWidth: z.number().min(0.5).max(8),
+  })).max(500),
+}).strict()
+export type ChartDrawingsSetReq = z.infer<typeof ChartDrawingsSetReq>
+
+/** PNG export: renderer sends raw PNG bytes to main for filesystem write.
+ *  data is Array.from(Uint8Array) -- JSON-serialisable byte array. */
+export const ChartPngExportReq = z.object({
+  filename: z.string().max(200).regex(/^[\w\-. ]+\.png$/, 'must end in .png'),
+  data:     z.array(z.number().int().min(0).max(255)).max(20_000_000),
+}).strict()
+export type ChartPngExportReq = z.infer<typeof ChartPngExportReq>
 // ── Tier-1 (D.10, 2026-05-29) — funded-account compliance overlay ──────────
 /** Set-profile request — payload is the profile id (or null to deactivate). */
 export const FundedAccountSetProfileReq = z.object({
@@ -318,3 +358,4 @@ export const FundedAccountAdvancePhaseReq = z.object({
   phase: z.enum(['combine', 'funded', 'activated']),
 }).strict()
 export type FundedAccountAdvancePhaseReq = z.infer<typeof FundedAccountAdvancePhaseReq>
+

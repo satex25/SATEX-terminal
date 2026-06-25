@@ -2,7 +2,7 @@
 type: home
 title: SATEX — Home
 tags: [satex, home, moc]
-updated: 2026-06-12
+updated: 2026-06-14
 ---
 
 # SATEX — Home
@@ -17,6 +17,7 @@ updated: 2026-06-12
 
 | Door | What's behind it |
 | --- | --- |
+| [[2026-06-14-master-execution-plan-ultraplan\|⭐ Master Execution Plan (today)]] | the holy list — eat-the-frog sequence anchored to L1.D, all phases + operator track |
 | [[Vault/00-Audit/PROBLEM-LEDGER\|Problem Ledger]] | the living PSD queue — open → decided → shipped → verified |
 | [[Vault/00-Audit/2026-06-10-FULL-SYSTEM-AUDIT\|Latest full audit]] | verified system state, findings, priority matrix |
 | [[Vault/00-INDEX\|Vault index]] | the map of every folder in this vault |
