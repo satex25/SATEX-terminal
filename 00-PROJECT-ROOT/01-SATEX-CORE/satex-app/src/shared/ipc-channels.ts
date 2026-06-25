@@ -266,15 +266,23 @@ export const IPC = {
    *  engine's onSubsecondPrefChanged listener wired in main. */
   SUBSECOND_PREFS_SET: 'satex:a1:subsecondPrefsSet',
 
-  // ── P-021: Funded account programme ──────────────────────────────────────
-  /** Push: FundedAccountSnapshot. Emitted on every engine tick and on all
-   *  funded-account state transitions (MLL move, EOD ledger append, etc.).
-   *  Renderer's fundedAccountStore hydrates from this channel. */
-  FUNDED_ACCOUNT_UPDATE: 'satex:funded:accountUpdate',
-  /** Invoke (renderer → main, reason: string): emergency flatten — force-close
-   *  all open positions and cancel pending orders immediately. The reason
-   *  string is logged to the audit trail. Returns { ok: boolean }. */
-  FUNDED_TRIGGER_FLAT:   'satex:funded:triggerFlat',
+  // ── Tier-1 (D.10, 2026-05-29) — funded-account compliance overlay ────────
+  /** Invoke (renderer → main): get the active funded-account snapshot
+   *  (active profile, MLL, buffer, ledger, ms-to-EOD). */
+  FUNDED_ACCOUNT_GET:          'satex:funded:get',
+  /** Invoke (renderer → main, { profileId }): activate a profile by id,
+   *  or null to deactivate the overlay. */
+  FUNDED_ACCOUNT_SET_PROFILE:  'satex:funded:setProfile',
+  /** Invoke (renderer → main): deactivate any active profile. */
+  FUNDED_ACCOUNT_CLEAR:        'satex:funded:clear',
+  /** Invoke (renderer → main, { reason }): fire the EOD flatten path now
+   *  — cancels all pending orders + market-flattens every open position. */
+  FUNDED_ACCOUNT_TRIGGER_FLAT: 'satex:funded:triggerFlat',
+  /** Push (main → renderer): broadcast on every funded snapshot change. */
+  FUNDED_ACCOUNT_UPDATE:       'satex:funded:update',
+  /** Invoke (renderer → main, { phase: 'combine'|'funded'|'activated' }):
+   *  manually advance the evaluation phase. Tier-1 D-2. */
+  FUNDED_ACCOUNT_ADVANCE_PHASE: 'satex:funded:advancePhase',
 } as const
 
 // Runtime array kept solely for the PushChannel type derivation below — the

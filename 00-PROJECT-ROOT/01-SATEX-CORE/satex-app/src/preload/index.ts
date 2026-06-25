@@ -29,7 +29,6 @@ import type {
 } from '@shared/types'
 import type { IndicatorSettings } from '@shared/chart-indicators'
 import type { WorkspaceState } from '@shared/types'
-import type { FundedAccountSnapshot } from '@shared/funded/types'
 
 // ── Typed listener wrapper ─────────────────────────────────────────────────────
 function on<T>(channel: PushChannel, cb: (payload: T) => void): () => void {
@@ -150,14 +149,6 @@ const satexApi = {
   getDepth:          (symbol?: string)                     => ipcRenderer.invoke(IPC.DEPTH_GET, symbol) as Promise<DepthSnapshot>,
   subscribeDepth:    (symbol: string)                      => ipcRenderer.invoke(IPC.DEPTH_SUBSCRIBE, symbol) as Promise<{ ok: boolean }>,
 
-  // ── Tier-1 (D.10, 2026-05-29) — funded-account compliance overlay ──────
-  onFundedAccountUpdate: (cb: (s: FundedAccountSnapshot) => void) => on(IPC.FUNDED_ACCOUNT_UPDATE, cb),
-  getFundedAccount:      ()                                       => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_GET) as Promise<FundedAccountSnapshot>,
-  setFundedAccountProfile: (profileId: string | null)             => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_SET_PROFILE, { profileId }) as Promise<{ ok: boolean; reason?: string }>,
-  clearFundedAccount:    ()                                       => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_CLEAR) as Promise<{ ok: boolean }>,
-  triggerFundedFlat:     (reason: string)                         => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_TRIGGER_FLAT, { reason }) as Promise<{ ok: true }>,
-  advanceFundedPhase:    (phase: 'combine' | 'funded' | 'activated') => ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_ADVANCE_PHASE, { phase }) as Promise<{ ok: boolean; reason?: string }>,
-
   // ── Replay engine (Phase 9) ────────────────────────────────────────────────
   replay: {
     onStatus:    (cb: (s: ReplayStatus) => void) => on(IPC.REPLAY_STATUS, cb),
@@ -262,11 +253,11 @@ const satexApi = {
     on<import('@shared/funded/types').FundedAccountSnapshot>(IPC.FUNDED_ACCOUNT_UPDATE, cb),
   /** Seed the fundedAccountStore on mount (post-subscribe pattern). */
   getFundedAccount: () =>
-    ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_UPDATE) as Promise<import('@shared/funded/types').FundedAccountSnapshot | null>,
+    ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_GET) as Promise<import('@shared/funded/types').FundedAccountSnapshot | null>,
   /** Emergency flatten — force-close all positions and cancel pending orders.
    *  The reason string is written to the audit log. */
   triggerFundedFlat: (reason: string) =>
-    ipcRenderer.invoke(IPC.FUNDED_TRIGGER_FLAT, reason) as Promise<{ ok: boolean; reason?: string }>,
+    ipcRenderer.invoke(IPC.FUNDED_ACCOUNT_TRIGGER_FLAT, { reason }) as Promise<{ ok: boolean; reason?: string }>,
 
   // ── Trading journal (P0-2) ─────────────────────────────────────────────────
   journal: {

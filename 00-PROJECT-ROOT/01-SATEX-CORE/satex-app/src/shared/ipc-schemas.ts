@@ -358,3 +358,4 @@ export const FundedAccountAdvancePhaseReq = z.object({
   phase: z.enum(['combine', 'funded', 'activated']),
 }).strict()
 export type FundedAccountAdvancePhaseReq = z.infer<typeof FundedAccountAdvancePhaseReq>
+
