@@ -591,6 +591,7 @@ function wireBlackBoxEvents(): void {
   engine.onMacroUpdate((s)     => push(IPC.MACRO_UPDATE,      s))
   engine.onLogsTail((s)        => push(IPC.LOGS_TAIL,         s))
   engine.onDepthUpdate((s)     => push(IPC.DEPTH_UPDATE,      s))
+  engine.onFundedAccountUpdate((s) => push(IPC.FUNDED_ACCOUNT_UPDATE, s))
 }
 
 /** Wire after engine.initialize() — autonomous trader is only built then. */
