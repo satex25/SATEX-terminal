@@ -111,6 +111,7 @@ function extractSource(candles: readonly Candle[], field: SourceNode['field']): 
 function applyStdev(series: number[], period: number): number[] {
   const n = series.length
   const result = new Array<number>(n).fill(0)
+  if (period < 1) return result
   for (let i = period - 1; i < n; i++) {
     const win = series.slice(i - period + 1, i + 1)
     const mean = win.reduce((s, v) => s + v, 0) / period

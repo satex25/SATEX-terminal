@@ -31,7 +31,7 @@ More views: [[Vault/_dashboards/trades.base|trades]] · [[Vault/_dashboards/lear
 
 ## The day
 
-- **Open today's note** — *Cmd/Ctrl-P → "Open today's daily note"*. Lands in `Vault/Daily/` with [[Vault/Templates/Daily|the template]] pre-filled (pre-open checklist → focus → session log → extraction).
+- **Open today's note** — *Ctrl-P → "Open today's daily note"*. Lands in `Vault/Daily/` with [[Vault/Templates/Daily|the template]] pre-filled (pre-open checklist → focus → session log → extraction).
 - **Watchlist:** [[Vault/Symbols/NVDA|NVDA]] · [[Vault/Symbols/AMD|AMD]] · [[Vault/Symbols/MSFT|MSFT]] · [[Vault/Symbols/AAPL|AAPL]] · [[Vault/Symbols/TSLA|TSLA]] · [[Vault/Symbols/META|META]] · [[Vault/Symbols/IWM|IWM]]
 
 ## How notes arrive (nobody files anything by hand)

@@ -9,6 +9,91 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **P-040: `indicator-graph.ts` `applyStdev` divided by `period` with no `period <= 0` guard.**
+  The rolling-stdev transform kernel (CHART-18 node graph) computed `mean`/`variance` as
+  `… / period`; a `StdevNode` with `period === 0` produced a NaN-filled series (`0/0`), and a
+  negative period started the window loop at a negative index with a negative divisor (NaN/garbage).
+  Every sibling in the chart-indicator layer guards its degenerate parameter (`brickSize <= 0`,
+  `reversalAmt <= 0`, `window < 2`, `median <= 0`) — `applyStdev` was the gap. Latent (no preset
+  builds a stdev node yet; `evalPipeline` is exported but unwired) and the period<=0 path was
+  untested. Fixed: `if (period < 1) return result` (all-zeros, matching the layer's
+  insufficient-data convention). Behaviour-identical for every period >= 1 (proven). Off the
+  trading-safety perimeter (visual-only alert series; routes no orders). +3 regression tests in
+  `chart-indicators/indicator-graph.test.ts` (period 0 / negative → zero series no NaN; valid period
+  unaffected). Gates: typecheck OK lint OK (0 warnings) vitest 98 files / 1268 tests / 0 fail knip OK.
+- **P-039: `vol-surface.ts` `logReturnStdev` skipped `prev <= 0` but not `curr <= 0` → NaN on**
+  **negative-priced instruments.** The per-bar log-return guard was `if (!prev || !curr || prev <= 0)`
+  — a negative `curr` with a positive `prev` (a crude-oil bar crossing through zero; CL §1.1,
+  negative in Apr 2020) slipped through, and `Math.log(curr / prev)` of a negative ratio returned
+  NaN, poisoning the whole realized-vol value (mean/variance → NaN). The negative-price class
+  (P-034/P-035/P-038), here surfacing as a half-applied guard. Fixed: also skip `curr <= 0`, so the
+  bar is excluded exactly like a non-positive `prev`. Behaviour-identical for every positive price
+  (proven OLD≡FIX); negative/zero closes are now skipped instead of yielding NaN. Off the
+  trading-safety perimeter (advisory realized-vol surface; routes no orders). +2 regression tests in
+  `chart-indicators/vol-surface.test.ts` (zero-crossing crude → finite non-negative; isolated
+  negative close → no NaN). Gates: typecheck OK lint OK (0 warnings) vitest 98 files / 1268 tests /
+  0 fail knip OK (Node-20 shim).
+- **P-038: `chart-types.ts` Kagi `reversalPct` threshold multiplied a signed price.**
+  `kagiTransform`'s reversal magnitude was `revAmt = lineStart * reversalPct` (and the default
+  `lineStart * 0.01`). For a negative-priced instrument `lineStart < 0` makes `revAmt` negative, so
+  the up-line reversal test `close <= extreme - revAmt` becomes `close <= extreme + |revAmt|` — true
+  for almost every non-extreme candle, collapsing the Kagi into a spurious reversal on each bar (the
+  P-034 / P-035 negative-price class, here on a *multiplicative* threshold). SATEX's universe
+  includes CL crude (negative in Apr 2020 — in-domain). Latent today (`kagiTransform` is exported
+  from the chart-indicators barrel but has no call-site yet) and the `reversalPct` path had no test
+  coverage (only `reversalAmt`, which is guarded `> 0`). Fixed: `Math.abs(lineStart)` on both the
+  percentage and default branches. Behaviour-identical for every positive price (`|x| = x` for
+  `x > 0`; full existing suite unchanged). Off the trading-safety perimeter (advisory alt-chart
+  display; routes no orders). +4 regression tests in `chart-indicators/chart-types.test.ts`
+  (first-ever `reversalPct` coverage; OLD 3 spurious reversals vs FIX 1 on a negative series, proven
+  empirically; positive mirror byte-identical). Gates: typecheck OK lint OK (0 warnings) vitest
+  98 files / 1263 tests / 0 fail knip OK (Node-20 shim).
+- **P-035: `patterns.ts` H&S / Inverse-H&S / Flag detectors divided by signed raw prices.**
+  The CHART-19 detectors (`detectHeadShoulders`, `detectInverseHeadShoulders`, `detectFlags`) carried
+  the same defect class as P-034 in several spots: the shoulder-symmetry gate divided by raw `ls.price`
+  (negative anchor → negative `sym` → `sym > tol` always false → the symmetry filter never rejected);
+  the H&S prominence / Inv-H&S depth confidence terms divided by raw `hd.price` / `min(ls,rs)`
+  (sign-flipped, yielding negative confidence); and the flag `poleMove` divided by the raw pole-base
+  close, so on a negative-priced instrument the bull-vs-bear *direction* inverted (a true rise was
+  tagged bearish and dropped by the slope check). SATEX's universe includes CL crude (negative in
+  Apr 2020 — in-domain). Latent today (detectors are exported from the barrel but not yet wired to a
+  consumer; the live double-top/bottom siblings were P-034), it would mis-render the moment CHART-19
+  patterns are wired to the overlay. Fixed: all price denominators use `Math.abs(...)` with a
+  zero-anchor skip on the symmetry/pole bases; `Math.abs(poleBase)` restores the true move sign so
+  bull/bear is correct. Behaviour-identical for every positive price (full existing suite unchanged).
+  Off the trading-safety perimeter (advisory display; patterns route no orders). +5 regression tests
+  in `chart-indicators/patterns.test.ts` (OLD-vs-FIX divergence proven empirically). Gates: typecheck
+  OK lint OK (0 warnings) vitest 96 files / 1219 tests / 0 fail knip OK (Node-20 shim).
+- **P-034: `double-top.ts` / `double-bottom.ts` symmetry gate divided by a signed anchor price.**
+  `detectDoubleTops` / `detectDoubleBottoms` computed `symmetry = |b.price - a.price| / a.price` and
+  gated on `symmetry > tolerance`. For a negative-priced instrument the raw denominator made
+  `symmetry` negative, so the filter *never* rejected — any two peaks/troughs registered as a pattern
+  and the reported `symmetry` (documented as a positive fraction) came out negative. SATEX's universe
+  includes CL crude, which printed negative in Apr 2020, and both detectors are live in
+  `ChartPanel.tsx` (the pattern overlay). Fixed: denominator is now `Math.abs(a.price)` with an
+  explicit zero-anchor skip. Behaviour-identical for every positive price (full existing suite
+  unchanged); negative/zero anchors now compare by true relative distance. Off the trading-safety
+  perimeter (advisory display; patterns route no orders). +4 regression tests in
+  `chart-indicators/indicators.test.ts`. Gates: typecheck OK lint OK (0 warnings) vitest 96 files /
+  1214 tests / 0 fail knip OK (Node-20 shim).
+- **P-030: `vol-heatmap.ts` dead `intervals` array removed from `tickVelocitySeries`.**
+  The function built and pushed to a per-candle `intervals: number[]` that nothing ever read - the
+  rolling-velocity loop reads `candles[].time` directly. Gate-invisible (ESLint/tsc count `.push()`
+  as a use), it wasted an O(n) allocation + loop on the same unbounded sub-second crypto hot path
+  P-027 just hardened (~3.5e5 bars/day). Removed; `tickVelocitySeries` output is byte-for-byte
+  unchanged (its P-027 tests stay green, 24/24). Off the trading-safety perimeter (pure display
+  math). Gates: typecheck OK lint OK (0 warnings) vitest 96 files / 1210 tests / 0 fail knip OK
+  (Node-20 shim).
+
+- **P-027: `vol-heatmap.ts` `Math.max(...spread)` stack-overflow fix.** `computeHeatmap`
+  normalized via `Math.max(1e-10, ...atr)` / `...stdev`, spreading the unbounded per-candle arrays
+  as call args — a latent `RangeError: Maximum call stack size exceeded` once fed SATEX's sub-second
+  crypto buffer (~3.5e5 candles/day; the spread throws past ~1.3e5 args in V8). Replaced both with a
+  single-pass max loop (floor 1e-10 preserved), matching the existing `QuadPaneChart.tsx` invariant.
+  Off the trading-safety perimeter (pure display math; no call-site yet — preventive). New regression
+  + coverage tests pin `computeHeatmap` (300k no-throw), `tickVelocitySeries`, `vpinToIntensity`.
+  Gates: typecheck OK lint OK (0 warnings) vitest 95 files / 1195 tests / 0 fail knip OK (Node-20 shim).
+
 - **CHANGELOG.md: bridge-artifact duplicate-header repair (2026-06-24).** Line 56
   had the Chart-interaction-layer bullet header doubled by the file bridge during the
   2026-06-22 session write. Fixed via Python byte-level replacement. No logic change.
@@ -42,6 +127,75 @@ changes alongside fixes during the v0.x stabilization series.
   that one action. TODO: add a `chart.pngExport` preload bridge.
 
 ### Added
+
+- **Cold-boot intro splash — film-style `SATEX` name reveal.** New `src/renderer/components/SplashIntro.tsx`: a fullscreen plate shown once per launch that resolves the `SATEX` wordmark letter-by-letter (blur-in + a single film flicker) out of a scanline sweep, draws an accent rule, then dissolves (~3.2s, within the 2–5s brief) to reveal the terminal. No logo — wordmark only. Pure CSS animation (CSP `script-src 'self'`-safe), auto-themes off the `--bb-accent` / `--font-mono` tokens across all 4 themes, honors `prefers-reduced-motion` (fast glitch-free fade), and skips on click or any key. Mounted as the first child of `bb-app` behind a `splashDone` flag in `App.tsx`; styles appended to `globals.css` (`.satex-splash*` + keyframes). Self-cleans its timers; fires `onComplete` exactly once. Off the trading-safety perimeter (presentation only). Gates: typecheck OK lint OK (0 warnings) vitest 98 files / 1268 tests / 0 fail knip OK.
+ The pure
+  P-036 `diagnoseHealth` core is now live: every status tick (~2s) the engine builds a `HealthSignals`
+  snapshot from real state and emits a graded `HealthReport`, diff-gated so it fires only when the
+  severity or findings-set changes (same change-only pattern as the feed-status broadcast). New pure
+  adapter `src/shared/health/health-signals.ts` (`computeMemGrowthPctPerHr` from a bounded heap-sample
+  ring, `computeDrawdownPct` from peak-vs-current equity, `composeHealthSignals`) keeps the engine edit
+  a thin call-site. `TradingEngine.getHealthReport()` gathers state → composes → diagnoses;
+  `healthCheck()` is upgraded additively (keeps `ok`/`uptime`/`mode`, adds `report`, and `ok` now
+  reflects `severity !== 'critical'` instead of a hardcoded `true`). New `HEALTH_REPORT` push channel +
+  preload `onHealthReport` bridge + Zustand `healthStore` + `useIPC` subscription (with teardown). New
+  dedicated `HealthPanel.tsx` in the secondary row renders the severity badge (green/amber/red), the
+  recommended next action, and each finding's summary + evidence + remediation + §ref. **Diagnosis
+  only** — off the trading-safety perimeter: the engine diff is read-only state-gather + one emit
+  (verified: the sole `this.om` call added is `getAccount()`), the remediation strings are advisory and
+  wire to no actuator. Signals wired this round: session state, silent feed-stall, WS-down duration,
+  drawdown, heap-growth trend; `errorRatePct`/`lastError` ship as `null` (the core no-findings a null
+  signal — Constitution 0.1) pending a Tier-C follow-up. +13 tests (`health-signals.test.ts` boundary
+  cases + compose→diagnose seam). Built from the `/ultraplan` blueprint
+  `docs/superpowers/specs/2026-06-27-health-core-wiring-p037-ultraplan.md`. Gates: typecheck OK lint OK
+  (0 warnings) vitest 98 files / 1259 tests / 0 fail knip OK (Node-20 shim; zero new warnings).
+- **P-036: Self-Diagnostic Core — the keystone of the self-healing terminal.** New pure module
+  `src/shared/health/` (`types.ts` + `diagnose.ts` + `diagnose.test.ts`) that fuses the raw health
+  signals every service already emits (`SystemStatus`, the broker `SessionState` machine, tick
+  staleness, WS-down duration, heap-growth trend, error rate, drawdown) into one graded
+  `HealthReport` (`healthy | degraded | critical`) — each finding carrying the *kink*, the evidence
+  trail, and the **Constitution-mandated remediation**. It encodes §9.3 (Observability thresholds)
+  and §11 (Failure Modes & Recovery) — today prose — as executable, test-pinned classification,
+  replacing the `TradingEngine.healthCheck()` stub that hardcodes `ok: true` and never diagnoses.
+  `diagnoseHealth` is a pure deterministic function (no clock reads — every time-derived signal is
+  passed in), **off the trading-safety perimeter** (classifies and *recommends* only; imports nothing
+  from engine/OrderManager/risk-gates and can place no order), and **mode-aware** so it never cries
+  wolf — `simulator`/`replay` suppress the live-broker feed/WS/session findings (no broker WS to be
+  "down"). This is the diagnosis substrate a future (separately sign-off-gated) auto-heal loop and the
+  renderer health pill read from. 28 tests pin every threshold boundary, mode-gating, worst-wins
+  fusion, deterministic ordering, idempotence, and a mode x session-state totality sweep. Pure;
+  new-files-only (no existing-code edit). Gates: typecheck OK lint OK (0 warnings) vitest 97 files /
+  1247 tests / 0 fail knip OK (Node-20 shim; zero new warnings).
+- **P-031 / P-032 / P-033: chart-indicator + regime test coverage (2026-06-26 work-layer).**
+  Pinned three previously-untested exported surfaces, new tests only (zero source edits -> no
+  behavior change): `computeVolSurfaceHistory` (vol-surface.test.ts, +4 - warm-up skip, slice
+  count = len-100, one point per `VOL_LOOKBACKS`, chronological `asOf` alignment); `emaCrossPipeline`
+  (indicator-graph.test.ts, +3 - node-array shape, unused-`_slow`-arg invariance, `evalPipeline`
+  length/label); and the HMM `RegimeService` (new `regime.test.ts`, +8 - first coverage of a
+  live-decision-path classifier: posterior is a valid 4-state distribution, VPIN / spread drive
+  liquidity, listener lifecycle, absent-quote NaN-safety). Gates: typecheck OK lint OK (0 warnings)
+  vitest 96 files / 1210 tests / 0 fail knip OK (Node-20 shim).
+
+- **P-026: core `indicators.ts` math test coverage (2026-06-25).** The pure,
+  stateless indicator functions feeding every `IndicatorSnapshot` — Brain
+  decision features, the regime service's ATR input, and the chart read-outs —
+  had zero direct coverage despite sitting on the live-decision *input* path.
+  Added `src/shared/indicators.test.ts` (14 tests) pinning the exported surface
+  (`rsi`, `atr`, `computeSnapshot`) and, through `computeSnapshot`, the internal
+  ema/sma/vwap/trendStrength/rollingVolatility helpers: insufficient-data guards
+  (RSI→50, ATR→0), the deliberate flat-window RSI→100 quirk, a hand-computed
+  two-bar snapshot (vwap 17.5 / ema9 12 / atr 10 / volatility 33.33…), the
+  trendStrength [0,1] clamp + saturation (incl. the un-clamped path), and the
+  vwap zero-volume guard. No source change; off the trading-safety perimeter.
+  Gates (full working tree, /tmp sandbox @ e158e48 + file): typecheck✅ lint✅
+  (0 warnings) test✅ (95 files / 1189 tests) knip✅ (EXIT 0).
+
+- **P-025: `color.ts` (`applyOpacity`) test coverage (2026-06-24).** First tests for the
+  shared hex→rgba chart-overlay helper: 6-digit hex, 3-digit shorthand expansion
+  (#abc→#aabbcc), case-insensitivity, non-hex pass-through (rgba / named / CSS-var / empty),
+  and two-decimal alpha formatting incl. rounding. New `src/renderer/lib/color.test.ts`
+  (10 cases); no source change. Off the trading-safety perimeter. Gates (full working tree,
+  /tmp sandbox): typecheck✅ lint✅ (0 warnings) test✅ (94 files / 1175 tests) knip✅ (EXIT 0).
 
 - **L1.F / P-009: Brain depth wiring + regime-aware ensemble confidence fusion.**
   Two bugs prevented L2 order-book features from contributing to live decisions:

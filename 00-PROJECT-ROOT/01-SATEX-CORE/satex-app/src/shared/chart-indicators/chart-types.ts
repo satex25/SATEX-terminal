@@ -199,7 +199,7 @@ export function kagiTransform(
 
   for (const candle of candles) {
     const revAmt = opts.reversalAmt ??
-      (opts.reversalPct !== undefined ? lineStart * opts.reversalPct : lineStart * 0.01)
+      (opts.reversalPct !== undefined ? Math.abs(lineStart) * opts.reversalPct : Math.abs(lineStart) * 0.01)
 
     totalVol += candle.volume
 

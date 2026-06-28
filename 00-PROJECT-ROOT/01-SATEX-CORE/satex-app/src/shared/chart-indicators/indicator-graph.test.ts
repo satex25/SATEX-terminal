@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   evalPipeline,
+  emaCrossPipeline,
   rsiAlertPipeline,
   type GraphNode,
 } from './indicator-graph'
@@ -92,5 +93,57 @@ describe('evalPipeline', () => {
     const r = evalPipeline(CANDLES, nodes)
     expect(r.isAlert).toBe(true)
     expect(r.label).toContain('RSI')
+  })
+})
+
+describe('emaCrossPipeline (P-032 coverage pin)', () => {
+  it('builds a [source(close) -> ema(fast)] preset', () => {
+    expect(emaCrossPipeline(9, 21)).toEqual([
+      { kind: 'source', field: 'close' },
+      { kind: 'ema', period: 9 },
+    ])
+  })
+
+  it('ignores the second (slow) argument — caller diffs two lines itself', () => {
+    expect(emaCrossPipeline(9, 21)).toEqual(emaCrossPipeline(9, 999))
+  })
+
+  it('evaluates to a same-length, non-alert EMA(9) series', () => {
+    const r = evalPipeline(CANDLES, emaCrossPipeline(9, 21))
+    expect(r.series).toHaveLength(CANDLES.length)
+    expect(r.label).toContain('EMA(9)')
+    expect(r.isAlert).toBe(false)
+  })
+})
+
+describe('applyStdev period guard via evalPipeline (P-040)', () => {
+  it('stdev node with period 0 yields a zero series (no NaN)', () => {
+    const nodes: GraphNode[] = [
+      { kind: 'source', field: 'close' },
+      { kind: 'stdev', period: 0 },
+    ]
+    const r = evalPipeline(CANDLES, nodes)
+    expect(r.series.some((v) => Number.isNaN(v))).toBe(false)
+    expect(r.series.every((v) => v === 0)).toBe(true)
+  })
+
+  it('stdev node with negative period yields a zero series (no NaN)', () => {
+    const nodes: GraphNode[] = [
+      { kind: 'source', field: 'close' },
+      { kind: 'stdev', period: -5 },
+    ]
+    const r = evalPipeline(CANDLES, nodes)
+    expect(r.series.some((v) => Number.isNaN(v))).toBe(false)
+    expect(r.series.every((v) => v === 0)).toBe(true)
+  })
+
+  it('valid period is unaffected by the guard (finite, some positive)', () => {
+    const nodes: GraphNode[] = [
+      { kind: 'source', field: 'close' },
+      { kind: 'stdev', period: 10 },
+    ]
+    const r = evalPipeline(CANDLES, nodes)
+    expect(r.series.every((v) => v >= 0 && !Number.isNaN(v))).toBe(true)
+    expect(r.series.some((v) => v > 0)).toBe(true)
   })
 })

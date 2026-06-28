@@ -554,6 +554,7 @@ function wireEngineEvents(): void {
     lastSeenOrderIds = new Set(orders.map(o => `${o.id}:${o.status}`))
   })
   engine.onStatus((status)            => push(IPC.SYSTEM_STATUS,  status))
+  engine.onHealthReport((report)      => push(IPC.HEALTH_REPORT,  report))
   engine.onFeedStatus((feed)          => push(IPC.FEED_STATUS_UPDATE, feed))
   engine.onObserverStats((s)          => push(IPC.OBSERVER_STATS, s))
   engine.onLearnerStats((s)           => push(IPC.LEARNER_STATS,  s))

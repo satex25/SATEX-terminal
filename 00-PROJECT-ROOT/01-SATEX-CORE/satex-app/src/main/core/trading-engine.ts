@@ -88,6 +88,9 @@ import type {
   RegimeSnapshot, RiskGatesSnapshot, MacroSnapshot, SystemLogsTail, DepthSnapshot,
   FeedStatus,
 } from '@shared/types'
+import { diagnoseHealth } from '@shared/health/diagnose'
+import { composeHealthSignals, type MemSample } from '@shared/health/health-signals'
+import type { HealthReport } from '@shared/health/types'
 
 const log = createLogger('engine')
 
@@ -280,6 +283,16 @@ export class TradingEngine {
    *  broadcastStatus so we only push when a class transitions. */
   private feedStatusListeners:  Set<FeedStatusListener>  = new Set()
   private lastFeedStatus: FeedStatus | null = null
+  /** P-037 — Self-Diagnostic Core wiring. `memSamples` is a bounded heap-trend
+   *  ring (one push per status tick); `leftConnectedAt` timestamps the moment the
+   *  broker WS left CONNECTED so wsDownMs can be measured. Read-only observability
+   *  state — routes no order. Health reports are diff-gated in broadcastStatus,
+   *  mirroring the feed-status broadcast. */
+  private memSamples: MemSample[] = []
+  private static MEM_SAMPLE_CAP = 60
+  private leftConnectedAt: number | null = null
+  private healthReportListeners: Set<(r: HealthReport) => void> = new Set()
+  private lastHealthReport: HealthReport | null = null
   /** A1 (v0.4.4) — sub-second crypto candle aggregator. Lazily constructed in
    *  initialize() after `db` is open. The crypto WS tick path feeds it via
    *  `onCryptoTick`; renderer subscribes via the listener set below. */
@@ -899,6 +912,7 @@ export class TradingEngine {
   onTradeClosed(fn: TradeClosedListener):     () => void { this.tradeClosedListeners.add(fn);   return () => this.tradeClosedListeners.delete(fn) }
   onTrades(fn: TradesListener):               () => void { this.tradesListeners.add(fn);        return () => this.tradesListeners.delete(fn) }
   onFeedStatus(fn: FeedStatusListener):       () => void { this.feedStatusListeners.add(fn);    return () => this.feedStatusListeners.delete(fn) }
+  onHealthReport(fn: (r: HealthReport) => void): () => void { this.healthReportListeners.add(fn); return () => this.healthReportListeners.delete(fn) }
   /** A1 (v0.4.4) — subscribe to sub-second crypto bar seals. main/index.ts
    *  wires this to IPC.SUBSECOND_CANDLES_UPDATE so the renderer chart can
    *  append the freshly-sealed bar instead of polling. */
@@ -1590,12 +1604,48 @@ export class TradingEngine {
     return { ok: !!path, path: path || undefined }
   }
 
-  healthCheck(): { ok: boolean; uptime: number; mode: string } {
+  healthCheck(): { ok: boolean; uptime: number; mode: string; report: HealthReport } {
+    const report = this.getHealthReport()
     return {
-      ok:     true,
+      ok:     report.severity !== 'critical',
       uptime: Date.now() - this.startedAt,
       mode:   this.replay ? 'replay' : this.alpaca ? 'alpaca-paper' : 'simulator',
+      report,
     }
+  }
+
+  /**
+   * P-037 — fuse live engine state into a graded HealthReport via the pure
+   * Self-Diagnostic Core. Read-only: gathers state, composes signals, diagnoses.
+   * Routes no order, touches no risk gate. `errorRatePct` / `lastError` are
+   * Tier-C (untracked) and pass through as null — the core emits no finding for
+   * a null signal (Constitution 0.1).
+   */
+  getHealthReport(): HealthReport {
+    const now = Date.now()
+    while (this.tickWindow.length > 0 && this.tickWindow[0]! < now - TradingEngine.TICK_WINDOW_MS) {
+      this.tickWindow.shift()
+    }
+    const acct = this.om.getAccount()
+    const sess = db.listSessions(1)[0]
+    const peakEquity = sess ? Math.max(sess.peakEquity, acct.equity) : acct.equity
+    const connected = this.session ? this.session.state === 'CONNECTED' : true
+    const wsDownMs = !connected && this.leftConnectedAt !== null ? now - this.leftConnectedAt : 0
+    const signals = composeHealthSignals({
+      mode:            this.replay ? 'replay' : this.alpaca ? 'paper' : 'simulator',
+      sessionState:    this.session?.state ?? null,
+      connected,
+      tickHz:          this.tickWindow.length,
+      msSinceLastTick: this.session ? this.session.data.msSinceLastTick() : 0,
+      wsDownMs,
+      memMb:           Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      memSamples:      this.memSamples,
+      peakEquity,
+      currentEquity:   acct.equity,
+      errorRatePct:    null,
+      lastError:       null,
+    })
+    return diagnoseHealth(signals)
   }
 
   // ── Phase 9: Replay engine ──────────────────────────────────────────────────
@@ -2101,6 +2151,27 @@ export class TradingEngine {
     ) {
       this.lastFeedStatus = feed
       for (const l of this.feedStatusListeners) l(feed)
+    }
+
+    // P-037 — Self-Diagnostic Core. Maintain the heap-trend ring + WS-down
+    // tracker, then emit a diff-gated HealthReport (change-only, same pattern as
+    // the feed-status broadcast above). Observability only — routes no order.
+    this.memSamples.push({ t: nowStatus, mb: status.memMb })
+    if (this.memSamples.length > TradingEngine.MEM_SAMPLE_CAP) this.memSamples.shift()
+    if (status.connected) this.leftConnectedAt = null
+    else if (this.leftConnectedAt === null) this.leftConnectedAt = nowStatus
+
+    const health = this.getHealthReport()
+    const prevHealth = this.lastHealthReport
+    const healthChanged =
+      prevHealth === null
+      || prevHealth.severity !== health.severity
+      || prevHealth.findings.length !== health.findings.length
+      || prevHealth.findings.some((f, i) =>
+        f.code !== health.findings[i]?.code || f.severity !== health.findings[i]?.severity)
+    if (healthChanged) {
+      this.lastHealthReport = health
+      for (const l of this.healthReportListeners) l(health)
     }
   }
 

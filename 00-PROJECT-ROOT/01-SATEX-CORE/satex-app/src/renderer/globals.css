@@ -2192,13 +2192,13 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 
 .bb-secondary-row {
   display: grid;
-  grid-template-columns: 224px 1px minmax(0, 1fr) 1px minmax(0, 1fr) 1px 340px;
+  grid-template-columns: 224px 1px minmax(0, 1fr) 1px minmax(0, 1fr) 1px 340px 1px 320px;
   background: var(--bb-surf-1);
   border-top: 1px solid var(--bb-line);
   min-height: 0;
   overflow: hidden;
 }
-.bb-sec-portfolio, .bb-sec-catalysts, .bb-sec-risk, .bb-sec-logs {
+.bb-sec-portfolio, .bb-sec-catalysts, .bb-sec-risk, .bb-sec-logs, .bb-sec-health {
   min-height: 0; overflow: hidden; background: var(--bb-surf-1);
 }
 
@@ -3668,3 +3668,151 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   color: var(--bb-txt-mute); font-size: var(--text-sm); padding: 8px; text-align: center;
 }
 @keyframes wire-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---- System Health panel (P-037 · Self-Diagnostic Core) --------------- */
+.bb-health-panel { display: flex; flex-direction: column; min-height: 0; height: 100%; overflow: hidden; }
+.bb-health-body  { padding: 6px 10px 8px; font-size: var(--text-sm); line-height: 1.45; flex: 1; overflow-y: auto; }
+.bb-health-empty { color: color-mix(in srgb, currentColor 55%, transparent); padding: 8px 2px; }
+
+.bb-health-badge {
+  font-size: var(--text-xs, 10px); font-weight: 700; letter-spacing: 0.08em;
+  padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor;
+}
+.bb-health-ok   { color: var(--bb-pos); }
+.bb-health-degr { color: var(--bb-warn); }
+.bb-health-crit { color: var(--bb-neg); }
+
+.bb-health-action {
+  display: flex; gap: 8px; align-items: baseline; margin-bottom: 8px; padding: 6px 8px;
+  border-radius: 4px; background: color-mix(in srgb, var(--bb-warn) 10%, transparent);
+  border-left: 2px solid var(--bb-warn);
+}
+.bb-health-action-label { font-size: var(--text-xs, 10px); font-weight: 700; letter-spacing: 0.08em; color: var(--bb-warn); }
+.bb-health-action-text  { color: var(--bb-fg, #e6edf3); }
+
+.bb-health-row {
+  margin: 6px 0; padding: 6px 8px; border-radius: 4px;
+  background: var(--bb-surf-1); border-left: 2px solid currentColor;
+}
+.bb-health-row-head { display: flex; align-items: center; gap: 7px; }
+.bb-health-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+.bb-health-summary { flex: 1; font-weight: 600; color: var(--bb-fg, #e6edf3); }
+.bb-health-ref { font-size: var(--text-xs, 10px); color: color-mix(in srgb, currentColor 70%, transparent); }
+.bb-health-evidence {
+  margin: 3px 0 2px 14px; font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs, 10px); color: color-mix(in srgb, currentColor 80%, transparent);
+}
+.bb-health-remedy { margin-left: 14px; color: color-mix(in srgb, var(--bb-fg, #e6edf3) 80%, transparent); }
+
+/* ── Cold-boot intro · SplashIntro.tsx — film-style SATEX name reveal ─────── */
+.satex-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+  background:
+    radial-gradient(ellipse at center,
+      color-mix(in srgb, var(--bb-bg, #0a0e14) 55%, #000) 0%,
+      var(--bb-bg-deep, #04060a) 68%,
+      #000 100%);
+  animation: satex-splash-in 0.4s ease-out both;
+}
+.satex-splash::after {
+  /* faint scanline texture for the film feel */
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg, transparent 0 2px,
+    color-mix(in srgb, var(--bb-accent, #4af) 5%, transparent) 2px 3px);
+  opacity: 0.35;
+  mix-blend-mode: screen;
+}
+.satex-splash--leaving { animation: satex-splash-out 0.6s ease-in forwards; }
+
+.satex-splash__scan {
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--bb-accent, #4af), transparent);
+  box-shadow: 0 0 18px 2px var(--bb-accent, #4af);
+  opacity: 0;
+  animation: satex-splash-scan 1.6s cubic-bezier(0.7, 0, 0.3, 1) both;
+}
+
+.satex-splash__word {
+  position: relative;
+  display: flex;
+  gap: 0.04em;
+  padding-left: 0.2em;            /* balance trailing letter-spacing */
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+  font-size: clamp(48px, 12vw, 168px);
+  letter-spacing: 0.2em;
+  line-height: 1;
+  color: var(--bb-accent, #4af);
+  text-shadow:
+    0 0 0.03em color-mix(in srgb, var(--bb-accent, #4af) 75%, #fff),
+    0 0 0.5em var(--bb-accent, #4af),
+    0 0 1.4em color-mix(in srgb, var(--bb-accent, #4af) 60%, transparent);
+}
+.satex-splash__ch {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(0.1em);
+  filter: blur(6px);
+  animation: satex-splash-letter 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.satex-splash__rule {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: -0.18em;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--bb-accent, #4af), transparent);
+  box-shadow: 0 0 12px var(--bb-accent, #4af);
+  transform: scaleX(0);
+  transform-origin: center;
+  animation: satex-splash-rule 0.9s 1.25s cubic-bezier(0.7, 0, 0.2, 1) forwards;
+}
+
+@keyframes satex-splash-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes satex-splash-out {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(1.05); }
+}
+@keyframes satex-splash-scan {
+  0%   { opacity: 0; transform: translateY(-42vh) scaleX(0.2); }
+  14%  { opacity: 1; }
+  50%  { transform: translateY(0) scaleX(1); }
+  86%  { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(0) scaleX(1.1); }
+}
+@keyframes satex-splash-letter {
+  0%   { opacity: 0; transform: translateY(0.1em); filter: blur(6px); }
+  40%  { opacity: 1; filter: blur(0.6px); }
+  52%  { opacity: 0.5; }          /* one film flicker */
+  68%  { opacity: 1; }
+  100% { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes satex-splash-rule {
+  from { transform: scaleX(0); opacity: 0; }
+  30%  { opacity: 1; }
+  to   { transform: scaleX(1); opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .satex-splash { animation-duration: 0.2s; }
+  .satex-splash::after, .satex-splash__scan { display: none; }
+  .satex-splash__ch {
+    animation-duration: 0.3s;
+    filter: none;
+    transform: none;
+  }
+  .satex-splash__rule { animation: none; transform: scaleX(1); opacity: 0.9; }
+}

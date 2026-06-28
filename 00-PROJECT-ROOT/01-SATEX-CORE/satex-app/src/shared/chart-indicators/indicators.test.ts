@@ -255,6 +255,83 @@ describe('detectDoubleBottoms', () => {
   })
 })
 
+// ── Double-Pattern Symmetry (P-034 negative-price denominator guard) ──
+
+describe('double-pattern symmetry — negative-price denominator (P-034)', () => {
+  // Negative-priced instruments are inside SATEX's universe (CL crude printed
+  // negative in Apr 2020). The symmetry gate divides by the anchor price; the
+  // raw (signed) denominator made the `> tolerance` filter never reject for
+  // negative anchors. Guard: denominator = |a.price|, skip a zero anchor.
+
+  it('rejects far-apart negative-price double-bottom troughs', () => {
+    // Trough A high-magnitude -100, trough B -150 (50% apart) → must reject.
+    const seq: Array<[number, number, number]> = [
+      [-90, -89, -90], [-92, -91, -92], [-94, -93, -94],
+      [-100, -99, -100],                 // trough A (i=3)
+      [-93, -92, -93], [-91, -90, -91],
+      [-90, -88, -90],                   // peak between → neckline
+      [-92, -91, -92], [-93, -92, -93],
+      [-150, -149, -150],                // trough B (i=9) — 50% deeper
+      [-93, -92, -93], [-90, -89, -90], [-90, -89, -90],
+    ]
+    const candles: Candle[] = seq.map(([low, high, close], i) =>
+      candle({ time: i, open: close, high, low, close, volume: 1000 }))
+    expect(detectDoubleBottoms(candles, { swingWindow: 2 })).toEqual([])
+  })
+
+  it('accepts within-tolerance negative-price double-bottom with positive symmetry', () => {
+    const seq: Array<[number, number, number]> = [
+      [-90, -89, -90], [-92, -91, -92], [-94, -93, -94],
+      [-100, -99, -100],                 // trough A (i=3)
+      [-93, -92, -93], [-91, -90, -91],
+      [-90, -88, -90],                   // neckline peak
+      [-92, -91, -92], [-93, -92, -93],
+      [-102, -101, -102],                // trough B (i=9) — 2% of A
+      [-93, -92, -93], [-90, -89, -90], [-90, -89, -90],
+    ]
+    const candles: Candle[] = seq.map(([low, high, close], i) =>
+      candle({ time: i, open: close, high, low, close, volume: 1000 }))
+    const bots = detectDoubleBottoms(candles, { swingWindow: 2 })
+    expect(bots.length).toBeGreaterThanOrEqual(1)
+    expect(bots[0]!.symmetry).toBeGreaterThan(0)
+    expect(bots[0]!.symmetry).toBeLessThan(0.03)
+  })
+
+  it('rejects far-apart negative-price double-top peaks', () => {
+    // Peak A high -90, peak B high -45 (50% apart) → must reject.
+    const seq: Array<[number, number, number]> = [
+      [-101, -100, -101], [-103, -102, -103], [-105, -104, -105],
+      [-91, -90, -91],                   // peak A (i=3)
+      [-103, -102, -103], [-104, -103, -104],
+      [-106, -105, -106],                // trough between → neckline
+      [-103, -102, -103], [-104, -103, -104],
+      [-46, -45, -46],                   // peak B (i=9) — 50% higher
+      [-103, -102, -103], [-101, -100, -101], [-101, -100, -101],
+    ]
+    const candles: Candle[] = seq.map(([low, high, close], i) =>
+      candle({ time: i, open: close, high, low, close, volume: 1000 }))
+    expect(detectDoubleTops(candles, { swingWindow: 2 })).toEqual([])
+  })
+
+  it('accepts within-tolerance negative-price double-top with positive symmetry', () => {
+    const seq: Array<[number, number, number]> = [
+      [-101, -100, -101], [-103, -102, -103], [-105, -104, -105],
+      [-91, -90, -91],                   // peak A (i=3)
+      [-103, -102, -103], [-104, -103, -104],
+      [-106, -105, -106],                // neckline trough
+      [-103, -102, -103], [-104, -103, -104],
+      [-93, -92, -93],                   // peak B (i=9) — ~2.2% of A
+      [-103, -102, -103], [-101, -100, -101], [-101, -100, -101],
+    ]
+    const candles: Candle[] = seq.map(([low, high, close], i) =>
+      candle({ time: i, open: close, high, low, close, volume: 1000 }))
+    const tops = detectDoubleTops(candles, { swingWindow: 2 })
+    expect(tops.length).toBeGreaterThanOrEqual(1)
+    expect(tops[0]!.symmetry).toBeGreaterThan(0)
+    expect(tops[0]!.symmetry).toBeLessThan(0.03)
+  })
+})
+
 // ── Fibonacci ────────────────────────────────────────────────────────────
 
 describe('computeFibonacci', () => {

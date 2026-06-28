@@ -70,6 +70,7 @@ export const IPC = {
   LLM_CONFIG_SET:     'satex:llm:set',
   ALPACA_RECONNECT:   'satex:alpaca:reconnect',
   HEALTH_CHECK:       'satex:health:check',
+  HEALTH_REPORT:      'satex:health:report',
 
   // Live-mode interlock
   LIVE_MODE_GET:      'satex:liveMode:get',
@@ -311,6 +312,7 @@ const PUSH_CHANNELS = [
   IPC.TRADE_CLOSED,
   IPC.TRADES_TICK,
   IPC.FEED_STATUS_UPDATE,
+  IPC.HEALTH_REPORT,
   IPC.UPDATE_AVAILABLE,
   IPC.SUBSECOND_CANDLES_UPDATE,
   IPC.WIRE_UPDATE,

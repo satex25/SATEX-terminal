@@ -128,3 +128,56 @@ describe('detectFlags', () => {
     }
   })
 })
+
+// ── Negative-price denominator guard (P-035) ────────────────────────────────
+// CL crude printed negative in Apr 2020 (Constitution §1.1 — in-domain). The
+// H&S / Inv-H&S symmetry gate and the flag direction test divided by a *raw*
+// signed price; a negative anchor flipped the sign and silently bypassed the
+// filter / inverted bull-vs-bear. Behaviour is identical for positive prices.
+describe('pattern detectors — negative-price denominator (P-035)', () => {
+  it('H&S: rejects far-apart negative-price shoulders (symmetry gate restored)', () => {
+    // swing-highs at -100, -50 (head), -130 → shoulders 30% apart (> 15% tol).
+    const candles = withHigh([-140, -100, -140, -90, -50, -90, -140, -130, -140])
+    expect(detectHeadShoulders(candles, { swingWindow: 1 })).toHaveLength(0)
+  })
+
+  it('H&S: accepts within-tolerance negative shoulders with positive confidence', () => {
+    // swing-highs at -100, -50 (head), -103 → shoulders 3% apart (< 15% tol).
+    const candles = withHigh([-140, -100, -140, -90, -50, -90, -140, -103, -140])
+    const m = detectHeadShoulders(candles, { swingWindow: 1 })
+    expect(m).toHaveLength(1)
+    expect(m[0]!.kind).toBe('head-shoulders')
+    expect(m[0]!.confidence).toBeGreaterThan(0)
+    expect(m[0]!.confidence).toBeLessThanOrEqual(0.85)
+  })
+
+  it('Inv H&S: rejects far-apart negative-price shoulders', () => {
+    // swing-lows at -100, -150 (head), -130 → shoulders 30% apart (> 15% tol).
+    const candles = withLow([-60, -100, -60, -110, -150, -110, -60, -130, -60])
+    expect(detectInverseHeadShoulders(candles, { swingWindow: 1 })).toHaveLength(0)
+  })
+
+  it('Inv H&S: accepts within-tolerance negative shoulders with positive confidence', () => {
+    // swing-lows at -100, -150 (head), -103 → shoulders 3% apart (< 15% tol).
+    const candles = withLow([-60, -100, -60, -110, -150, -110, -60, -103, -60])
+    const m = detectInverseHeadShoulders(candles, { swingWindow: 1 })
+    expect(m).toHaveLength(1)
+    expect(m[0]!.kind).toBe('inv-head-shoulders')
+    expect(m[0]!.confidence).toBeGreaterThan(0)
+    expect(m[0]!.confidence).toBeLessThanOrEqual(0.85)
+  })
+
+  it('Flags: a rising negative-price pole is classified bull, not bear', () => {
+    // close runs -100 → -90 over the pole (a RISE), then a mild decline (flag).
+    // Old code divided by the raw negative base → poleMove sign inverted →
+    // mis-classified as a bear flag (and rejected by the slope check) → [].
+    const candles: Candle[] = Array.from({ length: 21 }, (_, i) => {
+      const close = i <= 10 ? -100 + i : -90 - (i - 10) * 0.2
+      return { time: i * 60, open: close, high: close + 0.3, low: close - 0.3, close, volume: 100 }
+    })
+    const flags = detectFlags(candles)
+    expect(flags.length).toBeGreaterThan(0)
+    expect(flags.some((m) => m.kind === 'flag-bull')).toBe(true)
+    expect(flags.every((m) => m.confidence <= 0.80)).toBe(true)
+  })
+})

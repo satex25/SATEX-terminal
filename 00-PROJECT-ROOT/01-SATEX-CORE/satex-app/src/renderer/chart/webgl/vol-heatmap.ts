@@ -139,12 +139,6 @@ export function tickVelocitySeries(candles: readonly Candle[]): number[] {
   const result = new Array<number>(n).fill(0)
   if (n < 2) return result
 
-  // Compute inter-candle intervals (seconds)
-  const intervals: number[] = []
-  for (let i = 1; i < n; i++) {
-    intervals.push(Math.max(1, candles[i]!.time - candles[i - 1]!.time))
-  }
-
   // Rolling 60s window: count candles arriving within TICK_VEL_SECS
   for (let i = 1; i < n; i++) {
     let count = 0
@@ -190,9 +184,16 @@ export function computeHeatmap(
   const velocity = tickVelocitySeries(candles)
   const vpinNorm = vpinToIntensity(vpin)
 
-  // Find max values for normalization
-  const maxAtr   = Math.max(1e-10, ...atr)
-  const maxStdev = Math.max(1e-10, ...stdev)
+  // Find max values for normalization.
+  // Single-pass loop, never Math.max(...spread): atr/stdev hold one entry per
+  // candle and are unbounded (a sub-second crypto session runs to 10^5-10^6 bars), so
+  // spreading them as call args throws RangeError (stack overflow). Same
+  // invariant as QuadPaneChart.tsx. Floor 1e-10 preserves the prior semantics.
+  let maxAtr = 1e-10, maxStdev = 1e-10
+  for (let i = 0; i < n; i++) {
+    const a = atr[i]!;   if (a > maxAtr)   maxAtr = a
+    const d = stdev[i]!; if (d > maxStdev) maxStdev = d
+  }
 
   const result: HeatmapPoint[] = []
 

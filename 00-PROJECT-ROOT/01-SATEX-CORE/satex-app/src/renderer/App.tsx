@@ -33,6 +33,7 @@ import { TacticsModal } from './components/modals/TacticsModal'
 import { IndicatorsModal } from './components/modals/IndicatorsModal'
 import { ExitReflectionModal } from './components/modals/ExitReflectionModal'
 import { UpdateToast } from './components/UpdateToast'
+import { SplashIntro } from './components/SplashIntro'
 import { useIndicatorStore } from './stores/indicatorStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import { useThemeStore } from './stores/themeStore'
@@ -46,6 +47,7 @@ import { PortfolioMiniPanel } from './panels/PortfolioMiniPanel'
 import { NewsDeskPanel } from './panels/NewsDeskPanel'
 import { RiskGatePanel } from './panels/RiskGatePanel'
 import { SystemLogsPanel } from './panels/SystemLogsPanel'
+import { HealthPanel } from './panels/HealthPanel'
 import { ChartPanel } from './panels/ChartPanel'
 import { ReplayPanel } from './panels/ReplayPanel'
 import { MarketsOverviewPanel } from './panels/MarketsOverviewPanel'
@@ -55,6 +57,8 @@ import { JournalPanel } from './panels/JournalPanel'
 
 export default function App() {
   useIPC()
+
+  const [splashDone, setSplashDone] = useState(false)
 
   const symbol = useMarketStore(s => s.symbol)
   const account = useAccountStore(s => s.account)
@@ -219,6 +223,7 @@ export default function App() {
 
   return (
     <div className="bb-app">
+      {!splashDone && <SplashIntro onComplete={() => setSplashDone(true)} />}
       <TopBar
         onCmd={() => setCmdOpen(true)}
         onOpenModal={setModal}
@@ -308,6 +313,8 @@ export default function App() {
         <div className="bb-sec-risk"><RiskGatePanel /></div>
         <span className="bb-divider-v" />
         <div className="bb-sec-logs"><SystemLogsPanel /></div>
+        <span className="bb-divider-v" />
+        <div className="bb-sec-health"><HealthPanel /></div>
       </div>
 
       <BottomBar />
