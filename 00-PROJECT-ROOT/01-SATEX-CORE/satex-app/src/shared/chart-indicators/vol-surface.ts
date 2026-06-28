@@ -63,7 +63,7 @@ export function logReturnStdev(
   for (let i = start; i <= endIdx; i++) {
     const prev = candles[i - 1]?.close
     const curr = candles[i]?.close
-    if (!prev || !curr || prev <= 0) continue
+    if (!prev || !curr || prev <= 0 || curr <= 0) continue
     returns.push(Math.log(curr / prev))
   }
   const n = returns.length

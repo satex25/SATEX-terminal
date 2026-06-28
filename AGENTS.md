@@ -47,6 +47,11 @@ Report **real** results — exit codes, test counts — never assert them.
 - `master` is a **free-tier private repo → no branch protection exists**, so this
   discipline is manual and load-bearing. Do not rely on the server to stop you.
 
+## Agent operating constitution
+
+`docs/policy/rule-VS.md` — the full INFRASTRUCTURE MANDATE. Read it before executing
+any non-trivial change. The key invariants are summarised in the sections below.
+
 ## TRADING-SAFETY GUARDRAILS — hard; do not cross without explicit human approval
 
 SATEX moves real money in live mode. These are **off-limits to autonomous change**:

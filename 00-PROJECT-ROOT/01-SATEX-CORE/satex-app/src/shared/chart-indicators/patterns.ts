@@ -86,11 +86,13 @@ export function detectHeadShoulders(
     const hd = highs[i + 1]!
     const rs = highs[i + 2]!
     if (hd.price <= ls.price || hd.price <= rs.price) continue
-    const sym = Math.abs(rs.price - ls.price) / ls.price
+    const denom = Math.abs(ls.price)
+    if (denom === 0) continue
+    const sym = Math.abs(rs.price - ls.price) / denom
     if (sym > shoulderTol) continue
 
     // Confidence: base 0.55, tighter shoulders +0.10, head prominence +0.10
-    const prominence = (hd.price - Math.max(ls.price, rs.price)) / hd.price
+    const prominence = (hd.price - Math.max(ls.price, rs.price)) / Math.abs(hd.price)
     const conf = Math.min(0.85,
       0.55 + (shoulderTol - sym) / shoulderTol * 0.10 + Math.min(0.10, prominence * 4))
 
@@ -126,10 +128,12 @@ export function detectInverseHeadShoulders(
     const hd = lows[i + 1]!
     const rs = lows[i + 2]!
     if (hd.price >= ls.price || hd.price >= rs.price) continue
-    const sym = Math.abs(rs.price - ls.price) / ls.price
+    const denom = Math.abs(ls.price)
+    if (denom === 0) continue
+    const sym = Math.abs(rs.price - ls.price) / denom
     if (sym > shoulderTol) continue
 
-    const depth = (Math.min(ls.price, rs.price) - hd.price) / Math.min(ls.price, rs.price)
+    const depth = (Math.min(ls.price, rs.price) - hd.price) / Math.abs(Math.min(ls.price, rs.price))
     const conf = Math.min(0.85,
       0.55 + (shoulderTol - sym) / shoulderTol * 0.10 + Math.min(0.10, depth * 4))
 
@@ -213,7 +217,9 @@ export function detectFlags(
 
   for (let i = flagBars; i < candles.length - flagBars; i++) {
     const poleStart = i - flagBars
-    const poleMove  = (candles[i]!.close - candles[poleStart]!.close) / candles[poleStart]!.close
+    const poleBase  = candles[poleStart]!.close
+    if (poleBase === 0) continue
+    const poleMove  = (candles[i]!.close - candles[poleStart]!.close) / Math.abs(poleBase)
     if (Math.abs(poleMove) < minFlagMove) continue
 
     const seg  = candles.slice(i, i + flagBars)
@@ -226,7 +232,7 @@ export function detectFlags(
     if (!valid) continue
 
     const channelTight = seg.every((c) =>
-      Math.abs(c.high - c.low) / c.close < 0.03)
+      Math.abs(c.high - c.low) / Math.abs(c.close) < 0.03)
     const conf = Math.min(0.80,
       0.50 + Math.min(0.15, (Math.abs(poleMove) - minFlagMove) * 2) +
       (channelTight ? 0.10 : 0))

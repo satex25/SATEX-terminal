@@ -36,7 +36,9 @@ export function detectDoubleBottoms(
     for (let j = i + 1; j < lows.length; j++) {
       const b = lows[j]!
       if (b.index - a.index < minSeparation) continue
-      const symmetry = Math.abs(b.price - a.price) / a.price
+      const denom = Math.abs(a.price)
+      if (denom === 0) continue
+      const symmetry = Math.abs(b.price - a.price) / denom
       if (symmetry > tolerance) continue
 
       // Neckline = highest high between A and B.

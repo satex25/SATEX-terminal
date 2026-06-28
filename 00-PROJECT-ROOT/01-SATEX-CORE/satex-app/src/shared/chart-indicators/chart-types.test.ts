@@ -125,3 +125,31 @@ describe('kagiTransform', () => {
     }
   })
 })
+
+describe('kagiTransform — reversalPct & negative-price reversal magnitude (P-038)', () => {
+  it('reversalPct path emits a reversal line on a real reversal', () => {
+    // first-ever reversalPct coverage: 100 -> 110, then a drop past 5%% of lineStart (5) to 104
+    const lines = kagiTransform([c(100), c(110), c(104)], { reversalPct: 0.05 })
+    expect(lines.filter((l) => !l.bull).length).toBeGreaterThan(0)
+  })
+
+  it('reversalPct does not reverse on moves smaller than the threshold', () => {
+    // gentle 1-unit drift; threshold is 5%% of 100 = 5 -> no reversal, only the final line
+    const lines = kagiTransform([c(100), c(101), c(102), c(103), c(104), c(103), c(102)], { reversalPct: 0.05 })
+    expect(lines).toHaveLength(1)
+    expect(lines[0]?.bull).toBe(true)
+  })
+
+  it('negative-priced series does not spuriously reverse (CL crude; |lineStart| magnitude)', () => {
+    // pre-P-038 the signed threshold (lineStart * pct < 0) made every non-extreme candle reverse
+    const lines = kagiTransform([c(-100), c(-101), c(-102), c(-103), c(-104), c(-103), c(-102)], { reversalPct: 0.05 })
+    expect(lines).toHaveLength(1)
+    expect(lines[0]?.bull).toBe(true)
+  })
+
+  it('reversal count is sign-agnostic for mirrored positive/negative prices', () => {
+    const pos = kagiTransform([c(100), c(101), c(102), c(103), c(104), c(103), c(102)], { reversalPct: 0.05 })
+    const neg = kagiTransform([c(-100), c(-101), c(-102), c(-103), c(-104), c(-103), c(-102)], { reversalPct: 0.05 })
+    expect(neg.length).toBe(pos.length)
+  })
+})

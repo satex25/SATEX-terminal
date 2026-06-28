@@ -8,6 +8,7 @@
  */
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type PushChannel } from '@shared/ipc-channels'
+import type { HealthReport } from '@shared/health/types'
 import type {
   Candle, OrderRequest, Quote, Account, Order,
   SystemStatus, IndicatorSnapshot, BrainParameter,
@@ -45,6 +46,7 @@ const satexApi = {
   onCandlesBulkReplace: (cb: (data: { symbol: string; candles: Candle[] }) => void)               => on(IPC.CANDLES_BULK_REPLACE, cb),
   onNewsAppend:         (cb: (item: unknown) => void)                                 => on(IPC.NEWS_APPEND,        cb),
   onSystemStatus:       (cb: (status: SystemStatus) => void)                          => on(IPC.SYSTEM_STATUS,      cb),
+  onHealthReport:       (cb: (report: HealthReport) => void)                          => on(IPC.HEALTH_REPORT,      cb),
   onAccountUpdate:      (cb: (account: Account) => void)                              => on(IPC.ACCOUNT_UPDATE,     cb),
   onOrdersUpdate:       (cb: (orders: Order[]) => void)                               => on(IPC.ORDERS_UPDATE,      cb),
   onAutonomousDecision: (cb: (decision: AutonomousDecision) => void)                  => on(IPC.AUTONOMOUS_DECISION,cb),

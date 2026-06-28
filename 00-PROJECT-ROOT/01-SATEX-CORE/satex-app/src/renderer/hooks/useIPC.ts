@@ -25,7 +25,9 @@ import { useFootprintStore } from '../stores/footprintStore'
 import { useFeedStore } from '../stores/feedStore'
 import { useUpdateStore } from '../stores/update-store'
 import { useSubsecondStore } from '../stores/subsecondStore'
+import { useHealthStore } from '../stores/healthStore'
 import type { NewsItem, ReplayMode, ClosedTrade, Trade, FeedStatus, UpdateAvailable, SubSecondCandle } from '@shared/types'
+import type { HealthReport } from '@shared/health/types'
 
 export function useIPC(): void {
   // Track previous replay mode so we can detect transitions and wipe stale candles.
@@ -95,6 +97,10 @@ export function useIPC(): void {
     const setFeedStatus = useFeedStore.getState().setStatus
     const unsubFeed = window.satex.onFeedStatusUpdate?.((s: FeedStatus) => setFeedStatus(s)) ?? (() => {})
 
+    // ── P-037: Self-Diagnostic Core health report → healthStore (HealthPanel) ──
+    const setHealth = useHealthStore.getState().setReport
+    const unsubHealth = window.satex.onHealthReport?.((r: HealthReport) => setHealth(r)) ?? (() => {})
+
     // ── S1-9: auto-update push → UpdateToast banner ────────────────────────
     const setUpdateAvailable = useUpdateStore.getState().setAvailable
     const unsubUpdate = window.satex.onUpdateAvailable?.((u: UpdateAvailable) => setUpdateAvailable(u)) ?? (() => {})
@@ -140,6 +146,7 @@ export function useIPC(): void {
       unsubJournal()
       unsubTrades()
       unsubFeed()
+      unsubHealth()
       unsubUpdate()
       unsubSubsecond()
     }

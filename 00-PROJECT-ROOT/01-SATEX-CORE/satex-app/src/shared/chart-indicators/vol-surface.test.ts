@@ -7,6 +7,7 @@ import {
   logReturnStdev,
   annualize,
   computeVolSurface,
+  computeVolSurfaceHistory,
   VOL_LOOKBACKS,
 } from './vol-surface'
 import type { Candle } from '../types'
@@ -78,5 +79,49 @@ describe('computeVolSurface', () => {
 
   it('all realized vols are non-negative', () => {
     expect(computeVolSurface(NOISY, 252).points.every((p) => p.realizedVol >= 0)).toBe(true)
+  })
+})
+
+describe('computeVolSurfaceHistory (P-031 coverage pin)', () => {
+  const SERIES = (len: number): Candle[] => Array.from({ length: len }, (_, i) => c(100 + i, i))
+  const WARMUP = VOL_LOOKBACKS[VOL_LOOKBACKS.length - 1]! // 100 (largest lookback)
+
+  it('returns [] until candle count exceeds the warm-up window', () => {
+    expect(computeVolSurfaceHistory([], 252)).toEqual([])
+    expect(computeVolSurfaceHistory(SERIES(50), 252)).toEqual([])
+    expect(computeVolSurfaceHistory(SERIES(WARMUP), 252)).toEqual([])
+  })
+
+  it('emits exactly (length - warm-up) slices', () => {
+    expect(computeVolSurfaceHistory(SERIES(WARMUP + 1), 252)).toHaveLength(1)
+    expect(computeVolSurfaceHistory(SERIES(150), 252)).toHaveLength(150 - WARMUP)
+  })
+
+  it('each slice has one point per VOL_LOOKBACKS and the no-IV note', () => {
+    for (const slice of computeVolSurfaceHistory(SERIES(150), 252)) {
+      expect(slice.points).toHaveLength(VOL_LOOKBACKS.length)
+      expect(slice.ivNote).toBe('no-iv-source')
+    }
+  })
+
+  it('slice k is asOf the (warm-up + k)-th candle (chronological alignment)', () => {
+    const candles = SERIES(150)
+    computeVolSurfaceHistory(candles, 252).forEach((slice, k) => {
+      expect(slice.asOf).toBe(candles[WARMUP + k]!.time)
+    })
+  })
+})
+
+describe('logReturnStdev — negative-price guard (P-039)', () => {
+  it('returns a finite, non-negative value when prices cross through zero (CL crude)', () => {
+    const crude = [20, 15, 10, 5, -5, -20, -10, 5, 10].map((v, i) => c(v, i))
+    const s = logReturnStdev(crude, crude.length - 1, 8)
+    expect(Number.isNaN(s)).toBe(false)
+    expect(s).toBeGreaterThanOrEqual(0)
+  })
+
+  it('skips a negative close (prev>0, curr<0) instead of producing NaN', () => {
+    const series = [10, 12, -3, 14, 15, 16].map((v, i) => c(v, i))
+    expect(Number.isNaN(logReturnStdev(series, series.length - 1, 5))).toBe(false)
   })
 })

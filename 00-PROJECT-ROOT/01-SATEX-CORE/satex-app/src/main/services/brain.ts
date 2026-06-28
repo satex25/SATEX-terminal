@@ -112,8 +112,8 @@ export class Brain {
     return Math.tanh(s)  // squash to [-1, +1]
   }
 
-  decisionFromLocal(quote: Quote, ind: IndicatorSnapshot): { bias: 'bullish' | 'bearish' | 'neutral'; localScore: number; confidence: number } {
-    const f = this.features(quote, ind)
+  decisionFromLocal(quote: Quote, ind: IndicatorSnapshot, depth?: DepthSnapshot): { bias: 'bullish' | 'bearish' | 'neutral'; localScore: number; confidence: number } {
+    const f = this.features(quote, ind, depth)
     const s = this.scoreLocal(f)
     const bias = s > 0.18 ? 'bullish' : s < -0.18 ? 'bearish' : 'neutral'
     const confidence = Math.min(1, Math.abs(s) * 1.4)
@@ -157,8 +157,8 @@ export class Brain {
     for (const p of params) db.upsertBrainParam(p)
   }
 
-  async decide(symbol: string, quote: Quote, ind: IndicatorSnapshot): Promise<AiDecision> {
-    const local = this.decisionFromLocal(quote, ind)
+  async decide(symbol: string, quote: Quote, ind: IndicatorSnapshot, depth?: DepthSnapshot): Promise<AiDecision> {
+    const local = this.decisionFromLocal(quote, ind, depth)
     let llmRationale: string | null = null
 
     const llmCfg = getLlmConfig()

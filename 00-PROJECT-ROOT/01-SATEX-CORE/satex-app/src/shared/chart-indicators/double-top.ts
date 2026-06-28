@@ -45,7 +45,9 @@ export function detectDoubleTops(
     for (let j = i + 1; j < highs.length; j++) {
       const b = highs[j]!
       if (b.index - a.index < minSeparation) continue
-      const symmetry = Math.abs(b.price - a.price) / a.price
+      const denom = Math.abs(a.price)
+      if (denom === 0) continue
+      const symmetry = Math.abs(b.price - a.price) / denom
       if (symmetry > tolerance) continue
 
       // Neckline = lowest low between A and B.

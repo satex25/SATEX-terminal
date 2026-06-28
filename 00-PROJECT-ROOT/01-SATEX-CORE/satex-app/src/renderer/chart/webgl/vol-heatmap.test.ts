@@ -8,6 +8,8 @@ import {
   atrSeries,
   stdevSeries,
   computeHeatmap,
+  tickVelocitySeries,
+  vpinToIntensity,
 } from './vol-heatmap'
 import type { Candle } from '@shared/types'
 
@@ -115,5 +117,54 @@ describe('computeHeatmap', () => {
 
   it('time field matches input candle times', () => {
     computeHeatmap(FLAT).forEach((p, i) => expect(p.time).toBe(FLAT[i]!.time))
+  })
+})
+
+describe('computeHeatmap — large-array safety + module coverage (P-027)', () => {
+  it('does not throw on a 300k-candle array (no Math.max(...spread) stack overflow)', () => {
+    const big: Candle[] = Array.from({ length: 300_000 }, (_, i) => c(100 + (i % 13), i))
+    expect(() => computeHeatmap(big)).not.toThrow()
+  })
+
+  it('300k array returns one HeatmapPoint per candle, intensity in [0,1]', () => {
+    const big: Candle[] = Array.from({ length: 300_000 }, (_, i) => c(100 + (i % 13), i))
+    const out = computeHeatmap(big)
+    expect(out).toHaveLength(big.length)
+    for (const idx of [0, 1, 500, 50_000, 99_999]) {
+      const pt = out[idx]!
+      expect(pt.intensity).toBeGreaterThanOrEqual(0)
+      expect(pt.intensity).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('normalization stays finite (1e-10 floor) and NOISY peaks above FLAT', () => {
+    const flatMax = Math.max(...computeHeatmap(FLAT).map((p) => p.intensity))
+    const noisyMax = Math.max(...computeHeatmap(NOISY).map((p) => p.intensity))
+    expect(Number.isFinite(flatMax)).toBe(true)
+    expect(noisyMax).toBeGreaterThan(flatMax)
+  })
+
+  it('tickVelocitySeries: length matches, warm-up index 0 is 0, values in [0,1]', () => {
+    const v = tickVelocitySeries(NOISY)
+    expect(v).toHaveLength(NOISY.length)
+    expect(v[0]).toBe(0)
+    v.forEach((x) => {
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(x).toBeLessThanOrEqual(1)
+    })
+  })
+
+  it('tickVelocitySeries: dense (1s) candles register higher velocity than sparse (60s)', () => {
+    const dense: Candle[] = Array.from({ length: 40 }, (_, i) => ({ time: i, open: 100, high: 101, low: 99, close: 100, volume: 100 }))
+    const sparse: Candle[] = Array.from({ length: 40 }, (_, i) => ({ time: i * 60, open: 100, high: 101, low: 99, close: 100, volume: 100 }))
+    const dMax = Math.max(...tickVelocitySeries(dense))
+    const sMax = Math.max(...tickVelocitySeries(sparse))
+    expect(dMax).toBeGreaterThan(sMax)
+  })
+
+  it('vpinToIntensity clamps to [0,1]', () => {
+    expect(vpinToIntensity(0.4)).toBeCloseTo(0.4)
+    expect(vpinToIntensity(-2)).toBe(0)
+    expect(vpinToIntensity(5)).toBe(1)
   })
 })
