@@ -9,6 +9,20 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **P-044: a render error in the Markets or Replay workspace blackscreened the whole terminal.** The
+  center-column workspace content had no error boundary, so any panel render-throw unmounted the entire
+  React tree (only the Quad workspace survived — it wraps each pane in `ErrorBoundary`). Wrapped the
+  center column in a keyed `ErrorBoundary` (key = active workspace) with a fallback that shows the
+  failing workspace + the real error message and keeps every other workspace and the kill-switch chord
+  reachable. Off the trading-safety perimeter. Gates: typecheck OK · lint OK (0 warnings) · vitest 100
+  files / 1287 tests / 0 fail · knip OK.
+- **P-045: Quad panes rendered empty/"sloppy" when switching into the Quad view with data present.** The
+  per-pane lightweight-charts series is created asynchronously, but the bulk `setData`/EMA/VWAP effects
+  keyed only on candle count and gated on the series ref — so they fired before the series existed and
+  never re-fired, leaving panes blank until the next bar ticked. Added a `ready` flag set on series
+  creation and threaded it into those effect deps so existing data is applied the instant the chart is
+  ready (no per-tick repaint cost). Off the trading-safety perimeter. Gates: typecheck OK · lint OK ·
+  vitest 100 files / 1287 tests / 0 fail · knip OK.
 - **P-043: `ChartPanel` leaked a `ResizeObserver` on every remount (PR #6 leak class).** The
   single-chart init effect created `const ro = new ResizeObserver(...)` inside its async IIFE, so the
   observer was local to that closure and the effect cleanup — which calls `chart.remove()` — never

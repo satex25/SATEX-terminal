@@ -34,6 +34,7 @@ import { IndicatorsModal } from './components/modals/IndicatorsModal'
 import { ExitReflectionModal } from './components/modals/ExitReflectionModal'
 import { UpdateToast } from './components/UpdateToast'
 import { SplashIntro } from './components/SplashIntro'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { useIndicatorStore } from './stores/indicatorStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import { useThemeStore } from './stores/themeStore'
@@ -246,6 +247,23 @@ export default function App() {
             Replay workspace overrides automatically when a tape is playing
             (replayActive in useReplayStore). */}
         <div className="bb-col-center">
+          {/* A keyed render-error boundary isolates the active workspace: a throw in
+              any center panel shows a recoverable fallback (with the real error) instead
+              of unmounting the whole terminal. Keyed by workspace so switching tabs
+              always remounts a clean attempt. Mirrors the per-pane guard in QuadChartPanel. */}
+          <ErrorBoundary
+            key={effectiveWs}
+            fallback={(err) => (
+              <div
+                role="alert"
+                style={{ height: '100%', overflow: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}
+              >
+                <div style={{ color: 'var(--bb-neg, #ff4655)', fontWeight: 600 }}>⚠ {effectiveWs} workspace failed to render</div>
+                <div style={{ color: 'var(--bb-text-dim, rgba(232,230,224,0.7))', fontFamily: 'var(--font-mono, ui-monospace, monospace)', whiteSpace: 'pre-wrap', maxWidth: '680px' }}>{err.message}</div>
+                <div style={{ color: 'var(--bb-text-dim, rgba(232,230,224,0.45))' }}>The rest of the terminal is unaffected — press ⌘1–⌘5 or use the tabs above to switch workspaces.</div>
+              </div>
+            )}
+          >
           {effectiveWs === 'Replay' && (
             <div className="bb-replay-stack">
               <ReplayPanel />
@@ -291,6 +309,7 @@ export default function App() {
               <MacroStripPanel />
             </>
           )}
+          </ErrorBoundary>
         </div>
         <span className="bb-divider-v" />
 

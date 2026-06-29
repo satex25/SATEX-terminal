@@ -107,6 +107,69 @@ updated: 2026-06-28
 
 ## Shipped — awaiting verification
 
+### P-044 · No ErrorBoundary around the workspace center -> a Markets/Replay panel throw blackscreens the whole terminal
+- **Problem:** Operator report: switching to the MARKETS or REPLAY tab blanks the entire terminal
+  (Electron window alive, React tree gone — only the OS window-size chrome shows through the
+  transparent body). `App.tsx` renders the center-column workspace content (`MarketsOverviewPanel`,
+  `ReplayPanel`+`ChartPanel`, etc.) **with no error boundary**, so any render throw in the active panel
+  unmounts the whole `bb-app` tree (React 18 default). The Quad workspace is the lone survivor precisely
+  because `QuadChartPanel` wraps each pane in `<ErrorBoundary>` (`QuadChartPanel.tsx:54/77`) — the rest
+  of the stage had no such isolation. For a live-capital terminal a single panel fault taking down the
+  whole UI (incl. the kill-switch chord surface) is a confidence/safety problem, not just cosmetic.
+- **Solutions:** (a) wrap the center-column content in ONE keyed `<ErrorBoundary>` (key = workspace) with
+  an informative fallback — smallest blast radius, mirrors the proven QuadChartPanel pattern, isolates
+  the active workspace and surfaces the real `err.message` so the specific throw becomes diagnosable on
+  the next run; (b) hunt the exact throw blind and patch only that panel (does not prevent the next
+  unknown panel fault from blackscreening; both panels read defensively, so the throw is data-dependent
+  and not reproducible without the live Electron GUI, which the sandbox cannot run); (c) a single
+  app-root boundary (coarser — a center-panel fault would still blank the rails/topbar).
+- **Decision:** **(a)** — resilience-first is the correct architecture for a trading terminal and is
+  already the in-repo idiom (QuadChartPanel). The boundary converts an undiagnosable blackscreen into a
+  contained, labeled fallback that keeps every other workspace + the kill-switch reachable AND prints the
+  real error, which is the fastest path to the root-cause panel fix. Keyed by `effectiveWs` so switching
+  tabs always remounts a clean attempt. Off the trading-safety perimeter (renderer presentation; routes
+  no order).
+- **Shipped (2026-06-29, operator bug report):** `App.tsx` — import `ErrorBoundary`; wrap the
+  `bb-col-center` children in `<ErrorBoundary key={effectiveWs} fallback={(err)=>...}>` (fallback shows
+  "<ws> workspace failed to render" + `err.message` + a "rest of the terminal is unaffected" hint).
+  LF-preserved; 3-anchor python edit (count==1 each); NUL/CRCR clean; braces/parens balanced.
+- **Gate verification (2026-06-29; master @ f306f24 working tree + edits; Node v22):** typecheck exit 0
+  | lint exit 0 (0 warnings) | vitest 100 files / 1287 tests / 0 fail (sharded 4x: 340+405+274+268) |
+  knip exit 0 (Node-20 shim; 23+29 pre-existing warnings only — none new).
+- **Status:** SHIPPED — awaiting operator commit + a launch confirm. NOTE: the boundary makes the crash
+  non-fatal and will display the exact Markets/Replay error string on next run — capture that to root-fix
+  the underlying panel throw (follow-up).
+
+### P-045 · Quad panes render empty/"sloppy" when switching INTO Quad with data already present
+- **Problem:** Operator report: "chart updates need to persist within the quad view; very sloppy chart
+  outputs." `QuadPaneChart` creates its lightweight-charts series **asynchronously**
+  (`await import('lightweight-charts')`, `QuadPaneChart.tsx:97-127`), but the bulk `setData` /
+  EMA / VWAP effects key only on `[chartCandles.length]` (+overlay opts) and gate on the series ref.
+  On switching INTO Quad with candles already in the store, those effects fire once on mount **before**
+  the async series exists (early-return), and then never re-fire (length unchanged) — so the pane shows
+  its frame + header stats but **no candles** until the next bar append ticks `length`. `hasData` is
+  true (so the "awaiting data" overlay is suppressed), which reads as an empty/"sloppy" pane. Initial
+  cold launch looks fine only because candles arrive AFTER the chart is ready (0 -> N flips length).
+- **Solutions:** (a) add a `ready` state flag set when the series is created and thread it into the
+  data-apply effect deps so they re-run the instant the chart is ready — applies the already-present
+  data immediately, no per-tick repaint cost (intra-bar deps unchanged); (b) make `setData` depend on
+  the full `chartCandles` reference (fires every tick -> full-series repaint per tick on 4 panes, the
+  perf anti-pattern the `[length]` keying deliberately avoids); (c) synchronously read current candles
+  via refs inside the creation effect (duplicates the apply logic, stale-closure risk).
+- **Decision:** **(a)** — minimal, idiomatic, and correct: `ready` flips exactly once per mount, so each
+  of the three data effects (candles / EMA / VWAP) runs one extra time at chart-ready and applies the
+  existing series; the live ratchet + length-append paths are untouched. Off the trading-safety perimeter
+  (renderer presentation).
+- **Shipped (2026-06-29, operator bug report):** `QuadPaneChart.tsx` — `const [ready,setReady]=useState`;
+  `setReady(true)` after series init, `setReady(false)` in cleanup; added `ready` to the setData / EMA /
+  VWAP effect dep arrays. CRLF-preserved binary edit (file is CRLF — the bridge truncation case);
+  NUL/CRCR clean; braces/parens balanced; 304 CRLF / 0 lone-LF.
+- **Gate verification (2026-06-29; master @ f306f24 working tree + edits; Node v22):** typecheck exit 0
+  | lint exit 0 (0 warnings) | vitest 100 files / 1287 tests / 0 fail (sharded 4x: 340+405+274+268) |
+  knip exit 0 (Node-20 shim; pre-existing warnings only).
+- **Status:** SHIPPED — awaiting operator commit + a launch confirm (switch Trade->Quad should now paint
+  candles immediately, not on the next bar).
+
 ### P-043 · `ChartPanel.tsx` leaks a `ResizeObserver` on every remount (the PR #6 leak class, recurred)
 - **Problem:** The single-chart init effect (`src/renderer/panels/ChartPanel.tsx`, the central Trade/Focus
   chart) creates `const ro = new ResizeObserver(...)` + `ro.observe(containerRef.current)` (`:593/:598`)
