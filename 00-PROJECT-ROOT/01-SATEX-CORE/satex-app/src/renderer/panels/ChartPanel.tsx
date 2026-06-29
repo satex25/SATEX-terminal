@@ -535,6 +535,7 @@ export function ChartPanel() {
     // Capture the ref'd Map at effect entry so cleanup operates on the same
     // instance even if some future code path reassigns emaSeriesMap.current.
     const emaMapAtMount = emaSeriesMap.current
+    let ro: ResizeObserver | null = null
 
     void (async () => {
       try {
@@ -590,7 +591,7 @@ export function ChartPanel() {
         seriesRef.current = series
         lwcModRef.current = lwc
 
-        const ro = new ResizeObserver(() => {
+        ro = new ResizeObserver(() => {
           if (!containerRef.current) return
           (chart as { resize: (w: number, h: number) => void })
             .resize(containerRef.current.clientWidth, containerRef.current.clientHeight)
@@ -603,6 +604,7 @@ export function ChartPanel() {
 
     return () => {
       cancelled = true
+      ro?.disconnect()  // stop observing before dispose — was leaked (lived only in the init closure)
       if (chartRef.current) {
         try { (chartRef.current as { remove: () => void }).remove() } catch { /* ignore */ }
         chartRef.current     = null

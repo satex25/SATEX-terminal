@@ -9,6 +9,29 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **P-043: `ChartPanel` leaked a `ResizeObserver` on every remount (PR #6 leak class).** The
+  single-chart init effect created `const ro = new ResizeObserver(...)` inside its async IIFE, so the
+  observer was local to that closure and the effect cleanup — which calls `chart.remove()` — never
+  disconnected it. Every unmount/remount of the central Trade/Focus chart (workspace switch,
+  symbol-change remount) orphaned a live observer that still referenced the container and whose callback
+  closed over the disposed chart (calling `.resize()` on a removed chart on the next resize). Fixed by
+  hoisting `ro` to an effect-scoped `let` and adding `ro?.disconnect()` in the cleanup before chart
+  disposal — byte-identical to the already-fixed `QuadPaneChart` sibling. Off the trading-safety
+  perimeter (renderer presentation; routes no order). Gates: typecheck OK · lint OK (0 warnings) ·
+  vitest 100 files / 1287 tests / 0 fail · knip OK (no new warnings).
+- **P-041: `PortfolioMiniPanel` spread an unbounded PnL-snapshot array into `Math.min`/`Math.max`.**
+  The equity-curve sparkline computed `Math.min(...snapshots)` / `Math.max(...snapshots)` (and
+  duplicated the same spread four times in the SVG baseline). `snapshots` comes from
+  `getPnlSnapshots` → `listPnlSnapshots` (`SELECT * FROM pnl …`, **no LIMIT**), and PnL rows are
+  written every 60s (`trading-engine.ts` `pnlTimer`) with no cap — so an always-on session crosses
+  the V8 spread-argument limit (~65k–125k) in ~45 days and the panel throws `RangeError: Maximum
+  call stack size exceeded`. Same class as P-027 (vol-heatmap) / QuadPaneChart. Fixed: a single-pass
+  `seriesExtent` helper (`renderer/lib/extent.ts`) computes min/max in one loop; the panel routes
+  both the polyline and the (now deduped) baseline through it — zero array spreads remain.
+  Behaviour-identical for in-cap arrays. Off the trading-safety perimeter (renderer display; the
+  other snapshot consumer, `risk-gates.ts`, already iterates with a `for` loop and is untouched).
+  +1 test file / +5 tests (`renderer/lib/extent.test.ts`, incl. a 300k-element no-throw case). Gates:
+  typecheck OK · lint OK (0 warnings) · vitest 100 files / 1287 tests / 0 fail · knip OK (Node-20 shim).
 - **P-040: `indicator-graph.ts` `applyStdev` divided by `period` with no `period <= 0` guard.**
   The rolling-stdev transform kernel (CHART-18 node graph) computed `mean`/`variance` as
   `… / period`; a `StdevNode` with `period === 0` produced a NaN-filled series (`0/0`), and a
@@ -128,6 +151,19 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Added
 
+- **P-042: WebGLRenderer (CHART-10) leak-invariant test coverage.** New
+  `src/renderer/chart/webgl/WebGLRenderer.test.ts` (14 tests) pins the PR #6 "clean up what you create"
+  invariant on the previously-untested WebGL2 overlay base — the file every density-overlay layer
+  (footprint / volume-profile / vol-heatmap) composes. Drives the real class under jsdom with a stubbed
+  WebGL2 context + controlled `requestAnimationFrame`: construction (canvas attach, absolute/zIndex/
+  pointer-events, rAF start), the frame loop (paint dims + reschedule, paint-error swallowing, no-gl
+  skip), `invalidate` (sync frame / no-op after destroy), context loss→restore (preventDefault, stop,
+  re-acquire + `onContextRestored`, resume), and the **destroy teardown** (canvas detached, loop
+  cancelled, `WEBGL_lose_context.loseContext()` called, listeners removed so post-destroy events are
+  inert, idempotent second destroy, destroy-guarded stale tick). `WebGLRenderer.ts` is byte-for-byte
+  unchanged — a pure regression net against re-introducing the listener/timer/observer leak class.
+  Off the trading-safety perimeter (renderer presentation; routes no order). Gates: typecheck OK · lint
+  OK (0 warnings) · vitest 100 files / 1287 tests / 0 fail · knip OK (Node-20 shim; no new warnings).
 - **Cold-boot intro splash — film-style `SATEX` name reveal.** New `src/renderer/components/SplashIntro.tsx`: a fullscreen plate shown once per launch that resolves the `SATEX` wordmark letter-by-letter (blur-in + a single film flicker) out of a scanline sweep, draws an accent rule, then dissolves (~3.2s, within the 2–5s brief) to reveal the terminal. No logo — wordmark only. Pure CSS animation (CSP `script-src 'self'`-safe), auto-themes off the `--bb-accent` / `--font-mono` tokens across all 4 themes, honors `prefers-reduced-motion` (fast glitch-free fade), and skips on click or any key. Mounted as the first child of `bb-app` behind a `splashDone` flag in `App.tsx`; styles appended to `globals.css` (`.satex-splash*` + keyframes). Self-cleans its timers; fires `onComplete` exactly once. Off the trading-safety perimeter (presentation only). Gates: typecheck OK lint OK (0 warnings) vitest 98 files / 1268 tests / 0 fail knip OK.
  The pure
   P-036 `diagnoseHealth` core is now live: every status tick (~2s) the engine builds a `HealthSignals`

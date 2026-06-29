@@ -10,6 +10,7 @@ import { useAccountStore } from '../stores/accountStore'
 import { PanelHead } from '../components/PanelHead'
 import { fmt } from '../lib/format'
 import { DEFAULT_EQUITY } from '@shared/constants'
+import { seriesExtent } from '../lib/extent'
 
 function MiniKV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -48,17 +49,27 @@ export function PortfolioMiniPanel() {
   const pnlPos = account.dailyPnl >= 0
   const stroke = pnlPos ? 'var(--bb-pos)' : 'var(--bb-neg)'
 
+  // Single-pass min/max — never Math.min(...snapshots). PnL snapshots accumulate
+  // at one entry/minute with no LIMIT (listPnlSnapshots), so an always-on session
+  // grows the array past the spread arg cap and the spread would throw RangeError
+  // (P-041 — same invariant as vol-heatmap / QuadPaneChart, P-027).
+  const { min: eqMin, max: eqMax } = useMemo(() => seriesExtent(snapshots), [snapshots])
+
   const path = useMemo(() => {
     if (snapshots.length < 2) return ''
     const W = 232, H = 100, pad = 6
-    const min = Math.min(...snapshots), max = Math.max(...snapshots)
-    const span = (max - min) || 1
+    const span = (eqMax - eqMin) || 1
     return snapshots.map((v, i) => {
       const x = (i / (snapshots.length - 1)) * W
-      const y = H - pad - ((v - min) / span) * (H - 2 * pad)
+      const y = H - pad - ((v - eqMin) / span) * (H - 2 * pad)
       return `${x.toFixed(2)},${y.toFixed(2)}`
     }).join(' ')
-  }, [snapshots])
+  }, [snapshots, eqMin, eqMax])
+
+  // Baseline (starting equity) y-coordinate — computed once from the same extent.
+  const baseY = snapshots.length >= 2
+    ? 50 - ((DEFAULT_EQUITY - eqMin) / Math.max(1, eqMax - eqMin)) * 88 + 6
+    : 0
 
   return (
     <div className="bb-portfolio-mini">
@@ -74,8 +85,8 @@ export function PortfolioMiniPanel() {
           <svg width="100%" height="100%" viewBox="0 0 232 100" preserveAspectRatio="none">
             <line x1="0" x2="232" y1="50" y2="50" stroke="rgba(255,255,255,0.05)" strokeDasharray="2 3" />
             <line x1="0" x2="232"
-              y1={50 - ((DEFAULT_EQUITY - Math.min(...snapshots)) / Math.max(1, Math.max(...snapshots) - Math.min(...snapshots))) * 88 + 6}
-              y2={50 - ((DEFAULT_EQUITY - Math.min(...snapshots)) / Math.max(1, Math.max(...snapshots) - Math.min(...snapshots))) * 88 + 6}
+              y1={baseY}
+              y2={baseY}
               stroke="var(--bb-txt-mute)" strokeDasharray="2 2" strokeOpacity="0.3" />
             <polyline points={path} fill="none" stroke={stroke} strokeWidth="1.4" />
           </svg>

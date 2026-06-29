@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-06-27
+updated: 2026-06-28
 ---
 
 # Problem Ledger
@@ -106,6 +106,116 @@ updated: 2026-06-27
 
 
 ## Shipped — awaiting verification
+
+### P-043 · `ChartPanel.tsx` leaks a `ResizeObserver` on every remount (the PR #6 leak class, recurred)
+- **Problem:** The single-chart init effect (`src/renderer/panels/ChartPanel.tsx`, the central Trade/Focus
+  chart) creates `const ro = new ResizeObserver(...)` + `ro.observe(containerRef.current)` (`:593/:598`)
+  **inside the async IIFE**, so `ro` is local to that closure. The effect cleanup (`:604`) calls
+  `chart.remove()` and nulls the refs but **never disconnects `ro`** — and `ro` is not even in the
+  cleanup's scope. Every ChartPanel unmount/remount (workspace switch off Trade/Focus, the symbol-change
+  remounts) **orphans a live `ResizeObserver`** that still references the container element and whose
+  callback closes over the now-`remove()`d `chart`; on the next container resize the orphan calls
+  `.resize()` on a disposed chart (dead work / potential throw) and the observer + closure never GC.
+  This is the **exact PR #6 `ResizeObserver` leak class** AGENTS.md / app `CLAUDE.md` flag as
+  load-bearing ("a real `ResizeObserver` leak shipped once — don't repeat it"), recurred on the busiest
+  panel. The repo's own `QuadPaneChart.tsx` (`:128/:140`) already carries the fixed form of this exact
+  bug (comment: "stop observing before dispose — was leaked (lived only in the init closure)") — so the
+  canonical fix is established in-tree; ChartPanel was the un-swept sibling. Found via the PR #6
+  leak-class sweep (add/removeEventListener, timers, observers) the P-042 NEXT note steered to.
+- **Solutions:** (a) hoist `ro` to an effect-scoped `let ro: ResizeObserver | null = null`, assign it in
+  the IIFE, and `ro?.disconnect()` in the cleanup — byte-identical to the proven QuadPaneChart fix,
+  smallest blast radius (3 lines, one file), behaviour-identical while mounted; (b) move `ro` into a
+  `useRef` and disconnect via the ref (heavier, no benefit over (a) for a mount-once effect); (c) leave
+  as-is (ships the documented leak class on the central chart).
+- **Decision:** **(a)** — mirrors the established in-repo pattern exactly, off the trading-safety
+  perimeter (renderer presentation; routes no order), minimal and provably correct (the observer that
+  was never disconnected now is). No unit test added: ChartPanel is a heavy dynamic-`import`
+  lightweight-charts component with no co-located harness, and the leak is not observable without
+  mounting the full chart; the fix is verified by the gate suite + a 3-hunk diff review against the
+  canonical QuadPaneChart form (the same way that sibling fix shipped). The companion observer-lifecycle
+  invariant is unit-pinned this session on `WebGLRenderer` (P-042).
+- **Shipped (2026-06-28, work-layer passover):** `ChartPanel.tsx` — `let ro` hoisted to effect scope;
+  `const ro = new ResizeObserver` → `ro = new ResizeObserver`; `ro?.disconnect()` added in the cleanup
+  before `chart.remove()`. LF-preserved python edit (file is LF; anchors count==1 each); diff is exactly
+  3 hunks; NUL/CRCR scan clean; brace/paren balanced (1672→1674 lines).
+- **Gate verification (2026-06-28, work-layer passover; master @ da6a256 working tree + edits; mount
+  node_modules, Node v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest 100 files / 1287 tests
+  / 0 fail (sharded 4×: 340+405+274+268) | knip exit 0 (Node-20 shim; 23 unused-export + 29 unused-type
+  pre-existing warnings only — none new; the fix adds no exports). Code-only change; test count unchanged.
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-042 · `WebGLRenderer.ts` (CHART-10) — zero coverage on the PR #6 leak-invariant file
+- **Problem:** `src/renderer/chart/webgl/WebGLRenderer.ts` — the WebGL2 overlay base every
+  density-overlay layer (footprint / volume-profile / vol-heatmap) composes — owns a canvas, a rAF
+  loop, two context-loss listeners and a GPU context, and exists specifically to guarantee the
+  load-bearing PR #6 "clean up what you create" invariant (app `CLAUDE.md`): on `destroy()` the
+  listeners are removed, the rAF loop cancelled, the GL context freed, and the canvas detached. It had
+  **zero test coverage** — the one untested off-perimeter shared/renderer file with real lifecycle
+  logic (the webgl *compute* siblings footprint/volume-profile/vol-heatmap/lod are all tested; the
+  chart-indicator math is covered by `indicators.test.ts`). A teardown regression — a re-introduced
+  listener/timer leak, the exact class as the real `ResizeObserver` leak that shipped in PR #6 — would
+  pass every gate silently. Audit verdict: the file is defensively written (idempotent `destroy`, paint
+  errors swallowed, destroy-guarded tick, context-loss → null-gl short-circuit) — **no logic defect**;
+  the gap is the missing regression net around the invariant.
+- **Solutions:** (a) add a co-located `WebGLRenderer.test.ts` driving the real class under jsdom with a
+  stubbed WebGL2 context + controlled `requestAnimationFrame`, asserting the construct/teardown contract
+  and the leak invariant; (b) defer (the file is "obviously correct" by inspection); (c) cover it
+  indirectly via a consumer (footprint) integration test (heavier, indirect, would not pin the
+  lifecycle).
+- **Decision:** **(a)** — new file only (zero source edit → lowest bridge-corruption risk), off the
+  trading-safety perimeter (renderer presentation; routes no order), same new-test-only pattern as
+  P-024/025/026/031/032/033. jsdom supplies createElement/dispatchEvent; the WebGL2 context and rAF are
+  stubbed so the loop is driven deterministically (the NavController/perf test pattern already in the
+  suite). Pins the PR #6 invariant the file was written to hold. Found via PSD rule 2(d)/rule 4
+  coverage-gap audit (the 2026-06-28 daily's blueprint was COMPLETE; nothing REMAINING/BLOCKED).
+- **Shipped (2026-06-28, work-layer):** new `src/renderer/chart/webgl/WebGLRenderer.test.ts` (14 tests):
+  construction (canvas attach + absolute/zIndex/pointerEvents, custom zIndex, rAF start); frame loop
+  (paint called with gl + pixel dims then reschedules; paint errors swallowed so the loop survives;
+  no-gl skip); `invalidate` (sync frame; no-op after destroy); context loss/restore (preventDefault +
+  stop-paint + cancel; re-acquire gl + `onContextRestored` + resume); and the **destroy leak invariant**
+  (canvas detached, loop cancelled, `WEBGL_lose_context.loseContext()` called, listeners removed so
+  post-destroy events are inert, idempotent second `destroy()`, destroy-guarded stale tick).
+  `WebGLRenderer.ts` is byte-for-byte unchanged — production cannot regress from this commit. NUL/CRCR
+  scan clean; brace/paren balanced.
+- **Gate verification (2026-06-28, work-layer; master @ da6a256 working tree + edits; mount
+  node_modules, Node v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest 100 files / 1287
+  tests / 0 fail (sharded 4×: 340+405+274+268; WebGLRenderer's 14 confirmed collected in shard 4) |
+  knip exit 0 (Node-20 shim; 23 unused-export + 29 unused-type pre-existing warnings only — none new,
+  the test adds no exports). My contribution is +14 (`WebGLRenderer.test.ts`); the remaining delta from
+  this session's boot reading (98/1268, a stale `feat/d10` bridge sync) is `extent.test.ts` (+1 file/+5,
+  the daily's P-041 test the stale tree lacked) — both reconcile to 100/1287.
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-041 · `PortfolioMiniPanel` spreads an unbounded PnL-snapshot array into `Math.min`/`Math.max`
+- **Problem:** `PortfolioMiniPanel.tsx` builds its equity-curve sparkline with
+  `const min = Math.min(...snapshots), max = Math.max(...snapshots)` (`:54`) and duplicates the same
+  spread four more times in the SVG baseline (`:77-78`). `snapshots` <- `getPnlSnapshots(sid)` <-
+  `listPnlSnapshots` (`persistence.ts:374`, `SELECT * FROM pnl WHERE session_id=? ORDER BY timestamp
+  ASC` — **no LIMIT**), and `recordPnlSnapshot` runs every 60s (`trading-engine.ts:568`) with no cap.
+  An always-on session grows `snapshots` past the V8 spread-argument cap (~65k–125k) in ~45 days, at
+  which point `Math.min(...snapshots)` throws `RangeError: Maximum call stack size exceeded` and the
+  panel `useMemo` crashes (blank / error-boundary panel). The P-027 (vol-heatmap) / QuadPaneChart
+  unbounded-spread class, not previously swept into the panel layer. Reachable in normal use given
+  the always-on institutional-terminal vision; the spread path was untested.
+- **Solutions:** (a) single-pass `seriesExtent` helper in `renderer/lib/` computing min/max in one
+  loop, routed through the panel polyline + baseline (off-perimeter, root fix at the spread site);
+  (b) add a `LIMIT`/cap to `listPnlSnapshots` (smallest code, but **PERIMETER one-way-door** — would
+  change what `risk-gates.ts:308` sees, needs operator sign-off); (c) leave as-is (latent crash).
+- **Decision:** **(a)** — smallest off-perimeter blast radius, fixes the root where the spread lives,
+  a reusable helper prevents reintroduction, and dedupes the 9 spreads into one pass. (b) is VETOED
+  for autonomous work (touches the risk-gate VaR input); recorded as operator-deferred. Found via PSD
+  rule 2(d) audit (self-directed NEXT from the P-039/P-040 chart-layer sweep).
+- **Shipped (2026-06-28, daily PSD):** new `src/renderer/lib/extent.ts`
+  (`seriesExtent(values): {min,max}`, identity extent for empty) + `extent.test.ts` (+5 tests, incl.
+  a 300k-element no-throw mirroring `vol-heatmap.test.ts`). `PortfolioMiniPanel.tsx` 3 edits (import;
+  `eqMin/eqMax` memo + path rewrite + guarded `baseY`; JSX `y1/y2 -> {baseY}`) — CRLF-safe python
+  edits, anchors count==1, NUL/CRCR clean, zero `...snapshots` spreads remain (the 1 mention is the
+  explanatory comment). `risk-gates.ts:308` verified safe (for-loop, no spread) and left untouched.
+- **Gate verification (2026-06-28, master @ da6a256 working tree + edits, mount node_modules, Node
+  v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest 100 files / 1287 tests / 0 fail
+  (sharded 8x: 193+155+252+181+129+148+143+86) | knip exit 0 (Node-20 shim; 29 pre-existing
+  CHART-barrel unused-type warnings, none new — `Extent` is used via the function signature).
+- **Status:** SHIPPED — awaiting operator commit.
 
 ### P-040 · `indicator-graph.ts` `applyStdev` divides by `period` with no `period <= 0` guard
 - **Problem:** `applyStdev` (`src/shared/chart-indicators/indicator-graph.ts:111-121`, CHART-18)
@@ -556,6 +666,99 @@ updated: 2026-06-27
 
 ## Closed — verified
 
+### Session: 2026-06-28 work-layer (finisher / execution layer, scheduled)
+- **Boot (file-bridge nondeterminism):** the mount served a **stale** working tree + ledger at boot —
+  it showed `feat/d10-funded-account @ e158e48` with the ledger topping out at P-040 and **no**
+  2026-06-28 daily handoff, so the run opened in the rule-1 fallback. Mid-session the bridge re-synced
+  to the true current tree (`master @ da6a256`, the 2026-06-28 daily's P-041 already shipped, handoff
+  present). Re-read the current handoff/ledger; reconciled. Lesson re-confirmed: do not trust a single
+  boot read under the bridge — re-verify.
+- **Infra recovery (P-018/P-021 class, real this session):** the boot tree had **10 source files
+  corrupted** by the bridge — 9 trailing-NUL pads (`indicators.test.ts`, `double-top.ts`,
+  `double-bottom.ts`, `ensemble-fuser.ts`+`.test.ts`, `simulator-bracket.ts`+`.test.ts`,
+  `id-generator.test.ts`, `rng.test.ts`) and **1 mid-statement truncation** (`main/index.ts` cut at
+  line 1156, losing the `before-quit` tail). typecheck was RED (TS1127 invalid-character / TS1002
+  unterminated-string). Repaired: python `rstrip(b'\x00')` on the trailing-NUL files (each verified
+  trailing-only + brace-balanced); for `index.ts`, spliced the lost tail from the `e158e48` git object
+  while **preserving** the working tree's P-037 `onHealthReport` push (line 557) — restored
+  byte-for-byte to the intended content (gates green). Not a new ledger number — this is the standing
+  P-018(b)/P-021 file-bridge artifact class (the daily hit the same class on `.git/HEAD`). git CLI HEAD
+  is broken **again** in this session's view (loose refs valid: `master=da6a256`, `feat/d10=5b1fc5a`)
+  — reinforces operator item #1 (index/HEAD hygiene).
+- **Blueprint execution:** the 2026-06-28 daily handoff reported its blueprint COMPLETE (P-041; all
+  Layer-3 tasks DONE) — **nothing REMAINING, nothing BLOCKED, no APPROVAL NODES**. Independently
+  re-verified P-041 per the daily's NEXT: `PortfolioMiniPanel.tsx` imports `seriesExtent` and has zero
+  `Math.min/max(...snapshots)` spreads (one mention is a comment); `extent.test.ts` (5) green. Correct.
+- **Code audit (PSD rule 2(d) / rule 4):** the daily's NEXT confirmed the webgl-compute + chart-indicator
+  + funded layers clean and the `Sparkline`/`FundedAccountPanel` spreads bounded — re-confirmed. The
+  one remaining untested off-perimeter file with real logic is **`WebGLRenderer.ts`** (CHART-10), the
+  WebGL2 base that exists to hold the PR #6 "clean up what you create" leak invariant — defensively
+  written (no logic defect) but with **zero coverage**. Shipped **P-042**: a new co-located
+  `WebGLRenderer.test.ts` (14 tests) pinning construct/teardown + the leak invariant under jsdom with a
+  stubbed GL context + controlled rAF. New-file-only; source byte-unchanged.
+- **Gates (final, master @ da6a256 working tree + edits, mount node_modules, Node v22):** typecheck
+  exit 0 | lint exit 0 (0 warnings) | vitest 100 files / 1287 tests / 0 fail (sharded 4×:
+  340+405+274+268) | knip exit 0 (Node-20 shim; 23 unused-export + 29 unused-type pre-existing warnings
+  only — none new). Shipped this session: **P-042** (+14). The corruption repair restored the suite from
+  RED to this green.
+- **Approval nodes flagged for operator:** none new. Reinforced standing: git `.git/index` + HEAD
+  corruption (operator item #1 — recurred this session; needs `git reset` mixed + lock/litter cleanup),
+  the uncommitted P-024→P-042 backlog (commit per AGENTS branch→PR; L1.F/P-009 needs human sign-off),
+  P-041 root = a `LIMIT`/retention cap on `listPnlSnapshots` (perimeter — `risk-gates.ts` reads it),
+  and P-007/P-014/P-017/P-020/P-022/P-028.
+- **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git add / commit).
+
+### Session: 2026-06-28 work-layer — operator-directed passover (claim validation + P-043)
+- **Mandate:** operator asked for a final passover — validate every claim from the 2026-06-28 daily
+  before touching anything, then ship a high-leverage off-perimeter upgrade. Git is **functional again**
+  this run (`.git/HEAD` clean, 24 bytes, no NUL — the daily's `printf` recovery is now visible; `git
+  status` sane), so validation used real git diffs/objects.
+- **Claims validated (all TRUE, file:line):** (1) blueprint present (10,527 B). (2) P-041 fix live —
+  `PortfolioMiniPanel.tsx:13/56` uses `seriesExtent`, **zero** `Math.min/max(...snapshots)` spreads
+  (the one `...` is a comment). (3) P-041 SHIPPED + session entry in ledger. (4) gates green
+  (re-ran: 100/1287, all four). (5) **Sparkline/FundedAccountPanel spreads bounded** — every
+  `q.sparkline` is a fixed rolling window (`live-market.ts:49/142`, `market-data.ts:105/227`:
+  `new Array(SPARKLINE_LENGTH).fill` + `shift()/push()`), and `FundedAccountPanel:360` spreads
+  `ledger.slice(-10)` (≤10). (6) webgl + shared-math clean — re-confirmed; `risk-gates.ts:308`
+  consumes `getPnlSnapshots()` via `.map().equity` + a `for` loop (**no spread** — perimeter, untouched).
+  (7) `listPnlSnapshots` (`persistence.ts:374`) is `SELECT * FROM pnl … ORDER BY timestamp ASC` —
+  **no LIMIT** confirmed (perimeter root-cause; correctly deferred to operator sign-off). (8) git HEAD
+  NUL-corruption + recovery — confirmed (now clean). (9) git index phantom entries — were real at the
+  daily's runtime; **not present in the current `.git` view** (the bridge re-synced; `git status` is
+  clean save the expected backlog + a few stray untracked junk files `*.txt`/`Untitled.canvas`).
+- **New defect found + shipped (off-perimeter): P-043** — ran the PR #6 leak-class sweep
+  (add/removeEventListener, set/clearTimeout|Interval, Observer/disconnect) across the renderer. Found
+  the **central `ChartPanel` leaks its `ResizeObserver` on every remount** (created `const ro` inside the
+  init IIFE; cleanup disposes the chart but never `ro.disconnect()`) — the exact PR #6 class, already
+  fixed in `QuadPaneChart` but un-swept here. Fixed with the canonical effect-scoped `let ro` +
+  `ro?.disconnect()` (3-hunk diff, byte-matches the QuadPaneChart form). Other sweep hits cleared:
+  `main.tsx:14` CSP listener (app-lifetime, intentional), `App.tsx` arm timer (ref-managed +
+  `clearTimeout`), `CommandPalette:31` (one-shot `?.focus()`, no state). Low-priority note for a future
+  pass: `SettingsModal.tsx:77` defers `refreshSelfEval()` via an uncleared `setTimeout` (possible
+  setState-after-close warning — minor, not fixed to avoid churning a second .tsx).
+- **Gates (final, master @ da6a256 working tree + edits):** typecheck exit 0 | lint exit 0 (0 warnings)
+  | vitest 100 files / 1287 tests / 0 fail (sharded 4×: 340+405+274+268) | knip exit 0 (Node-20 shim;
+  23 unused-export + 29 unused-type pre-existing warnings only — none new). Shipped this passover: P-043.
+- **Status:** Passover complete — all changes UNSTAGED per AGENTS.md (no git add / commit).
+
+### Session: 2026-06-28 daily PSD (planner / first executor, scheduled)
+- **Infra recovery:** `.git/HEAD` was NUL-corrupted (`ref: refs/heads/master` + NUL padding to 40
+  bytes — file-bridge artifact, P-018 class); every git command failed with "branch appears to be
+  broken". Reflog confirmed HEAD legitimately on `master` (last op `pull --ff-only` -> da6a256), so
+  rewrote `.git/HEAD` with a clean `printf` ref. Git functional again.
+- **Index corruption (flagged, NOT auto-fixed):** the index carries phantom entries from the same
+  bridge event — control-char paths (`\004`, `\324`, `\024`, `./`), `UU` unmerged states with no
+  MERGE_HEAD, and staged deletions of files that also exist untracked. Mass `git reset` risks
+  clobbering the operator's intentional staged cleanup (P-022), so left for operator review per
+  AGENTS.md "leave unstaged" — see handoff operator items.
+- **Pick (PSD rule 2d):** handoff queue exhausted (2026-06-27 COMPLETE); no actionable DECIDED entry
+  (P-009 perimeter; P-011/P-012 milestone-deferred). Audited the webgl chart-compute layer
+  (footprint/volume-profile/lod/vol-heatmap — all clean, P-027/P-030 confirmed fixed), funded/
+  (perimeter or P-028 operator-deferred), and shared + chart-indicator math (ema/rsi/indicators all
+  guard `period`) -> found **P-041** (PortfolioMiniPanel unbounded snapshot spread). Shipped (a);
+  all four gates green; everything UNSTAGED.
+- **Blueprint:** `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/docs/superpowers/specs/2026-06-28-portfolio-equity-extent-spread-ultraplan.md`.
+
 ### Session: 2026-06-27 work-layer run 2 (finisher / execution layer, scheduled)
 - **Boot:** feat/d10-funded-account @ e158e48; read AGENTS / ARCHITECTURE / ledger + the 2026-06-27
   daily handoff and the 6 AM work-layer run note. Both reported the blueprint COMPLETE (P-034) and the
@@ -762,8 +965,6 @@ updated: 2026-06-27
 - **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git add / commit).
 
 ### Session: 2026-06-24 daily PSD (standing agent)
-
-### Session: 2026-06-24 daily PSD -- second run (standing agent)
 - **Work:** Boot on feat/chart-interaction-layer @ 1cf9b0e; read AGENTS/ARCHITECTURE/ledger;
   verified no DECIDED entries to pick up. Surveyed safe utility layer; identified
   `rng.ts` + `id-generator.ts` as foundational untested utilities (P-024).

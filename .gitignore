@@ -153,3 +153,6 @@ Vault/Tactics/*
 !Vault/Tactics/README.md
 Vault/Brain/*
 !Vault/Brain/README.md
+
+# sandbox cleansing holding-pen (EPERM-unlink; operator: rm -rf .trash)
+/.trash/
