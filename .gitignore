@@ -156,3 +156,10 @@ Vault/Brain/*
 
 # sandbox cleansing holding-pen (EPERM-unlink; operator: rm -rf .trash)
 /.trash/
+
+# electron-vite crash debris (timestamped config copies — P-057 class)
+electron.vite.config.*.mjs
+
+# Playwright / perf-canary output
+playwright-results/
+test-results/
