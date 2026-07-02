@@ -165,6 +165,25 @@ updated: 2026-07-02
 - **Status:** OPEN (found 2026-07-02, work-layer code audit of the shipped 2026-06-29 Intel
   workspace feature; `intelLayoutStore.ts:71`).
 
+### P-065 · Stale `.git/index.lock` (2026-06-29 03:16, 0 bytes) is EPERM-locked — all index writes blocked from agent sandbox
+- **Problem:** `mc4/.git/index.lock` has existed since 2026-06-29 03:16 (0 bytes — a
+  crashed git process, not an active one). The sandbox file bridge returns EPERM on
+  unlink (`rm -f` → "Operation not permitted", same class as P-057's EPERM build
+  debris), so every index-mutating git operation in the working copy fails: commit,
+  checkout, stash, add. This is very plausibly WHY the P-024→P-063 backlog accumulated
+  with no commit checkpoint — agent sessions could push objects/refs but never commit
+  or switch branches in place. Ref + object writes still work (verified: two branches
+  pushed into the repo 2026-07-02).
+- **Solutions:** (1) Operator deletes `C:\Users\User\mc4\.git\index.lock` from
+  Windows (one command: `del C:\Users\User\mc4\.git\index.lock`) — recommended;
+  (2) agents continue the /tmp-clone commit-and-push-back workflow indefinitely —
+  works (this session proves it) but leaves the mounted working tree permanently
+  un-switchable and un-reconcilable.
+- **Decision:** OPERATOR ACTION REQUIRED — delete the lock, then
+  `git checkout -f chore/backlog-checkpoint-p024-p063` (tree content is already
+  identical; `-f` only reconciles the index).
+- **Status:** OPEN (operator)
+
 ### P-063 · `shared/indicators.ts` kernels accept an unvalidated `period`/`lookback` — latent NaN / silent-wrong-window class
 - **Problem:** `ema`/`rsi`/`atr`/`sma`/`trendStrength`/`rollingVolatility`
   (`src/shared/indicators.ts:9,20,27,43,58,72,81`) all take a `period`/`lookback` number
@@ -205,6 +224,46 @@ updated: 2026-07-02
 
 
 ## Shipped — awaiting verification
+
+### P-064 · Filesystem reorganization to monorepo layout — executed on branch, awaiting operator review + merge
+- **Problem:** Root scatter (18 loose root files: rebase bundles, one-off .bat files,
+  duplicate policy docs, screenshots) + the deeply nested `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`
+  path. Operator directive `REORGANIZATION-PROMPT.md` (2026-07-02) ordered a
+  production-grade GitHub-ready restructure. The manifest, however, was written
+  without filesystem grounding and contained factual errors (assumed root LICENSE;
+  assumed tracked 90-REFERENCE; missed that Vault is live runtime memory; missed
+  the scheduled-pipeline's root-path reads; prescribed .bat→.sh conversion in a
+  Windows-only repo; prescribed npm workspaces without considering hoisting under
+  electron-builder).
+- **Solutions:** (1) Execute the manifest literally — breaks the scheduled agent
+  pipeline, converts working .bat to dead .sh, risks node_modules hoisting;
+  (2) ground-truth-adapted execution — every move verified against the filesystem
+  per Prime Directive 0.5, deviations documented; (3) defer entirely.
+- **Decision:** (2). Executed on `refactor/filesystem-reorganization` (5 commits,
+  stacked on `chore/backlog-checkpoint-p024-p063`). Core moves: `satex-app/` →
+  `apps/satex-terminal/` (pure git-mv, history verified with `--follow`), root doc
+  scatter → `docs/guides|plans`, bundles → `reference/git-bundles/`, one-off scripts
+  → `scripts/archive/`, app LICENSE → root, root monorepo `package.json` (no
+  workspaces field — hoisting is a separate operator decision), new
+  GETTING-STARTED/CONTRIBUTING/SECURITY/FAQ, root README landing page. Deviations
+  (all in PR body): AGENTS/ARCHITECTURE/CONSTITUTION stay at root (scheduled
+  pipeline + agent tooling read them there); Vault/ rename-restructure DEFERRED
+  (live runtime memory, mostly untracked, hardcoded consumers); .bat stays .bat;
+  no infrastructure/ scaffolding (nothing real to put in it; no docker exists);
+  identical root duplicates of docs/policy files deleted, not re-duplicated.
+- **Evidence:** Gates on the reorganized tree (sandbox, Node 22.22.3):
+  typecheck exit 0 · lint exit 0 (0 warnings) · vitest 116 files / 1464 tests /
+  0 fail (byte-identical to pre-reorg baseline measured this session) · knip =
+  sandbox oxc-parser OOM in BOTH baseline and post-move runs (documented §2.9
+  environment class — CI is the arbiter). History: `git log --follow` traces
+  trading-engine.ts through 55 commits to the original flatten.
+- **Post-merge operator checklist:** (1) update the 5AM/6AM scheduled-task prompts
+  (`REPO\00-PROJECT-ROOT\01-SATEX-CORE\satex-app` → `REPO\apps\satex-terminal`);
+  (2) `npm install` in `apps/satex-terminal/` (node_modules does not follow a git
+  merge); (3) optionally rename untracked `90-REFERENCE/` → `reference/vendor/`
+  (untracked, so not part of the git reorg); (4) CI must run all four gates green
+  on the PR before merge (knip verdict comes from CI).
+- **Status:** SHIPPED (branch, gate-verified) — awaiting operator review, CI, merge
 
 ### P-061 · `indicator-settings.ts` defaults paths alias module-constant nested objects into the live cache
 - **Problem:** the three defaults fallback paths return `{ ...DEFAULT_SETTINGS }`

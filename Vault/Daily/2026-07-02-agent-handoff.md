@@ -192,3 +192,43 @@ carry NaN/Infinity, so non-finite junk routes through `set()` in test 15 instead
    `tactics.ts` (survey shape before assuming any harness).
 4. OPERATOR ITEMS: unchanged from Session 1 list, plus the new P-061 (agent-doable next
    session) and backlog range bump to P-024→P-061.
+
+---
+
+## SESSION 4 (overnight) — backlog checkpoint + filesystem reorganization
+
+**What happened.** Operator directive: execute `REORGANIZATION-PROMPT.md`. Ground-truth
+survey first (Prime Directive 0.5) found the manifest's own precondition violated — 60
+dirty paths (the P-024→P-063 backlog) — plus six factual errors in its file map. Executed
+as two stacked branches via the /tmp-clone workflow (P-018/P-021 lineage):
+
+1. **`chore/backlog-checkpoint-p024-p063`** — commit `da1f748`: the entire accumulated
+   backlog (62 files, +8628/−24), including CONSTITUTION v3, Intel workspace, coverage
+   waves, P-049..P-061, plus this ledger/handoff update on top.
+2. **`refactor/filesystem-reorganization`** — 5 commits: docs consolidation,
+   scripts/bundles archive, `satex-app` → `apps/satex-terminal` (pure git-mv), path-ref
+   updates (CI, husky, .claude, living docs, .bat, index.ts comment), root monorepo files.
+
+**Gates (measured, sandbox Node 22.22.3):** baseline at old path AND final at new path:
+typecheck exit 0 · lint exit 0 (0 warnings) · vitest 116/1464/0 · knip = oxc-parser
+sandbox OOM in both runs (§2.9 documented class — CI arbitrates on the PR).
+
+**CRITICAL for next session / operator (see P-065):** `mc4/.git/index.lock` is a stale
+(2026-06-29), EPERM-locked lockfile — the sandbox cannot delete it, so no agent can
+commit/checkout in the working copy (very likely the root cause of the uncommitted
+backlog). Both branches were pushed INTO the repo's refs (that works); the working tree
+is still master + dirty, byte-identical to how the operator left it.
+
+**Operator to-do, in order:**
+1. `del C:\Users\User\mc4\.git\index.lock`
+2. `git checkout -f chore/backlog-checkpoint-p024-p063` (content already on disk)
+3. Push both branches to GitHub (no creds in sandbox), open 2 stacked PRs
+   (bodies ready in `.pr-body-backlog-checkpoint.md` / `.pr-body-filesystem-reorg.md`)
+4. CI green (knip verdict lives there) → merge checkpoint, then reorg
+5. Post-merge: update 5AM/6AM scheduled-task prompt paths; `npm install` in
+   `apps/satex-terminal/`; optionally rename untracked `90-REFERENCE/`
+6. Standing approval queue unchanged: P-057/P-058/P-062/P-063 + P-065 (new)
+
+**Next autonomous pick** (unchanged from Session 3): P-063 after sign-off, else the
+unsurveyed coverage-gap class (system-logs.ts / env.ts / edgar.ts / market-observer.ts /
+live-candle-buffer.ts / auto-update.ts / tactics.ts).
