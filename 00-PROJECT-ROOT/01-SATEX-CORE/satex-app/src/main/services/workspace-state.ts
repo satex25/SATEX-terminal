@@ -157,5 +157,11 @@ function sanitize(input: Partial<WorkspaceState>): WorkspaceState {
     ? input.chartSymbol.toUpperCase()
     : DEFAULT_STATE.chartSymbol
 
-  return { version: 1, workspace, quadSymbols: validQuad, chartSymbol }
+  // Additive field (no version bump): a record written before landingWorkspace
+  // existed simply lacks it, so fall back to the default.
+  const landingWorkspace: Workspace = isWorkspace(input.landingWorkspace)
+    ? input.landingWorkspace
+    : DEFAULT_STATE.landingWorkspace
+
+  return { version: 1, workspace, quadSymbols: validQuad, chartSymbol, landingWorkspace }
 }

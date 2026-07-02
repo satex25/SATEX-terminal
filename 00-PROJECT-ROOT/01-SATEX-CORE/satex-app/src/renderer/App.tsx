@@ -25,6 +25,7 @@ import { TickerTape } from './components/TickerTape'
 import { BottomBar } from './components/BottomBar'
 import { CommandPalette } from './components/CommandPalette'
 import { TweaksPanel } from './components/TweaksPanel'
+import { IntelWorkspace } from './components/intel/IntelWorkspace'
 import { AboutModal } from './components/modals/AboutModal'
 import { ShortcutsModal } from './components/modals/ShortcutsModal'
 import { SettingsModal } from './components/modals/SettingsModal'
@@ -81,6 +82,11 @@ export default function App() {
   // from Vault/Settings/workspace-state.md in the effect below.
   const workspace    = useWorkspaceStore(s => s.state.workspace)
   const setWorkspace = useWorkspaceStore(s => s.setWorkspace)
+  // Startup landing page: the workspace opened once after the splash, applied
+  // exactly once via the ref guard so a later manual switch is never overridden.
+  const landingWorkspace  = useWorkspaceStore(s => s.state.landingWorkspace)
+  const wsHydrated        = useWorkspaceStore(s => s.hydrated)
+  const landingAppliedRef = useRef(false)
 
   // Active replay sessions force the Replay workspace so the user can't
   // accidentally hide the scrubber while a historical tape is playing.
@@ -116,6 +122,15 @@ export default function App() {
     void useWorkspaceStore.getState().hydrate()
   }, [])
 
+  // Apply the configured startup landing page once, after the intro completes
+  // and the persisted workspace state has hydrated (so we read the real choice).
+  useEffect(() => {
+    if (landingAppliedRef.current) return
+    if (!splashDone || !wsHydrated) return
+    landingAppliedRef.current = true
+    setWorkspace(landingWorkspace)
+  }, [splashDone, wsHydrated, landingWorkspace, setWorkspace])
+
   // v0.6 Phase 1 — apply the active theme by writing `data-theme` on <html>.
   // The themeStore's initial state already reflects localStorage, so this
   // effect runs once at mount with the persisted value, then again on every
@@ -134,7 +149,7 @@ export default function App() {
   useEffect(() => {
     // Map digit keys 1..5 to workspace tabs in TopBar order.
     const WS_DIGITS: Record<string, Workspace> = {
-      '1': 'Trade', '2': 'Focus', '3': 'Markets', '4': 'Replay', '5': 'Quad',
+      '1': 'Trade', '2': 'Focus', '3': 'Markets', '4': 'Replay', '5': 'Quad', '6': 'Intel',
     }
 
     // S1-5: cancel any in-flight arm-hold timer cleanly. Idempotent.
@@ -260,7 +275,7 @@ export default function App() {
               >
                 <div style={{ color: 'var(--bb-neg, #ff4655)', fontWeight: 600 }}>⚠ {effectiveWs} workspace failed to render</div>
                 <div style={{ color: 'var(--bb-text-dim, rgba(232,230,224,0.7))', fontFamily: 'var(--font-mono, ui-monospace, monospace)', whiteSpace: 'pre-wrap', maxWidth: '680px' }}>{err.message}</div>
-                <div style={{ color: 'var(--bb-text-dim, rgba(232,230,224,0.45))' }}>The rest of the terminal is unaffected — press ⌘1–⌘5 or use the tabs above to switch workspaces.</div>
+                <div style={{ color: 'var(--bb-text-dim, rgba(232,230,224,0.45))' }}>The rest of the terminal is unaffected — press ⌘1–⌘6 or use the tabs above to switch workspaces.</div>
               </div>
             )}
           >
@@ -309,6 +324,7 @@ export default function App() {
               <MacroStripPanel />
             </>
           )}
+          {effectiveWs === 'Intel' && <IntelWorkspace />}
           </ErrorBoundary>
         </div>
         <span className="bb-divider-v" />

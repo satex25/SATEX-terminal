@@ -26,6 +26,8 @@ interface WorkspaceStoreState {
    *  another pane — Quad enforces uniqueness so each pane gets its own series. */
   setQuadSymbolAt: (paneIndex: 0 | 1 | 2 | 3, sym: string) => void
   setChartSymbol:  (sym: string) => void
+  /** Startup landing page — the workspace opened once after the intro. */
+  setLandingWorkspace: (ws: Workspace) => void
   hydrate:         () => Promise<void>
 }
 
@@ -83,6 +85,15 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
     const cur = get().state
     if (cur.chartSymbol === up) return
     const next: WorkspaceState = { ...cur, chartSymbol: up }
+    set({ state: next })
+    persist(next)
+  },
+
+  setLandingWorkspace: (ws) => {
+    if (!(WORKSPACE_TABS as readonly string[]).includes(ws)) return
+    const cur = get().state
+    if (cur.landingWorkspace === ws) return
+    const next: WorkspaceState = { ...cur, landingWorkspace: ws }
     set({ state: next })
     persist(next)
   },

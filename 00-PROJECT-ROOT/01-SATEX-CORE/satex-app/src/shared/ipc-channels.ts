@@ -177,6 +177,12 @@ export const IPC = {
   WORKSPACE_STATE_GET: 'satex:workspace:stateGet',
   WORKSPACE_STATE_SET: 'satex:workspace:stateSet',
 
+  // Intel composable grid layout (own file, decoupled from workspace state).
+  INTEL_LAYOUT_GET: 'satex:intel:layoutGet',
+  INTEL_LAYOUT_SET: 'satex:intel:layoutSet',
+  // Intel read-only analytics fusion (per focused symbol).
+  INTEL_GET: 'satex:intel:get',
+
   // ── P0-2: Trading journal — closed-trade stream + reflection persistence ─
   /** Push: emitted whenever a position closes (entry+exit pair completes). */
   TRADE_CLOSED:       'satex:journal:tradeClosed',

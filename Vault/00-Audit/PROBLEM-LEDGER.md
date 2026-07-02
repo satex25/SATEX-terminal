@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-06-28
+updated: 2026-07-02
 ---
 
 # Problem Ledger
@@ -100,12 +100,513 @@ updated: 2026-06-28
 - **Status:** OPEN (operator ruling). Off the trading-safety perimeter (advisory display; payout
   metrics block no order).
 
+### P-057 · Build debris `electron.vite.config.1782779608985.mjs` pinned by sandbox EPERM
+- **Problem:** satex-app root carries a compiled electron-vite temp config (timestamp-named `.mjs`,
+  1,400 bytes; its bundled `__dirname` references a prior sandbox session `elegant-loving-cannon` --
+  the transient build artifact electron-vite normally deletes after loading `electron.vite.config.ts`).
+  Untracked, so it pollutes every `git status` review of the P-024→P-056 unstaged backlog. The sandbox
+  can neither `rm` nor `mv` it (EPERM on unlink -- the P-018 bridge class; rename requires unlink here
+  because the target is a different directory).
+- **Solutions:** (a) operator one-liner: `del` it (or `git clean -f -- 00-PROJECT-ROOT/01-SATEX-CORE/satex-app/electron.vite.config.*.mjs`);
+  (b) leave it (harmless but permanent status noise); (c) add `electron.vite.config.*.mjs` to
+  `.gitignore` if the pattern recurs (it will, any time electron-vite runs inside a sandbox that dies
+  mid-build).
+- **Decision:** **(a)**, escalating to **(c)** on recurrence -- recorded so it is not lost.
+- **Status:** OPEN (operator one-liner).
+
+### P-058 · Docs describe a services/ domain-subdir layout that never existed in git
+- **Problem:** `ARCHITECTURE.md` §2, `CONSTITUTION.md` §3.1, and ledger P-022 all describe
+  `src/main/services/` as restructured into 7 domain folders (`broker/`, `execution/` ⚠️,
+  `risk/` ⚠️, `market-data/`, `intelligence/`, `subsecond/`, `system/`). The filesystem and
+  git history disagree: only `services/alpaca/` exists (8 tracked files); `git log
+  --diff-filter=A` finds NO commit that ever added the domain subdirs (and none ever deleted
+  them); 98 flat `services/*.ts` files are tracked; `main/index.ts:29-30` imports the flat
+  paths. The flat layer IS the canonical layer, so P-022's premise ("81 old flat files …
+  dead code, entry points use the new paths") is inverted — the flat files are the live
+  code and there are no subdir copies to clean up. Perimeter mapping still resolves
+  (`order-manager.ts` / `risk-gates.ts` / `kill-switch-store.ts` / `live-mode.ts` live flat),
+  but any agent following the docs' ⚠️-folder map greps paths that do not exist
+  (Constitution honesty axiom: the code is the truth and these files have a bug).
+- **Solutions:** (a) fix the three docs to the flat reality (+ re-scope or close P-022) —
+  honest, cheap, keeps the perimeter map accurate; (b) actually perform the domain-subdir
+  restructure the docs describe (a deliberate refactor program across ~98 files + knip/
+  tsconfig/import churn — not a doc fix); (c) leave as-is (every future agent re-discovers
+  the mismatch).
+- **Decision:** defer direction to operator — (a) is the honest default, but whether the
+  restructure is still *intended* (the docs may encode a plan recorded as done) is a
+  repo-shape call (the P-020/P-028 record-don't-freelance pattern). Evidence stands either
+  way; sessions should trust flat paths until ruled.
+- **Status:** OPEN (operator ruling on direction; found 2026-07-02 dawn boot)
+
+### P-062 · Intel grid: an intentionally-emptied layout silently resets to the curated default on reload
+- **Problem:** `intelLayoutStore.ts:66-79` (`hydrate()`) reads the persisted layout, sanitizes
+  it, then applies `clean.length > 0 ? clean : CURATED_DEFAULT_LAYOUT.map(...)` (:71). This
+  conflates two states `intel-layout.ts`'s persistence layer cannot itself distinguish — "no
+  file / corrupt file" (documented default-to-curated behavior, `intel-layout.ts:13-15`) vs.
+  "the operator removed every module on purpose" (`remove(id)` for every placement persists a
+  genuinely empty `[]`, which `IntelGrid.tsx:50-58` already renders correctly as an explicit
+  "No modules placed" empty state while the app is running). On the NEXT launch, hydrate()
+  cannot tell these apart and always repopulates the curated default — silently discarding a
+  deliberate, already-round-tripped operator choice. Not data loss at the persistence layer
+  (`sanitizeShape([])` in `intel-layout.ts` correctly returns `[]`, not defaults; verified by
+  reading — the empty array really is written and read back) — only the renderer's hydrate-time
+  interpretation collapses the two cases into one.
+- **Solutions:** (a) leave as-is — a fully-emptied grid is a rare, likely-accidental state;
+  silently repopulating a curated, useful default is arguably friendlier than a blank tab with
+  no discoverability outside edit mode; (b) distinguish the two cases on disk (e.g. a
+  `{ layout: [], everCustomized: true }` wrapper or an explicit reset sentinel) so hydrate can
+  tell "never touched" from "touched down to nothing" — a real behavior change touching both
+  the persisted file shape and both read/write sides; (c) keep current behavior but document it
+  explicitly (the existing "Reset layout" button already does the curated-to-empty direction
+  in reverse) and let the operator decide if (b) is worth the schema churn.
+- **Decision:** deferred to operator — this is a product/taste call (what should a
+  fully-emptied Intel grid *mean* on restart?), not a single-answer defect; the CONSTITUTION
+  §2.3 judgment boundary applies (record, don't freelance). No code changed.
+- **Status:** OPEN (found 2026-07-02, work-layer code audit of the shipped 2026-06-29 Intel
+  workspace feature; `intelLayoutStore.ts:71`).
+
+### P-063 · `shared/indicators.ts` kernels accept an unvalidated `period`/`lookback` — latent NaN / silent-wrong-window class
+- **Problem:** `ema`/`rsi`/`atr`/`sma`/`trendStrength`/`rollingVolatility`
+  (`src/shared/indicators.ts:9,20,27,43,58,72,81`) all take a `period`/`lookback` number
+  parameter with no floor/positivity guard — the exact P-039/P-040/P-049 degenerate-input
+  class already fixed one layer over in `swing-points.ts` (P-049), but never applied here.
+  Two distinct failure shapes: `rsi(closes, 0)` — the length guard (`closes.length <
+  period+1`) does not catch `period<=0`; the accumulation loop's range inverts to empty
+  (`gains=losses=0`); `avgGain`/`avgLoss` divide `0/0` to `NaN`; and `avgLoss===0` (false —
+  it is `NaN`) fails to short-circuit, so the function returns `NaN` with no guard, no throw,
+  no log. `sma`/`atr` with `period<=0` do NOT NaN — `closes.slice(-period)` with `period=0` is
+  JS's `slice(-0)`, which returns the FULL array (not empty), so the "windowed" average
+  silently becomes an all-history average; a negative period slices from a different,
+  unintended offset. Both are silent-wrong, not crashes. `ema`'s `k = 2/(period+1)` divides by
+  zero at `period=-1`. LATENT, not active: a repo-wide grep for every `rsi(`/`atr(`/
+  `computeSnapshot(` call site (excluding tests) shows every one passes a fixed positive
+  literal (9, 14, 20, 21, or 50) — `computeSnapshot` itself only ever calls these with
+  hardcoded literals. `rsi`/`atr` are exported, though, so any future caller (e.g. a
+  configurable-period feature — note the chart-display `indicator-settings.ts` `rsiPeriod`
+  today feeds a SEPARATE renderer-side RSI, not this file) would inherit the hazard silently.
+- **Solutions:** (a) mirror the shipped P-049 pattern exactly — floor the parameter and guard
+  `< 1` at each of the 6 call sites, returning the function's existing insufficient-input
+  value, consistent with the sibling file, smallest possible diff; (b) a single shared
+  `clampPeriod(n, floor=1)` helper used by all 6 — more DRY, marginally larger diff, one new
+  internal helper; (c) defer — zero live callers today, revisit only if a variable period is
+  ever wired in.
+- **Decision:** flagged, NOT implemented this session — `indicators.ts` is on the
+  live-decision input path (feeds `Brain.features` -> `scoreLocal` -> every `AiDecision`) and
+  the work-layer protocol's Section 4 marks this file class READ-ONLY: flag defects, never
+  edit without human sign-off, even off the hard execution/risk perimeter. Recommend (a) on
+  sign-off — same pattern, same file family, one prior precedent already reviewed and shipped
+  (P-049).
+- **Status:** OPEN (found 2026-07-02, work-layer live-decision-path standing audit;
+  `src/shared/indicators.ts`; human sign-off required before any edit).
+
 ## In progress
 
 *(entries move here when an agent starts work; move to Shipped with commit/PR reference)*
 
 
 ## Shipped — awaiting verification
+
+### P-061 · `indicator-settings.ts` defaults paths alias module-constant nested objects into the live cache
+- **Problem:** the three defaults fallback paths return `{ ...DEFAULT_SETTINGS }`
+  (`src/main/services/indicator-settings.ts:69,76,81`) — a shallow spread whose `enabled`
+  object and `emaPeriods` array remain the SAME references as the shared
+  `DEFAULT_INDICATOR_SETTINGS` module constant (`src/shared/chart-indicators/types.ts:115-129`).
+  The result is also cached (:40), so any future in-main mutation of a defaults-path `get()`
+  result would silently corrupt process-lifetime defaults for every later consumer. It was
+  latent, not active: the only consumer is the IPC handler and structured-clone serialization
+  shields the renderer. Contrast: the sanitize path builds fresh objects (fresh `enabled`
+  record :129, `[...DEFAULT_SETTINGS.emaPeriods]` :156 — pinned by P-060 test 8), and
+  `workspace-state.ts:63` does the defensive copy its P-059 test pins.
+- **Solutions:** (a) `return sanitize({})` at the three sites — reuses the existing
+  normalizer, provably fresh objects, semantics identical today; (b)
+  `structuredClone(DEFAULT_SETTINGS)` — explicit, but a second copying idiom in the same
+  file; (c) leave + comment (hazard persists).
+- **Decision:** **(a)** — one line per site, off-perimeter, fits any next code session;
+  the P-060 suite already guards behavior equivalence (defaults deep-equal + sanitize-path
+  copy semantics).
+- **Shipped (2026-07-02, work-layer):** the three sites (`:69,76,81`) now `return sanitize({})`
+  — byte-verified 3-for-3 replacement (`old_len` 6041 -> `new_len` 6008 bytes, exactly
+  `3 × -11`), CRLF preserved (167/167 unchanged), 0 NUL / 0 CRCR post-edit. Regression-pinned
+  in `indicator-settings.test.ts` (new describe block, +1 test, 17 total): all three
+  defaults-fallback call sites — no-file, no-fence, and a forced `readFileSync` EISDIR (the
+  settings path replaced with a directory, exercising the actual `catch` branch at :81 for the
+  first time) — now return objects that are NOT the same reference as
+  `DEFAULT_INDICATOR_SETTINGS.enabled` / `.emaPeriods`, plus a direct mutation-safety assertion
+  that the shared constant survives a caller mutating a returned defaults object. Deliberately
+  does not re-assert the old aliasing (superseded, not enshrined).
+- **Gate verification (2026-07-02, work-layer; master @ 664c0d5 working tree; mount
+  node_modules, Node v22.22.3):** pre-edit baseline independently re-verified **116 files /
+  1463 tests / 0 fail**, knip 55 lines — byte-exact vs the 07-02 session-2 final stamp —
+  before any edit. Post-edit: typecheck exit 0 | lint exit 0 (0 warnings) | vitest **116
+  files / 1464 tests / 0 fail** (sharded 4×: 387+452+316+309; +1 test exactly, the new
+  regression test — no new file) | knip exit 0 (55 lines, byte-identical).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-060 · `indicator-settings.ts` — last JSON-in-markdown settings service shipped untested
+- **Problem:** the chart-indicator toggle persistence service
+  (`src/main/services/indicator-settings.ts`, Phase 11) carried the richest sanitize surface
+  of the settings-file family — enabled-map filtering against `INDICATOR_IDS`, `EMA_PERIODS`
+  membership validation, `clampInt` round+clamp (rsiPeriod [2,200], fibLookback [5,1000]),
+  `legendVisible` backward-compat, version pinning (`sanitize` :128-161) — plus the family's
+  only `reload()` manual-edit escape hatch (:54-57), with zero co-located coverage. Same
+  silent-regression class P-059 closed for its siblings; named #1 NEXT by the 05:0x handoff.
+- **Solutions:** (a) new-file-only co-located suite via the proven real-tmpdir harness
+  (subsecond-prefs / kill-switch-store / P-059 convention), junk driven through the real
+  file-parse path so TS casts stay confined to one write-hygiene test; (b) defer; (c) mock
+  `node:fs` (diverges from convention, exercises less of the real render/parse cycle).
+- **Decision:** **(a)** — pattern proven four times over, zero source edits, off-perimeter
+  (chart toggles route no order; the only perimeter-keyword hit is the doc-comment harness
+  citation — the P-059 precedent).
+- **Shipped (2026-07-02, dawn planner re-run session 2):** NEW
+  `src/main/services/indicator-settings.test.ts` (16 tests: defaults + no-side-effect get;
+  fresh-instance round-trip; set-echo; documented cache contract + `reload()` pickup of
+  manual edits; enabled-map unknown-id/non-boolean filtering with output-key-set pin; EMA
+  period membership filter + fresh-copy default fallback (`[...]` :156 pinned);
+  rsiPeriod/fibLookback clamp+round+non-number tables; legendVisible absent→true /
+  explicit-false honored; version 99→1; tolerant partial hydrate; no-fence + corrupt-JSON
+  recovery; sanitize-BEFORE-write proven against the raw written fence + analyst preamble).
+  LF; scan 0 NUL / 0 CRCR; SUT byte-for-byte unchanged. Blueprint:
+  `docs/superpowers/specs/2026-07-02-indicator-settings-coverage-ultraplan.md`.
+- **Gate verification (2026-07-02 session 2; master @ 664c0d5 working tree; mount
+  node_modules, Node v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest **116
+  files / 1463 tests / 0 fail** (sharded 4×: 387+452+316+308; +1 file / +16 tests vs the
+  115/1447 baseline, exactly) | knip exit 0 (55 lines, byte-identical). The session's
+  pre-edit baseline also independently re-verified P-059's 115/1447 stamp.
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-059 · Live main-process settings services (`intel-layout`, `workspace-state`) shipped untested
+- **Problem:** the two JSON-in-markdown Vault settings services on the boot path had zero
+  co-located coverage: `src/main/services/intel-layout.ts` (P-048 flagship layout
+  persistence — get/set/cache, `parseJsonFence`, `sanitizeShape` :117-136 dropping unknown
+  ids / dupes / non-finite geometry) and `src/main/services/workspace-state.ts` (`sanitize`
+  :131-167 — quad normalize/dedupe/pad/trim, chartSymbol fallback, and the freshly-shipped
+  P-048 `landingWorkspace` tolerant hydrate :162-164, untested at the service layer). A
+  silent regression here decides what the operator sees at boot and passes every gate —
+  the P-047/P-050 class at the service layer. Both siblings (`subsecond-prefs`,
+  `kill-switch-store`) already carry exactly this test shape; these two were the gap the
+  2026-07-01 work-layer §8 NEXT pointed at.
+- **Solutions:** (a) new-file-only co-located tests via the proven `subsecond-prefs.test.ts`
+  real-tmpdir round-trip harness (mkdtempSync/rmSync; fresh-instance reads so the cache
+  cannot mask the read path); (b) defer; (c) mock `node:fs` (diverges from the in-repo
+  convention, exercises less of the real render/parse cycle).
+- **Decision:** **(a)** — matches the established pattern, zero source edits, off the
+  trading-safety perimeter (Vault settings persistence routes no order; patch-grep of both
+  new tests clean — the only "kill-switch" hits are doc-comment pattern citations).
+- **Shipped (2026-07-02, dawn planner):** NEW `intel-layout.test.ts` (14 tests: read-only
+  get / fresh-instance round-trip / set-echo / empty-layout persist / documented in-instance
+  cache; sanitize drops unknown + duplicate ids, non-objects, non-finite geometry, non-array
+  fence; no-fence + corrupt-JSON recovery; sanitize-BEFORE-write proven against the raw
+  file; hand-inspectable preamble) and NEW `workspace-state.test.ts` (14 tests: defaults +
+  no-side-effect get + defensive quad copy; full round-trip; set-echo sanitization incl.
+  uppercase + pad-to-4; invalid workspace fallback with valid siblings preserved; quad
+  lowercase/junk/dupe/pad, >4 trim, non-array fallback; chartSymbol upper + fallback;
+  landingWorkspace missing/invalid/valid-Intel; version 99→1; no-fence + corrupt-JSON
+  recovery). Both LF; scans 0 NUL / 0 CRCR; both service sources byte-for-byte unchanged.
+  Blueprint: `docs/superpowers/specs/2026-07-02-main-service-persistence-coverage-ultraplan.md`.
+- **Gate verification (2026-07-02; master @ 664c0d5 working tree; mount node_modules, Node
+  v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest **115 files / 1447 tests /
+  0 fail** (sharded 4×: 387+452+316+292; +2 files / +28 tests vs the 113/1419 baseline,
+  exactly) | knip exit 0 (55 lines, byte-identical to baseline).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-056 · `IntelLayoutSetReq` unbounded array + `ipc-schemas.ts` had zero co-located coverage
+- **Problem:** `src/shared/ipc-schemas.ts:250` (pre-fix) -- the Intel layout SET contract was
+  `z.array(ModulePlacementReq)` with no length bound, against the file's own bounded-collection
+  convention (`quadSymbols` is `.length(4)`); a valid layout structurally holds at most one placement
+  per module (ids enum-validated, renderer reducers enforce uniqueness, `intel-layout.ts` dedupes by
+  id), so any longer array is by construction invalid input the schema still accepted. Secondary: the
+  375-line wire-contract file had no tests -- schema drift would fail a debugging session, not a gate.
+- **Solutions:** (a) `.max(INTEL_MODULE_IDS.length)` (self-maintaining bound) + first co-located
+  schema tests; (b) a magic-number cap like `.max(16)` (drifts from the registry); (c) rely on
+  service-side dedupe alone (accepts structurally-invalid wire input).
+- **Decision:** **(a)** -- matches the repo's bounded-contract convention at zero behavior cost (the
+  renderer can never legitimately exceed one placement per module). Off the trading-safety perimeter.
+- **Shipped (2026-07-01, work-layer):** `ipc-schemas.ts` bound added (python LF edit, anchor
+  count==1, post-scan 0 NUL / 0 CRCR, braces balanced); NEW `src/shared/ipc-schemas.test.ts` (8
+  tests: the bound, `.strict()` extra-key rejection, integer/positive geometry, unknown-id rejection,
+  P-048 `landingWorkspace` accept/reject).
+- **Gate verification (2026-07-01; master @ 664c0d5 working tree; mount node_modules, Node v22):**
+  typecheck exit 0 | lint exit 0 (0 warnings) | vitest **113 files / 1419 tests / 0 fail** (sharded
+  4x: 382+447+306+284) | knip exit 0 (55 lines, byte-identical to baseline).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-055 · Intel `live` freshness dot froze green on feed death (stale-as-fresh)
+- **Problem:** `src/renderer/components/intel/IntelWorkspace.tsx:77` (pre-fix) derives `live`
+  (`Date.now() - lastUpdated < POLL_MS * 2`) at render time only, and the poll's `.catch` (:60)
+  updated no state. A dead intel bridge therefore stopped producing re-renders entirely, freezing the
+  dot at its last state -- typically green -- for as long as the workspace stayed mounted. Stale
+  presented as fresh, Constitution 3.2 (degrade loudly, never silently), on the honest-signal
+  flagship. Found by this session's audit of the unreviewed P-048 diff.
+- **Solutions:** (a) bump a `useState` counter in the poll failure path so the derivation re-runs and
+  the dot decays (success already re-renders via `setSnapshot`; the effect's `cancelled` flag keeps
+  the bump unmount-safe); (b) a 1 s `now` ticker (constant render churn for a 2.5 s-granularity
+  signal); (c) move liveness into `intelStore` as poll-outcome state (heavier, new store API for the
+  same pixel).
+- **Decision:** **(a)** -- the minimal honest fix inside the existing leak-safe effect.
+- **Shipped (2026-07-01, work-layer):** `IntelWorkspace.tsx` -- `notePollFailure` state + bump in the
+  poll catch (python LF edit, 3 anchors count==1, post-scan 0 NUL / 0 CRCR, braces balanced).
+  Component-level regression test blocked on the standing `@testing-library/react` operator item
+  (carried forward). Gate stamp shared with P-056 above (113 / 1419 / 0).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-054 · Push-mirror stores (`riskGatesStore`, `wireStore`, `macroStore`) shipped untested
+- **Problem:** three push-channel display mirrors with zero coverage (`riskGatesStore.ts:13-16`,
+  `wireStore.ts:13-16`, `macroStore.ts:13-16`) -- trivial stores, but panels rely on their
+  initial-null / store-verbatim / replace-on-push contracts. riskGatesStore is the read-only DISPLAY
+  mirror; enforcement lives in `services/risk/` (perimeter, untouched by a pure store test).
+- **Solutions:** (a) new-file-only minimal contract tests, 3 each, display contracts strictly;
+  (b) skip as too trivial (leaves the sweep's tail unpinned).
+- **Decision:** **(a)** -- explicitly listed in the 2026-07-01 handoff NEXT sweep order.
+- **Shipped (2026-07-01, work-layer):** NEW `riskGatesStore.test.ts` / `wireStore.test.ts` /
+  `macroStore.test.ts` (9 tests; LF; scans clean). Gate checkpoint (before P-055/P-056): typecheck 0 |
+  lint 0 (0 warnings) | vitest **112 files / 1411 tests / 0 fail** (373+438+308+292) | knip 0.
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-053 · `replayStore` `active` derivation shipped untested
+- **Problem:** `src/renderer/stores/replayStore.ts:20-23` derives `active` from
+  `mode === 'playing' || mode === 'paused'` -- App.tsx branches the entire center column on it (an
+  active tape force-shows the Replay workspace). Zero coverage; a silent regression flips the
+  workspace routing.
+- **Solutions:** (a) new-file-only contract tests; (b) defer.
+- **Decision:** **(a)** -- 5 tests: initial, playing, paused, idle+recording (inactive), exact-object
+  storage.
+- **Shipped (2026-07-01, work-layer):** NEW `replayStore.test.ts` (5 tests; LF; scans clean). Gate
+  checkpoint shared with P-054 above (112 / 1411 / 0).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-052 · Intel workspace stores (`intelStore`, `intelLayoutStore`) shipped untested
+- **Problem:** the P-048 flagship's two NEW renderer stores had zero coverage: `intelStore.ts:27-32`
+  (uppercase normalization, case-insensitive no-op, and the stale-snapshot-clearing invariant -- an
+  Intel module must never render another symbol's numbers for a frame) and `intelLayoutStore.ts`
+  (hydrate's sanitize/adopt/fallback/warn paths :66-79, reducer-mediated mutations with write-through
+  persist :83-87, fire-and-forget persist failure warn :44-49, fresh-copy reset). The P-050 class on
+  the newest flagship surface.
+- **Solutions:** (a) new-file-only contract tests per the `dataSourceStore.test.ts` stubGlobal
+  convention (zero source edit); (b) defer; (c) component tests via IntelWorkspace (blocked -- no
+  `@testing-library/react`, standing operator item).
+- **Decision:** **(a)** -- 7 + 16 tests; store sources byte-for-byte unchanged; grid reducer
+  internals stay covered by `grid-layout.test.ts` (no duplication -- the store tests pin the wiring).
+- **Shipped (2026-07-01, work-layer):** NEW `intelStore.test.ts` (7), `intelLayoutStore.test.ts`
+  (16); LF; 0 NUL / 0 CRCR; braces balanced. Gate checkpoint shared with P-054 above (112 / 1411 /
+  0).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-049 · `swing-points.ts` accepts degenerate `window`/`lookback` (every-bar swings / TypeError)
+- **Problem:** `swingHighs`/`swingLows` (`src/shared/chart-indicators/swing-points.ts:23/26` and
+  `:38/41` pre-fix) loop straight off the raw `window` parameter: `window=0` makes the inner
+  verification loop vacuous, so **every bar** is reported as both a swing high AND a swing low
+  (7-bar repro -> 7 "swings"; feeds the double-top/bottom detectors garbage pairs at O(n^2)); a
+  negative or fractional window starts the scan at a non-existent index -> `TypeError: Cannot read
+  properties of undefined (reading 'high')`. `averageVolume` (`:55` pre-fix, `Math.max(0, n -
+  lookback)`) crashes the same way on a fractional lookback (proven: lookback 2.5 -> TypeError
+  reading '.volume'). Every sibling in the layer guards its degenerate parameter (P-040 `period <
+  1`, `window < 2`, `brickSize <= 0`, `reversalAmt <= 0`) -- this was the last unguarded file.
+  **Latent:** all in-repo call-sites (`double-top.ts:39/41`, `double-bottom.ts:30/32`,
+  `patterns.ts:81/123`) pass integer defaults >= 3; live surface is the ChartPanel pattern overlay
+  (display-only). Repro: `satex-agent-p049-repro.mjs` -- OLD w=0 -> 7 spurious swings / FIX -> 0;
+  OLD w=-2 and w=2.5 -> TypeError / FIX -> [] and ==w=2; w=2, w=3 OLD==FIX (parity); OLD lb=2.5 ->
+  TypeError / FIX -> 250.
+- **Solutions:** (a) floor both parameters at the root and bail `w < 1 -> []` (total, one file,
+  behavior-identical for every valid integer call); (b) validate at each caller (3 files today,
+  misses future callers of the exported primitives); (c) leave as-is (crash/garbage the moment
+  CHART wiring or a config surface exposes `swingWindow`).
+- **Decision:** **(a)** -- the layer's own convention, fixes the root where the indexing lives, off
+  the trading-safety perimeter. Found via PSD rule 2(d) audit of the 2026-06-29 work-layer NEXT
+  list; that list's "untested chart-indicator files" claim was stale (all four ARE covered in
+  `indicators.test.ts` -- P-034 put the double-top/bottom regressions there), and the degenerate
+  window/lookback hole was the genuine residue it missed.
+- **Shipped (2026-07-01, daily):** `swing-points.ts` -- `const w = Math.floor(window); if (w < 1)
+  return out` in both swing fns, loops use `w`; `const lb = Math.floor(lookback)` in
+  `averageVolume`. CRLF-preserved python edit (5 anchors count==1; CRLF 63->70; 0 NUL / 0 CRCR / 0
+  lone-LF; braces balanced). +6 regression tests appended to `indicators.test.ts` (LF; in-file
+  28->34): window 0 / negative / fractional-floors-to-2 for highs+lows, fractional + non-positive
+  lookback. Blueprint:
+  `docs/superpowers/specs/2026-07-01-swing-window-guard-store-coverage-ultraplan.md`.
+- **Gate verification (2026-07-01; master @ 664c0d5 working tree + edits; mount node_modules, Node
+  v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest **106 files / 1374 tests / 0 fail**
+  (sharded 4x: 363+438+297+276) | knip exit 0 (Node-20 shim; 55 output lines -- the pre-existing
+  23 unused-export + 29 unused-type warnings only, none new).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-050 · `workspaceStore` shipped untested (incl. the P-048 `landingWorkspace` setter)
+- **Problem:** `src/renderer/stores/workspaceStore.ts` -- tab validation, the Quad-pane
+  uniqueness-swap invariant (`:66-81`), uppercase normalization, no-op short-circuits, the P-048
+  additive `landingWorkspace` setter (`:92-99`), and hydrate's defaults-on-failure path (`:101-110`)
+  -- had **zero co-located coverage** while P-048 just added a setter and `App.tsx` wired a one-shot
+  landing effect to it. A regression (e.g. dropping the uniqueness swap or persisting on no-op)
+  would pass every gate silently. The P-047 class, on the store that decides what the operator sees
+  at boot.
+- **Solutions:** (a) new-file-only contract tests via the `dataSourceStore.test.ts` stubGlobal
+  convention (zero source edit, lowest bridge risk, the P-042/P-047 pattern); (b) defer; (c) React
+  component tests (blocked -- no `@testing-library/react` in the repo, standing operator surface).
+- **Decision:** **(a)** -- 16 tests: valid/invalid/no-op tabs, quad length + non-array rejects,
+  uppercase + case-insensitive no-op, pane-swap invariant, chartSymbol, `landingWorkspace`
+  accept-Intel/reject/no-op, hydrate adopt/empty/throw (console.warn spied). Store source
+  byte-for-byte unchanged.
+- **Shipped (2026-07-01, daily):** new `src/renderer/stores/workspaceStore.test.ts` (16 tests; LF;
+  0 NUL / 0 CRCR; balanced). Gate stamp shared with P-049 above (106 files / 1374 / 0 fail).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-051 · `subsecondStore` ring/sanitizer logic shipped untested
+- **Problem:** `src/renderer/stores/subsecondStore.ts` -- the 1200-bar cap (`:21/:65/:88-90`),
+  `appendBar`'s three branches (same-openMs re-seal replace `:75-78`, out-of-order drop `:79-84`,
+  append+trim `:85-90`), per-(symbol,bucketMs) keying, the `hydratePrefs` {250|500} sanitizer
+  (`:97-107`, the UI's independent guard against IPC contract drift), and `getPref`'s
+  null-when-unconfigured contract (`:108`, the auto-snap heuristic depends on it) -- all untested.
+  Sub-second is a flagship v0.4.4 surface; a silent regression here corrupts what the crypto chart
+  renders.
+- **Solutions:** (a) new-file-only contract tests (store is pure -- no window stub needed); (b)
+  defer; (c) integration-test via ChartPanel (no harness, heavier, indirect).
+- **Decision:** **(a)** -- 12 tests: hydrate keying + cap-slice-keeps-tail, getBars empty fallback,
+  series isolation, append / re-seal / out-of-order / head-trim / fresh-key, sanitizer keeps only
+  {250,500}, wholesale prefs replace, getPref null->value. Store source byte-for-byte unchanged.
+- **Shipped (2026-07-01, daily):** new `src/renderer/stores/subsecondStore.test.ts` (12 tests; LF;
+  0 NUL / 0 CRCR; balanced). Gate stamp shared with P-049 above (106 files / 1374 / 0 fail).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-048 · Composable Quant Intelligence workspace (flagship) — Phase A+B SHIPPED
+- **Problem:** The intelligence layer (brain weights, calibration Brier/buckets, regime HMM, weight-drift,
+  pattern stats) is computed in `main/` but surfaced only thinly across small per-symbol panels — the
+  terminal's actual differentiation (learning markets) is largely invisible to the operator. The operator
+  also wants ONE highly customizable tab (add/drag/resize modules like an iPhone homepage / desktop
+  windows) and a configurable startup landing page (operator directive, 2026-06-29).
+- **Solutions:** decomposed via `/ultraplan` (7 layers) + an autoplan-equivalent 4-lens review (6
+  revisions applied). Grid engine fork: (a) custom zero-dep pointer-event grid; (b) react-grid-layout;
+  (c) dnd-kit + custom resize. Persistence fork: own `intel-layout.md` vs extending `WorkspaceState`.
+- **Decision:** **(a)** custom zero-dep grid (honors the 10-dep minimalism + knip gate; full control of
+  the jiggle UX + `--bb-*` styling; reuses the TweaksPanel pointer pattern). Layout lives in its OWN
+  `Vault/Settings/intel-layout.md` (decoupled — **no `WorkspaceState` schema migration**, the review's
+  key risk-reduction); `landingWorkspace` is additive with tolerant hydrate. Phased: A foundations → B
+  grid → C analytics backend → D modules → E. Blueprint:
+  `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/docs/superpowers/specs/2026-06-29-intel-workspace-composable-grid-ultraplan.md`.
+- **Shipped (2026-06-29, Phase A+B):**
+  NEW — `renderer/lib/grid-layout.ts` (+`.test.ts`, 15 tests: overlap/clamp/collision/add/remove/move/
+  resize/sanitize), `renderer/panels/intel/intel-modules.ts` (metadata + curated default layout),
+  `renderer/panels/intel/intel-registry.tsx` (`IntelModuleBody`), `renderer/stores/intelLayoutStore.ts`,
+  `renderer/components/intel/useGridDrag.ts` (leak-safe pointer drag/resize), `…/IntelGrid.tsx`,
+  `…/IntelWorkspace.tsx`, `main/services/intel-layout.ts` (own-file persistence, subsecond-prefs mirror).
+  MODIFIED — `shared/types.ts` (`'Intel'` tab, additive `landingWorkspace`, `ModulePlacement`/
+  `IntelModuleId`), `shared/ipc-channels.ts` (`INTEL_LAYOUT_GET/SET`), `shared/ipc-schemas.ts`
+  (`IntelLayoutSetReq`), `main/index.ts` (service + 2 read-only handlers), `preload/index.ts`
+  (`intelLayout` bridge), `main/services/workspace-state.ts` (tolerant `landingWorkspace`), `App.tsx`
+  (Intel render branch + ⌘6 + one-shot landing effect), `TopBar.tsx` (Intel title), `workspaceStore.ts`
+  (`setLandingWorkspace`), `SettingsModal.tsx` (Startup-page control), `globals.css` (Intel styles).
+  All edits EOL-preserved (mixed CRLF/LF per file); NUL/CRCR scans clean; anchors count==1.
+- **Teardown audit:** `useGridDrag` 3 addEventListener / 3 removeEventListener (pointer move/up/cancel)
+  + unmount cleanup; `IntelWorkspace` keydown 1/1; no timers/ResizeObservers in new code. Off-perimeter
+  patch-grep CLEAN (no OrderManager/risk-gates/kill-switch/Alpaca-submit references; routes no order).
+- **Gate verification (2026-06-29; master @ 664c0d5 working tree + Phase A+B; mount node_modules, Node
+  v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest **102 files / 1314 tests / 0 fail**
+  (sharded 4×: 355+417+282+260; +1 file / +15 tests vs the 101/1299 P-047 baseline) | knip exit 0
+  (Node-20 shim; 23 unused-export + 29 unused-type pre-existing warnings only — **none new**).
+- **Shipped (2026-06-29, Phase C):** the eight modules now render LIVE read-only analytics, fused
+  per the selected symbol. NEW — `src/shared/intel-analytics.ts` (+`.test.ts`, 15 tests: pearson +
+  correlation matrix [negative-price-safe], feature attribution, microstructure, scenario-layer +
+  convergence synthesis — all UNKNOWN-safe), `src/main/services/intel-fusion.ts` (+`.test.ts`, 8
+  tests: full-signal + all-UNKNOWN degenerate + correlation-symbol set) composing calibration / brain
+  weights / regime / macro / depth into one `IntelSnapshot`, `src/renderer/stores/intelStore.ts`.
+  MODIFIED — `shared/types.ts` (`IntelSnapshot` + sub-types), `shared/ipc-channels.ts` (`INTEL_GET`),
+  `main/index.ts` (read-only handler), `preload/index.ts` (`getIntel` bridge), `core/trading-engine.ts`
+  (`getIntelSnapshot` — read-only, the getHealthReport precedent; patch-grep clean of order/risk writes),
+  `panels/intel/intel-registry.tsx` (8 real SVG/CSS vizzes: reliability diagram, attribution bars,
+  regime posterior, weight-drift, correlation heatmap, microstructure ladder, macro catalysts,
+  scenario/convergence), `components/intel/IntelWorkspace.tsx` (leak-safe 2.5s `INTEL_GET` poll +
+  research-mode symbol selector + live dot), `globals.css` (module styles). Modules render
+  `UNKNOWN — SIGNAL INSUFFICIENT` when a slice is null (Constitution 0.1). Teardown balanced
+  (IntelWorkspace 1/1 listeners + 1/1 timers); off-perimeter patch-grep CLEAN.
+- **Gate verification (Phase C; master @ 664c0d5 working tree + Phase A-C; Node v22):** typecheck exit
+  0 | lint exit 0 (0 warnings) | vitest **104 files / 1337 tests / 0 fail** (sharded 4×:
+  354+423+287+273; +2 files / +23 tests vs the 102/1314 Phase A+B baseline) | knip exit 0 (Node-20
+  shim; 23 unused-export + 29 unused-type pre-existing warnings only — **none new**).
+- **Status:** SHIPPED (Phase A+B+C) — awaiting operator commit + a launch confirm (Intel tab via ⌘6;
+  Edit Modules drag/resize; Settings → Startup page; live analytics + research selector). The
+  read-only analytics + real module vizzes are complete; only optional **Phase D** deepening
+  (time-range drill-down, portfolio-vs-symbol toggles beyond the symbol selector) remains as future
+  polish, per the blueprint §3.12.
+
+### P-047 · `computeJournalAggregates` (trading-journal stats) shipped with zero test coverage
+- **Problem:** `computeJournalAggregates` (`src/renderer/stores/journalStore.ts:93-172`) is the pure
+  display-aggregation function behind the trading-journal panel — it derives win/loss counts + win rate,
+  conviction P&L buckets, mean entry slippage, the per-regime P&L breakdown, and best/worst tag from the
+  closed-trade ring the operator reads every session. The store had **zero co-located test coverage**
+  (`journalStore.ts` had no `.test.ts`), so its non-trivial branch logic — breakeven exclusion from the
+  win-rate denominator, the `wins/(wins+losses || 1)` divide-by-zero guard, null-regime→`UNKNOWN`
+  bucketing + total-P&L sort, finite-only slippage averaging, and the single-tag best===worst suppression
+  — could regress silently under a refactor and pass every gate. Inspection found the function correct
+  (defensively written; no defect), but unprotected. Renderer display; off the trading-safety perimeter
+  (aggregates block no order). Found via the work-layer code-audit coverage-gap sweep (the 2026-06-29
+  handoff NEXT steered to untested renderer stores / lib helpers — lib was already fully covered).
+- **Solutions:** (a) add a co-located `journalStore.test.ts` exercising the pure export with crafted
+  `ClosedTrade` fixtures — new-file-only (zero source edit → lowest bridge-corruption risk), pins the
+  contract, the proven P-024/025/026/031/032/033/042 zero-coverage-close pattern; (b) defer (the function
+  is "obviously correct" by inspection — leaves the operator-facing stats unprotected); (c) extract the
+  math into a separately-tested helper (over-engineering a correct function, churns an import).
+- **Decision:** **(a)** — lowest blast radius, off-perimeter, mirrors the established in-repo precedent
+  (P-042 shipped a regression net around a correct-but-untested off-perimeter file the same way). No
+  source change to `journalStore.ts`; production cannot regress from this commit.
+- **Shipped (2026-06-29, work-layer):** new `src/renderer/stores/journalStore.test.ts` (12 tests):
+  empty→zeroed aggregate; all-breakeven→no-NaN win rate; win/loss accounting with breakeven excluded;
+  1.0 win rate with wins+breakevens; conviction high≥7 / low≤4 bucketing; finite-only slippage average +
+  null-when-none; per-regime null→`UNKNOWN` + total-P&L-desc sort + breakeven-excluded regime win rate;
+  per-tag P&L accumulation across multi-tag trades + best/worst selection + single-tag worst suppression.
+  `journalStore.ts` byte-for-byte unchanged. New file is LF; NUL/CRCR scan clean; braces/parens/brackets
+  balanced.
+- **Gate verification (2026-06-29; master @ 664c0d5 working tree + P-046 edit + this test; mount
+  node_modules, Node v22):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest 101 files / 1299 tests
+  / 0 fail (sharded 4×: 348+427+269+255; +1 file / +12 tests vs the 100/1287 baseline) | knip exit 0
+  (Node-20 shim; 23 unused-export + 29 unused-type pre-existing warnings only — none new, the test adds
+  no exports and consumes the already-exported `computeJournalAggregates`).
+- **Status:** SHIPPED — awaiting operator commit.
+
+### P-046 · `SettingsModal` self-eval poll timers leak setState-after-unmount (the PR #6 leak class, recurred)
+- **Problem:** `runSelfEvalNow` (`src/renderer/components/modals/SettingsModal.tsx:69-82`) schedules
+  three `setTimeout`s (`[1500, 4000, 8000]` ms, the poll-loop at `:76-78`) to reveal the "Running… →
+  result" transition without a permanent interval. Each fires `refreshSelfEval()` (`:54-59`) which calls
+  `setSeStatus` (a setState) after a `getSelfEvalStatus()` IPC round-trip. The timer IDs were **never
+  tracked and never cleared** — there is no cleanup effect for them. Closing the Settings dialog within
+  ~8 s of pressing "Run Self-Eval Now" therefore fires up to **three setState-after-unmount calls plus
+  three orphaned IPC reads** into a closed modal. This is the documented PR #6 "clean up what you create"
+  / setState-after-unmount class (AGENTS.md / app `CLAUDE.md` load-bearing invariant), and it was the
+  lone uncleared timer in the renderer: the work-layer's 2026-06-28 passover flagged it as a
+  "Low-priority future note". A renderer timer/listener/observer sweep this session confirmed every other
+  `setInterval`/`setTimeout` has a matching `clearInterval`/`clearTimeout` cleanup, and every
+  `addEventListener` file has a `removeEventListener` — `CommandPalette.tsx:31`'s one-shot focus
+  `setTimeout` is null-guarded (`inputRef.current?.focus()`, no setState) so it is **safe**, and
+  `TweaksPanel`'s drag listeners remove on `mouseup` (a transient setState-after-unmount only if
+  unmounted mid-drag-hold — noted, not fixed). SettingsModal was the one real defect.
+- **Solutions:** (a) hold the three timer IDs in a `useRef<ReturnType<typeof setTimeout>[]>` and clear
+  them in a mount-once unmount cleanup `useEffect` — smallest blast radius (one file, +11/-2), byte-
+  matches the canonical in-repo `App.tsx` `armTimerRef` + `clearTimeout` pattern, behaviour-identical
+  while mounted (the synchronous `await refreshSelfEval()` at `:79` still does the immediate refresh);
+  (b) replace the three timers with a single tracked `setInterval` that self-clears after the third poll
+  (more state, no benefit over (a) for a fixed 3-shot reveal); (c) leave as-is (ships the documented leak
+  class on a real user path: open Settings → Run Self-Eval → close fast).
+- **Decision:** **(a)** — mirrors the established in-repo idiom exactly, off the trading-safety perimeter
+  (renderer presentation; routes no order), minimal and provably correct (the timers that were never
+  cleared now are; a ref is stable across renders so `forEach(clearTimeout)` reads the live array at
+  unmount — no stale closure). **No unit test added:** `src/renderer` has **no React component-test
+  infrastructure** (`@testing-library/react` is not a dependency; zero `*.test.tsx` files), and the leak
+  is not observable without mounting the full modal — adding the harness is a dependency/lockfile change
+  out of scope for an autonomous off-perimeter run. Verified by the gate suite + a diff review against
+  the canonical `App.tsx armTimerRef` form — the exact precedent set by P-043 (ChartPanel observer leak).
+  Found via PSD rule 2(d) renderer leak-class sweep (handoff queue exhausted; no actionable
+  off-perimeter DECIDED entry — P-009/P-011/P-012 are sign-off- or work-gated).
+- **Blueprint:** `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/docs/superpowers/specs/2026-06-29-settings-modal-selfeval-timer-leak-ultraplan.md` (all 7 layers).
+- **Shipped (2026-06-29, daily PSD):** `SettingsModal.tsx` — `:10` add `useRef` to the react import;
+  `:53` add `const pollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])`; `:55-61` add the
+  unmount cleanup effect (`pollTimersRef.current.forEach(clearTimeout)`); `:86` wrap the poll
+  `setTimeout` in `pollTimersRef.current.push(...)`. CRLF-preserved python edit (file is CRLF: 568→577
+  CRLF, +9 lines; 0 lone-LF); anchors count==1 each; NUL/CRCR scan clean; brace/paren/bracket balanced.
+- **Gate verification (2026-06-29; master @ 664c0d5 working tree + edit; mount node_modules, Node v22):**
+  typecheck exit 0 | lint exit 0 (0 warnings) | vitest 100 files / 1287 tests / 0 fail (sharded 4×:
+  340+405+274+268) | knip exit 0 (Node-20 shim; 23 unused-export + 29 unused-type pre-existing warnings
+  only — none new, no export added). Code-only change; test count unchanged.
+- **Re-verified (2026-06-29, work-layer):** independently re-read `SettingsModal.tsx` — the only
+  `setTimeout` is the captured `pollTimersRef.current.push(...)` one and the mount-once unmount cleanup
+  effect (`forEach(clearTimeout)`) is present; byte-scan clean (0 NUL / 0 \r\r; 577 CRLF; balanced). Four
+  gates re-run green against the working tree (typecheck 0 | lint 0/0w | vitest 100 files / 1287 tests /
+  0 fail | knip 0). Fix confirmed correct.
+- **Status:** SHIPPED — awaiting operator commit.
 
 ### P-044 · No ErrorBoundary around the workspace center -> a Markets/Replay panel throw blackscreens the whole terminal
 - **Problem:** Operator report: switching to the MARKETS or REPLAY tab blanks the entire terminal

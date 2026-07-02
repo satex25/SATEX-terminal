@@ -29,7 +29,7 @@ import type {
   DataSource, DataSourceStatus, DataSourceSetRequest,
 } from '@shared/types'
 import type { IndicatorSettings } from '@shared/chart-indicators'
-import type { WorkspaceState } from '@shared/types'
+import type { WorkspaceState, ModulePlacement, IntelSnapshot } from '@shared/types'
 
 // ── Typed listener wrapper ─────────────────────────────────────────────────────
 function on<T>(channel: PushChannel, cb: (payload: T) => void): () => void {
@@ -187,6 +187,15 @@ const satexApi = {
     getState: ()                                 => ipcRenderer.invoke(IPC.WORKSPACE_STATE_GET)      as Promise<WorkspaceState>,
     setState: (next: WorkspaceState)             => ipcRenderer.invoke(IPC.WORKSPACE_STATE_SET, next) as Promise<WorkspaceState>,
   },
+
+  // ── Intel grid layout persistence ─────────────────────────────────
+  intelLayout: {
+    get: ()                                      => ipcRenderer.invoke(IPC.INTEL_LAYOUT_GET)       as Promise<ModulePlacement[]>,
+    set: (next: ModulePlacement[])               => ipcRenderer.invoke(IPC.INTEL_LAYOUT_SET, next) as Promise<ModulePlacement[]>,
+  },
+
+  // ── Intel analytics fusion (read-only, per focused symbol) ─────────
+  getIntel: (symbol: string) => ipcRenderer.invoke(IPC.INTEL_GET, symbol) as Promise<IntelSnapshot>,
 
   // ── Footprint trade stream (P0-1) ──────────────────────────────────────────
   /** Subscribe to raw Trade events. Batched per market tick. Forwarder for

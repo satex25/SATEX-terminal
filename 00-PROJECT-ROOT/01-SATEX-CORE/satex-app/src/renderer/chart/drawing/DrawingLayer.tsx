@@ -22,7 +22,7 @@
  * (react-refresh/only-export-components; P-023).
  */
 import { useEffect, useRef }    from 'react'
-import { useDrawingStore }       from './drawingStore'
+import { useDrawingStore, selectDrawings } from './drawingStore'
 import { drawingInView }         from './DrawingModel'
 import { renderDrawing }         from './drawing-renderer'
 import type { ViewportTransform } from '../overlay/ViewportTransform'
@@ -47,7 +47,7 @@ const SELECTED_COLOR = '#e94b3c'   // --bb-ambient
 // ── Component ───────────────────────────────────────────────────────────────────────────────
 
 export function DrawingLayer({ transform, symbol, canvas, accentColor = SELECTED_COLOR }: Props) {
-  const drawings = useDrawingStore((s) => s.drawings[symbol] ?? [])
+  const drawings = useDrawingStore(selectDrawings(symbol))
   const rafRef   = useRef<number>(0)
 
   useEffect(() => {

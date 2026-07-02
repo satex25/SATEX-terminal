@@ -34,7 +34,8 @@ import { SubSecondCandleAggregator, type SubSecondCandle, type PreferredBucket }
 import { SubsecondRetentionWorker } from '../services/subsecond-retention'
 import { SubsecondTelemetry } from '../services/subsecond-telemetry'
 import { computeSnapshot } from '@shared/indicators'
-import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, findUniverseEntry } from '@shared/constants'
+import { composeIntelSnapshot, intelCorrelationSymbols } from '../services/intel-fusion'
+import { DEFAULT_EQUITY, AUTONOMOUS_WATCHLIST, ALPACA_PAPER_HOST, UNIVERSE, UNIVERSE_SYMBOLS, findUniverseEntry } from '@shared/constants'
 import type {
   Account, AiDecision, AlpacaModeSetRequest, AlpacaModeStatus,
   Candle,
@@ -73,7 +74,7 @@ import { MarketObserver } from '../services/market-observer'
 import { PatternLearner } from '../services/pattern-learner'
 import { VaultWriter } from '../services/vault-writer'
 import { AutonomousTrader, type AutonomousConfig } from '../services/autonomous-trader'
-import type { AutonomousDecision, AutonomousStatus, DataSource, DataSourceStatus } from '@shared/types'
+import type { AutonomousDecision, AutonomousStatus, DataSource, DataSourceStatus, IntelSnapshot } from '@shared/types'
 import { RegimeService } from '../services/regime'
 import { RiskGatesService } from '../services/risk-gates'
 import { MacroCalendarService } from '../services/macro-calendar'
@@ -1536,6 +1537,26 @@ export class TradingEngine {
   }
 
   getCalibration(): CalibrationSnapshot { return this.calibration.snapshot() }
+
+  /** Read-only analytics fusion for the Intel workspace. Composes calibration,
+   *  regime, macro, depth, and the brain into one snapshot; routes no order
+   *  (off the trading-safety perimeter, the getHealthReport precedent). */
+  getIntelSnapshot(symbol: string): IntelSnapshot {
+    return composeIntelSnapshot({
+      now: () => Date.now(),
+      getCalibration: () => this.calibration.snapshot(),
+      getRegime: () => this.regime.get(),
+      getMacro: () => this.macro.get(),
+      getDepth: (s) => this.depth.get(s),
+      getQuote: (s) => this.market.getQuote(s),
+      getIndicators: (s) => computeSnapshot(s, this.market.getCandles(s, 200)),
+      getCandles: (s, l) => this.market.getCandles(s, l),
+      getFeatures: (q, i, d) => Object.fromEntries(Object.entries(this.brain.features(q, i, d))),
+      getBrainParams: () => db.listBrainParams(),
+      getBrainParamsAtStart: () => this.brainParamsAtStart,
+      correlationSymbols: (focus) => intelCorrelationSymbols(focus, UNIVERSE_SYMBOLS),
+    }, symbol)
+  }
 
   // ── Nightly self-eval controls (Settings → Nightly Self-Evaluation) ────────
   getSelfEvalStatus(): SelfEvalStatus {

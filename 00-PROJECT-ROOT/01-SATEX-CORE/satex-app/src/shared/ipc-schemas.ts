@@ -12,6 +12,7 @@
  * helper there.
  */
 import { z } from 'zod'
+import { INTEL_MODULE_IDS } from '@shared/types'
 
 // ── Primitive enums + reusables ────────────────────────────────────────────
 const OrderSideS = z.enum(['buy', 'sell'])
@@ -20,7 +21,7 @@ const AccountModeS = z.enum(['paper', 'live'])
 const FeedS = z.enum(['iex', 'sip'])
 const JournalTagS = z.enum(['planned', 'breakout', 'fade', 'scalp', 'swing', 'revenge', 'FOMO'])
 const EmaPeriodS = z.union([z.literal(9), z.literal(21), z.literal(50), z.literal(200)])
-const WorkspaceS = z.enum(['Trade', 'Focus', 'Markets', 'Replay', 'Quad'])
+const WorkspaceS = z.enum(['Trade', 'Focus', 'Markets', 'Replay', 'Quad', 'Intel'])
 const HistoricalTimeframeS = z.enum(['1Min', '1Hour'])
 const VaultScopeS = z.enum(['session', 'trade', 'tactics', 'brain', 'observer', 'manual'])
 
@@ -234,8 +235,24 @@ export const WorkspaceStateSetReq = z.object({
   workspace: WorkspaceS,
   quadSymbols: z.array(SymbolS).length(4),
   chartSymbol: SymbolS,
+  landingWorkspace: WorkspaceS,
 })
 export type WorkspaceStateSetReq = z.infer<typeof WorkspaceStateSetReq>
+
+// ── Intel grid layout ─────────────────────────────────────────────────
+const IntelModuleIdS = z.enum(INTEL_MODULE_IDS)
+const ModulePlacementReq = z.object({
+  id: IntelModuleIdS,
+  x: z.number().int().min(0),
+  y: z.number().int().min(0),
+  w: z.number().int().min(1),
+  h: z.number().int().min(1),
+}).strict()
+// A valid layout holds at most one placement per module (renderer reducers
+// enforce uniqueness; the service dedupes by id) — bound the wire contract to
+// match, per the repo's bounded-array convention (cf. quadSymbols .length(4)).
+export const IntelLayoutSetReq = z.array(ModulePlacementReq).max(INTEL_MODULE_IDS.length)
+export type IntelLayoutSetReq = z.infer<typeof IntelLayoutSetReq>
 
 // ── Trading journal ─────────────────────────────────────────────────────────
 export const JournalReflectReq = z.object({

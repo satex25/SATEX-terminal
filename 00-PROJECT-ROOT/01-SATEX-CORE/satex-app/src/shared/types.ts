@@ -43,7 +43,7 @@ export interface Trade {
  *  boots into the user's most-recent layout instead of always-Trade. Lives in
  *  shared/types so both main (sanitizer) and renderer (store/UI) can import
  *  without a cross-process module boundary. */
-export const WORKSPACE_TABS = ['Trade', 'Focus', 'Markets', 'Replay', 'Quad'] as const
+export const WORKSPACE_TABS = ['Trade', 'Focus', 'Markets', 'Replay', 'Quad', 'Intel'] as const
 export type Workspace = (typeof WORKSPACE_TABS)[number]
 
 export interface WorkspaceState {
@@ -55,6 +55,9 @@ export interface WorkspaceState {
   quadSymbols: string[]
   /** Last symbol the user focused on in Trade/Focus single-chart workspaces. */
   chartSymbol: string
+  /** Workspace opened automatically after the startup intro. Additive field
+   *  (no version bump) — hydrate fills a missing value with the default. */
+  landingWorkspace: Workspace
 }
 
 /** Defaults — user explicit preference is Quad on boot per Phase 12 ask;
@@ -64,6 +67,111 @@ export const DEFAULT_WORKSPACE_STATE: WorkspaceState = {
   workspace: 'Quad',
   quadSymbols: ['NVDA', 'SPY', 'ES', 'BTC'],
   chartSymbol: 'NVDA',
+  landingWorkspace: 'Trade',
+}
+
+/** Intel workspace — the composable analytics modules the operator can place on the
+ *  Edit-Modules grid. The id tuple is the single source of truth shared by the renderer
+ *  registry and the main-process layout sanitizer (an unknown id is dropped on load). */
+export const INTEL_MODULE_IDS = [
+  'reliability', 'attribution', 'regime', 'weight-drift',
+  'correlation', 'microstructure', 'macro', 'scenario',
+] as const
+export type IntelModuleId = (typeof INTEL_MODULE_IDS)[number]
+
+/** One module's placement on the Intel grid (column/row units, not pixels). */
+export interface ModulePlacement {
+  id: IntelModuleId
+  /** Column origin (0-based) on the fixed-column grid. */
+  x: number
+  /** Row origin (0-based) in row units. */
+  y: number
+  /** Width in columns. */
+  w: number
+  /** Height in row units. */
+  h: number
+}
+
+// ── Intel workspace analytics snapshot (read-only fusion) ───────────────────
+
+/** One feature's signed contribution to the brain's pre-squash decision score
+ *  (weight x feature). The sum + bias, passed through tanh, is `score`. */
+export interface FeatureContribution {
+  key: string
+  weight: number
+  feature: number
+  contribution: number
+}
+export interface AttributionSnapshot {
+  bias: number
+  /** tanh(bias + sum(contribution)) in [-1, 1]. */
+  score: number
+  contributions: FeatureContribution[]
+}
+
+/** Per-feature weight movement since session start (cold-start priors). */
+export interface WeightDriftRow {
+  key: string
+  from: number
+  to: number
+  delta: number
+}
+
+/** Pairwise return-correlation matrix. `rows` is row-major, r in [-1, 1],
+ *  diagonal 1. Empty `symbols` => insufficient data (render UNKNOWN). */
+export interface CorrelationMatrix {
+  symbols: string[]
+  rows: number[][]
+  /** Bars of overlap the correlation was computed over (0 => UNKNOWN). */
+  bars: number
+}
+
+export interface MicrostructureRead {
+  symbol: string
+  /** Top-of-book size imbalance (bid-ask)/(bid+ask) in [-1, 1], or null. */
+  imbalance: number | null
+  /** VPIN-like toxicity proxy in [0, 1], or null when no book. */
+  vpin: number | null
+  /** Inside spread in basis points, or null. */
+  spreadBps: number | null
+  /** Top depth levels for a mini ladder (best-first), capped. */
+  bids: DepthLevel[]
+  asks: DepthLevel[]
+}
+
+export type ScenarioDirection = 'bull' | 'bear' | 'neutral'
+export interface ScenarioLayer {
+  label: string
+  direction: ScenarioDirection
+  /** Calibrated confidence in [0, 1]. */
+  confidence: number
+}
+/** Bull/Bear/Neutral probabilities (sum ~1) + the multi-layer convergence
+ *  tally (Constitution 4.2/4.3). `convergence` = layers agreeing with the
+ *  dominant direction at confidence >= 0.6. */
+export interface ScenarioOutlook {
+  bull: number
+  bear: number
+  neutral: number
+  dominant: ScenarioDirection
+  convergence: number
+  layers: ScenarioLayer[]
+}
+
+/** The read-only analytics fusion the Intel workspace renders. Every field is
+ *  nullable: a null means the underlying signal is insufficient (Constitution
+ *  0.1 — the module renders UNKNOWN rather than fabricating a value). */
+export interface IntelSnapshot {
+  symbol: string
+  computedAt: number
+  calibration: CalibrationSnapshot | null
+  regime: RegimeSnapshot | null
+  macro: MacroSnapshot | null
+  attribution: AttributionSnapshot | null
+  weightDrift: WeightDriftRow[] | null
+  correlation: CorrelationMatrix | null
+  microstructure: MicrostructureRead | null
+  scenario: ScenarioOutlook | null
 }
 
 export interface Quote {

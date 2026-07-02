@@ -7,12 +7,13 @@
  * Paper and live keypairs are stored in separate slots. The active endpoint
  * is selected via the top-right Paper/Live toggle (alpaca-mode.ts).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal } from '../Modal'
 import { UNIVERSE, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL } from '@shared/constants'
-import type { SelfEvalStatus } from '@shared/types'
+import { WORKSPACE_TABS, type Workspace, type SelfEvalStatus } from '@shared/types'
 import { useSubsecondStore, type PreferredBucketMs } from '../../stores/subsecondStore'
 import { useThemeStore, THEMES, type ThemeId } from '../../stores/themeStore'
+import { useWorkspaceStore } from '../../stores/workspaceStore'
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -50,6 +51,15 @@ export function SettingsModal({ open, onClose }: Props) {
   // Nightly self-eval toggle + status (Settings is the canonical surface).
   const [seStatus, setSeStatus] = useState<SelfEvalStatus | null>(null)
   const [seBusy, setSeBusy] = useState(false)
+  const pollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+
+  // Cancel any pending self-eval poll timers on unmount so a fast modal-close
+  // does not setState (refreshSelfEval -> setSeStatus) on an unmounted component
+  // (PR #6 "clean up what you create"; mirrors App.tsx armTimerRef).
+  useEffect(() => () => {
+    pollTimersRef.current.forEach(clearTimeout)
+    pollTimersRef.current = []
+  }, [])
 
   async function refreshSelfEval() {
     try {
@@ -74,7 +84,7 @@ export function SettingsModal({ open, onClose }: Props) {
       // Poll a few times so the "Running…" → result transition is visible
       // without a permanent interval.
       for (const delay of [1500, 4000, 8000]) {
-        setTimeout(() => { void refreshSelfEval() }, delay)
+        pollTimersRef.current.push(setTimeout(() => { void refreshSelfEval() }, delay))
       }
       await refreshSelfEval()
     } catch { /* ignore */ }
@@ -96,6 +106,8 @@ export function SettingsModal({ open, onClose }: Props) {
   // lets the user pick.
   const theme    = useThemeStore((s) => s.theme)
   const setTheme = useThemeStore((s) => s.setTheme)
+  const landingWorkspace    = useWorkspaceStore((s) => s.state.landingWorkspace)
+  const setLandingWorkspace = useWorkspaceStore((s) => s.setLandingWorkspace)
 
   // Data-source state (simulator vs Alpaca live) — surfaced so the user has
   // a single in-app place to swap from the env-forced simulator over to
@@ -561,6 +573,25 @@ export function SettingsModal({ open, onClose }: Props) {
             <button type="button" className="dialog-btn" onClick={() => setZoomAndApply(zoom + 0.1)}>+</button>
             <button type="button" className="dialog-btn" onClick={() => setZoomAndApply(1.0)}>Reset</button>
           </div>
+        </div>
+        <div className="form-row">
+          <label id="startup-seg-label">Startup page</label>
+          <div className="seg" style={{ width: 'fit-content' }} role="group" aria-labelledby="startup-seg-label">
+            {WORKSPACE_TABS.map((ws) => (
+              <button
+                key={ws}
+                type="button"
+                className={landingWorkspace === ws ? 'on' : ''}
+                aria-pressed={landingWorkspace === ws}
+                onClick={() => setLandingWorkspace(ws as Workspace)}
+              >
+                {ws}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="form-hint">
+          The workspace SATEX opens after the intro. Applied once on launch — switch tabs freely afterward.
         </div>
       </div>
     </Modal>
