@@ -12,7 +12,7 @@ Execute the SATEX branch → PR flow from AGENTS.md. Do not skip steps.
 
 1. **Confirm not on master.** Run `git branch --show-current`. If the result is `master`, STOP and tell the user to branch first — never commit directly to `master`.
 
-2. **Run all four gates** from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`:
+2. **Run all four gates** from `apps/satex-terminal/`:
    - `npm run typecheck`
    - `npm run lint`
    - `npm test`

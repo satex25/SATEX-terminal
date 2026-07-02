@@ -1,27 +1,39 @@
 # SATEX — Smart Autonomous Trading EXperience
 
-A **Windows-only** Electron + React + TypeScript trading terminal — TradingView
-Lightweight Charts v5, Zustand, better-sqlite3 — with a live-capital path via Alpaca.
+[![CI](https://github.com/satex25/satex-trading/actions/workflows/ci.yml/badge.svg)](https://github.com/satex25/satex-trading/actions/workflows/ci.yml)
 
-**Version:** 0.5.0 · **Status:** v0.5 RC · Windows-only
+A **Windows-only** Electron + React 18 + TypeScript trading terminal — TradingView
+Lightweight Charts v5, Zustand, better-sqlite3, Zod-validated IPC — with a
+**live-capital path via Alpaca**. Treat every line as production financial software.
 
-## Where the app lives
+**Version:** 0.5.0 · v0.6 "Black Box" in flight · Windows-only
 
-The application is nested in this repository:
+## Repository layout
 
 ```
-00-PROJECT-ROOT/01-SATEX-CORE/satex-app/
+mc4/
+├── apps/
+│   └── satex-terminal/    # THE app — Electron main/preload/renderer, tests, app docs
+├── docs/                  # Workspace-level docs: policy, plans, guides, vendor refs
+├── scripts/               # Live automation (archived one-offs in scripts/archive/)
+├── reference/             # Historical artifacts (git bundles)
+├── Vault/                 # Obsidian operational memory (runtime data, mostly untracked)
+├── AGENTS.md              # How agents & humans work this repo (gates, PR flow, guardrails)
+├── ARCHITECTURE.md        # One-page system map
+├── CONSTITUTION.md        # Behavior constitution for every intelligence on the repo
+└── CLAUDE.md              # Claude Code entry point
 ```
 
 ## Quick start
 
 ```
-cd 00-PROJECT-ROOT/01-SATEX-CORE/satex-app
+git config core.hooksPath .husky   # once per clone
+cd apps/satex-terminal
 npm install
 npm run dev          # electron-vite dev
 ```
 
-The four gates (run from the app directory):
+The four gates (from `apps/satex-terminal/`, or from the root via `npm run gates`):
 
 ```
 npm run typecheck    # tsc (main + renderer)
@@ -36,8 +48,11 @@ npm run knip         # dead-code / unused deps
   runtime architecture, the learning loop, gates, and the program ladder.
 - **[AGENTS.md](AGENTS.md)** — how agents and humans work this repo: the gate bar,
   branch → PR → merge flow, trading-safety guardrails, and the grounded-review routine.
-- **[CHANGELOG](00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CHANGELOG.md)** — release history (see `[0.5.0]`).
-- **[App notes](00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CLAUDE.md)** — app-specific architecture, CI, and feature notes.
+- **[CONSTITUTION.md](CONSTITUTION.md)** — the persistent behavior constitution.
+- **[Getting started](docs/GETTING-STARTED.md)** · **[Contributing](docs/CONTRIBUTING.md)**
+  · **[Security policy](docs/SECURITY.md)** · **[FAQ](docs/FAQ.md)**
+- **[CHANGELOG](apps/satex-terminal/CHANGELOG.md)** — release history.
+- **[App notes](apps/satex-terminal/CLAUDE.md)** — app architecture facts & invariants.
 - **[Releases](https://github.com/satex25/satex-trading/releases)** — tagged builds.
 
 ## ⚠️ Trading-safety

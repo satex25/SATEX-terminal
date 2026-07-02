@@ -2,7 +2,7 @@
 
 Guidance for AI agents (Claude Code, Codex, etc.) and humans doing maintenance on
 the **SATEX** trading terminal. Read this before touching the repo. App-specific
-facts live in `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CLAUDE.md` — this file is
+facts live in `apps/satex-terminal/CLAUDE.md` — this file is
 about *how to work*, that one is about *what the app is*.
 
 ## What SATEX is
@@ -14,7 +14,7 @@ trading path** via Alpaca. Treat it as production financial software, not a toy.
 ## Repo map
 
 - **System map:** `ARCHITECTURE.md` (workspace + runtime + learning loop — keep it current)
-- **App (THE app, nested):** `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`
+- **App (THE app, nested):** `apps/satex-terminal/`
 - **CI:** `.github/workflows/ci.yml`
 - **Vault (Obsidian, runtime data — untracked by design):** `Vault/` — incl.
   `Backtests/` (nightly self-eval + baselines) and `Learnings/` (capped session notes)
@@ -23,7 +23,7 @@ trading path** via Alpaca. Treat it as production financial software, not a toy.
 
 ## The gate bar — all four must be green
 
-Run from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`:
+Run from `apps/satex-terminal/`:
 
 | Gate | Command |
 |---|---|

@@ -35,7 +35,7 @@ An **institutional-grade autonomous trading terminal** for Windows. Real-time ma
 ```bash
 # Clone the repo
 git clone https://github.com/satex25/satex.git
-cd satex/00-PROJECT-ROOT/01-SATEX-CORE/satex-app
+cd satex/apps/satex-terminal
 
 # Install dependencies
 npm install

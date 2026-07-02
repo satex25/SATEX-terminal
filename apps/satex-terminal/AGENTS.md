@@ -99,7 +99,7 @@ When reviewing engine, broker, or order code:
 ### Setup
 
 ```bash
-cd 00-PROJECT-ROOT/01-SATEX-CORE/satex-app
+cd apps/satex-terminal
 
 # Install dependencies
 npm install

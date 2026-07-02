@@ -7,7 +7,7 @@ SATEX is a Windows-only Electron + React 18 + TypeScript trading terminal with a
 ## Read these first
 
 - `AGENTS.md` — how to work this repo: gate bar, branch/PR flow, trading-safety guardrails, PSD loop
-- `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CLAUDE.md` — app architecture, invariants, broker abstraction
+- `apps/satex-terminal/CLAUDE.md` — app architecture, invariants, broker abstraction
 - `ARCHITECTURE.md` — one-page system map
 - `Vault/00-Audit/PROBLEM-LEDGER.md` — living PSD queue (read on session boot, update on close)
 
@@ -17,10 +17,10 @@ Run once per clone before the first commit:
 
 ```
 git config core.hooksPath .husky
-cd 00-PROJECT-ROOT/01-SATEX-CORE/satex-app && npm install
+cd apps/satex-terminal && npm install
 ```
 
-All gate commands (`typecheck`, `lint`, `test`, `knip`) run from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`.
+All gate commands (`typecheck`, `lint`, `test`, `knip`) run from `apps/satex-terminal/`.
 
 ## Env vars
 

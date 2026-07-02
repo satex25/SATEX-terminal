@@ -22,7 +22,7 @@ AUTHORITY: `CONSTITUTION.md` (repo root) > `AGENTS.md` > this prompt. If this pr
 
 `REPO = C:\Users\User\mc4` (if your shell is the Linux sandbox, resolve the session's mount for bash work — e.g. `/sessions/<name>/mnt/mc4` — and verify with `ls` before relying on it; file tools use the Windows path).
 
-Read, in order: `REPO\CONSTITUTION.md` → `REPO\AGENTS.md` (§PSD + trading-safety guardrails) → `REPO\ARCHITECTURE.md` → `REPO\Vault\00-Audit\PROBLEM-LEDGER.md`. Read `REPO\00-PROJECT-ROOT\01-SATEX-CORE\satex-app\CLAUDE.md` before touching app code.
+Read, in order: `REPO\CONSTITUTION.md` → `REPO\AGENTS.md` (§PSD + trading-safety guardrails) → `REPO\ARCHITECTURE.md` → `REPO\Vault\00-Audit\PROBLEM-LEDGER.md`. Read `REPO\apps\satex-terminal\CLAUDE.md` before touching app code.
 
 Then establish the world — never assume it:
 - `git -C REPO log --oneline -5`, `git status`, current branch. The operator may have committed, merged, or branched overnight; a feature branch may be mid-flight; the tree may hold UNSTAGED work from prior sessions. All of that is state to inherit, not noise.
@@ -50,7 +50,7 @@ Resolve all unknowns from repo state; answer every ambiguity decisively from evi
 - **Layer 4 — DEPENDENCY DAG:** topological order; sequence vs parallel. Every RISK-TOUCH task becomes an APPROVAL NODE — never executed this session, flagged for the operator.
 - **Layer 5 — EXECUTION SPECS:** per atomic action: exact method (algorithm, python snippet, bash command), expected artifacts (paths, function names, test names, line ranges), validation criteria (gate command + expected exit code + expected test-count delta), failure mode, fallback. **Cold-start test before accepting a spec: could an agent that read nothing but the blueprint and the boot docs execute it? If no, it is not done.**
 - **Layer 6 — RISK AUDIT (self-adversarial):** how is this plan wrong? What's missed — teardown/unmount paths (the PR #6 / P-041 / P-043 / P-046 leak class), degenerate inputs (P-039/P-040 class: `period <= 0`, negative prices, empty arrays), unbounded spreads over unbounded queries, the NUL-corruption artifact path, the reconnect path? Check every task against the guardrails. Veto and rewrite anything touching the perimeter or a one-way door; a vetoed task does not reach Layer 7 until revised.
-- **Layer 7 — WRITE BLUEPRINT** to `REPO\00-PROJECT-ROOT\01-SATEX-CORE\satex-app\docs\superpowers\specs\YYYY-MM-DD-<kebab-slug>-ultraplan.md` (date from `date +%F`; match existing naming, e.g. `2026-06-29-settings-modal-selfeval-timer-leak-ultraplan.md`). All 7 layers as labelled sections.
+- **Layer 7 — WRITE BLUEPRINT** to `REPO\apps\satex-terminal\docs\superpowers\specs\YYYY-MM-DD-<kebab-slug>-ultraplan.md` (date from `date +%F`; match existing naming, e.g. `2026-06-29-settings-modal-selfeval-timer-leak-ultraplan.md`). All 7 layers as labelled sections.
 
 ## 4 · EXECUTE — immediately after the blueprint lands
 

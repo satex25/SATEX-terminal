@@ -61,6 +61,10 @@
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
+      "Read(./apps/satex-terminal/.env)",
+      "Read(./apps/satex-terminal/.env.*)",
+      "Read(./apps/satex-terminal/certs/**)",
+      "Edit(./apps/satex-terminal/certs/**)",
       "Read(./00-PROJECT-ROOT/01-SATEX-CORE/satex-app/.env)",
       "Read(./00-PROJECT-ROOT/01-SATEX-CORE/satex-app/.env.*)",
       "Read(./00-PROJECT-ROOT/01-SATEX-CORE/satex-app/certs/**)",

@@ -1,6 +1,6 @@
 @echo off
-cd /d C:\Users\User\mc4\00-PROJECT-ROOT\01-SATEX-CORE\satex-app
-set LOG=C:\Users\User\mc4\00-PROJECT-ROOT\01-SATEX-CORE\satex-app\gates-results.log
+cd /d C:\Users\User\mc4\apps\satex-terminal
+set LOG=C:\Users\User\mc4\apps\satex-terminal\gates-results.log
 echo. > %LOG%
 
 echo ======== TYPECHECK ======== >> %LOG%

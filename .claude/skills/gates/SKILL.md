@@ -3,7 +3,7 @@ name: gates
 description: Run all four SATEX gates (typecheck → lint → test → knip) from satex-app/ and report real exit codes and counts. Use before any commit, merge, or to verify a clean baseline.
 ---
 
-Run all four gates in sequence from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`. Report the real exit code and output from each:
+Run all four gates in sequence from `apps/satex-terminal/`. Report the real exit code and output from each:
 
 1. `npm run typecheck` — report exit code
 2. `npm run lint` — report exit code and warning count

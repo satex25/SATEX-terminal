@@ -5,7 +5,7 @@ description: Grounded review of the current branch/PR against SATEX's gate bar +
 Run the **Grounded Review routine** (defined in `AGENTS.md`) on $ARGUMENTS
 (default: the current branch's diff vs `master`).
 
-1. Run all four gates from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`
+1. Run all four gates from `apps/satex-terminal/`
    (`npm run typecheck`, `npm run lint`, `npm test`, `npm run knip`) and record
    the REAL results — exit codes and test counts, not assertions.
 2. Read the actual diff. Verify every claim against the code, citing `file:line`.
