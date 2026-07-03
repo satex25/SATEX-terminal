@@ -49,8 +49,8 @@ npm run knip         # dead-code / unused deps
 - **[AGENTS.md](AGENTS.md)** — how agents and humans work this repo: the gate bar,
   branch → PR → merge flow, trading-safety guardrails, and the grounded-review routine.
 - **[CONSTITUTION.md](CONSTITUTION.md)** — the persistent behavior constitution.
-- **[Getting started](docs/GETTING-STARTED.md)** · **[Contributing](docs/CONTRIBUTING.md)**
-  · **[Security policy](docs/SECURITY.md)** · **[FAQ](docs/FAQ.md)**
+- **[Getting started](GETTING-STARTED.md)** · **[Contributing](apps/satex-terminal/docs%201/CONTRIBUTING.md)**
+  · **[Security policy](apps/satex-terminal/docs%201/SECURITY.md)** · **[FAQ](FAQ.md)**
 - **[CHANGELOG](apps/satex-terminal/CHANGELOG.md)** — release history.
 - **[App notes](apps/satex-terminal/CLAUDE.md)** — app architecture facts & invariants.
 - **[Releases](https://github.com/satex25/satex-trading/releases)** — tagged builds.
@@ -60,4 +60,4 @@ npm run knip         # dead-code / unused deps
 SATEX can trade **real capital** in live mode. Autonomous financial execution is
 **forbidden**: the order/execution path, risk gates, kill-switch, and the live-mode
 and MAY-TACTICS interlocks are off-limits to automated change without explicit human
-approval. See the guardrails in **[AGENTS.md](AGENTS.md)**.
+approval. See the guar

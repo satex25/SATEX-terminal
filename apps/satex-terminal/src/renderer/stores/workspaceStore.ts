@@ -13,6 +13,7 @@ import { create } from 'zustand'
 import {
   DEFAULT_WORKSPACE_STATE,
   WORKSPACE_TABS,
+  type RailId,
   type Workspace,
   type WorkspaceState,
 } from '@shared/types'
@@ -28,6 +29,9 @@ interface WorkspaceStoreState {
   setChartSymbol:  (sym: string) => void
   /** Startup landing page — the workspace opened once after the intro. */
   setLandingWorkspace: (ws: Workspace) => void
+  /** Toggle a side-rail panel's fully-collapsed state. View state only —
+   *  routes no order (Constitution off-perimeter). */
+  toggleRail:      (id: RailId) => void
   hydrate:         () => Promise<void>
 }
 
@@ -41,6 +45,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   state: {
     ...DEFAULT_WORKSPACE_STATE,
     quadSymbols: [...DEFAULT_WORKSPACE_STATE.quadSymbols],
+    collapsedRails: [...DEFAULT_WORKSPACE_STATE.collapsedRails],
   },
   hydrated: false,
 
@@ -94,6 +99,17 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
     const cur = get().state
     if (cur.landingWorkspace === ws) return
     const next: WorkspaceState = { ...cur, landingWorkspace: ws }
+    set({ state: next })
+    persist(next)
+  },
+
+  toggleRail: (id) => {
+    const cur = get().state
+    const isCollapsed = cur.collapsedRails.includes(id)
+    const collapsedRails = isCollapsed
+      ? cur.collapsedRails.filter((r) => r !== id)
+      : [...cur.collapsedRails, id]
+    const next: WorkspaceState = { ...cur, collapsedRails }
     set({ state: next })
     persist(next)
   },

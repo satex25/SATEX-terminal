@@ -46,6 +46,14 @@ export interface Trade {
 export const WORKSPACE_TABS = ['Trade', 'Focus', 'Markets', 'Replay', 'Quad', 'Intel'] as const
 export type Workspace = (typeof WORKSPACE_TABS)[number]
 
+/** Fully-collapsible side-rail panels (operator ask, 2026-07-02 — appended to
+ *  the Intel-workspace ultraplan, Phase D polish). Each id names a rail slot
+ *  wrapping an existing read-only panel in `App.tsx`'s Quad/global shell —
+ *  collapsing one yields its grid track back to its flexible sibling (never a
+ *  dead gutter). View state only; routes no order. */
+export const RAIL_IDS = ['watchlist', 'depth', 'regime', 'exec', 'news', 'risk', 'logs', 'health'] as const
+export type RailId = (typeof RAIL_IDS)[number]
+
 export interface WorkspaceState {
   version: 1
   /** Last selected workspace. Restored on app mount. */
@@ -58,6 +66,10 @@ export interface WorkspaceState {
   /** Workspace opened automatically after the startup intro. Additive field
    *  (no version bump) — hydrate fills a missing value with the default. */
   landingWorkspace: Workspace
+  /** Side-rail panels currently fully collapsed. Additive field (no version
+   *  bump) — hydrate fills a missing value with an empty array (nothing
+   *  collapsed), mirroring the `landingWorkspace` tolerant-hydrate contract. */
+  collapsedRails: RailId[]
 }
 
 /** Defaults — user explicit preference is Quad on boot per Phase 12 ask;
@@ -68,6 +80,7 @@ export const DEFAULT_WORKSPACE_STATE: WorkspaceState = {
   quadSymbols: ['NVDA', 'SPY', 'ES', 'BTC'],
   chartSymbol: 'NVDA',
   landingWorkspace: 'Trade',
+  collapsedRails: [],
 }
 
 /** Intel workspace — the composable analytics modules the operator can place on the

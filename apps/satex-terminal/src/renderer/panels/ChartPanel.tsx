@@ -49,13 +49,13 @@ import { OrderFlowTape } from '../chart/flow/OrderFlowTape'
 // from the PNG button's handler so any failure is scoped to that one action.
 // TODO: add a `chart.pngExport` bridge to preload and refactor export.ts to
 // use it instead of ipcRenderer.
-import { useTradesStore, ensureTradesSubscription } from '../chart/flow/tradesStore'
+import { useTradesStore, selectTrades, ensureTradesSubscription } from '../chart/flow/tradesStore'
 import { CanvasOverlay, type CanvasOverlayHandle } from '../chart/overlay/CanvasOverlay'
 import { deriveTransform, type ViewportTransform } from '../chart/overlay/ViewportTransform'
 import { DrawingLayer }  from '../chart/drawing/DrawingLayer'
 import { renderDrawing } from '../chart/drawing/drawing-renderer'
 import { DrawingToolbar } from '../chart/drawing/DrawingToolbar'
-import { useDrawingStore } from '../chart/drawing/drawingStore'
+import { useDrawingStore, selectDrawings } from '../chart/drawing/drawingStore'
 import { drawingInView, nextDrawingId, type Drawing } from '../chart/drawing/DrawingModel'
 import { FootprintLayer } from '../chart/webgl/FootprintLayer'
 import { useSubsecondStore } from '../stores/subsecondStore'
@@ -203,14 +203,14 @@ export function ChartPanel() {
   const [mtfOpen,  setMtfOpen]  = useState(false)
   const [tapeOpen, setTapeOpen] = useState(false)
   useEffect(() => { ensureTradesSubscription() }, [])
-  const trades: readonly Trade[] = useTradesStore(s => s.bySymbol[symbol] ?? [])
+  const trades: readonly Trade[] = useTradesStore(selectTrades(symbol))
   // CHART-03/04/05/09 — drawing layer wiring. transform is re-derived whenever
   // LWC's visible range changes (pan/zoom) so drawings stay aligned.
   const [drawOpen,  setDrawOpen]  = useState(false)
   const [transform, setTransform] = useState<ViewportTransform | null>(null)
   const overlayHandleRef          = useRef<CanvasOverlayHandle | null>(null)
   const canvasWrapRef             = useRef<HTMLDivElement | null>(null)
-  const drawings                  = useDrawingStore(s => s.drawings[symbol] ?? [])
+  const drawings                  = useDrawingStore(selectDrawings(symbol))
   const activeTool                = useDrawingStore(s => s.activeTool)
   const addDrawing                = useDrawingStore(s => s.addDrawing)
   const pendingAnchorRef          = useRef<{ time: number; price: number } | null>(null)

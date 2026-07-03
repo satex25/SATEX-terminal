@@ -66,8 +66,16 @@ function Sparkline({ ledger }: { ledger: FundedAccountSnapshot['ledger'] }) {
     ctx.scale(dpr, dpr)
 
     const values = ledger.map(e => e.equity)
-    const min = Math.min(...values)
-    const max = Math.max(...values)
+    // P-041-class guard: iterate instead of Math.min/max(...arr) — a spread
+    // over an unbounded array risks a call-stack blowup. The sole call site
+    // caps ledger to 10 entries today, but this component has no internal
+    // bound of its own, so it must be safe for any future caller.
+    let min = values[0] ?? 0
+    let max = values[0] ?? 0
+    for (const v of values) {
+      if (v < min) min = v
+      if (v > max) max = v
+    }
     const range = max - min || 1
 
     const cw = canvas.clientWidth

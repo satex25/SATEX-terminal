@@ -10,7 +10,7 @@
  * IPC stays Zod-validated) — pin them so drift fails a gate, not a session.
  */
 import { describe, it, expect } from 'vitest'
-import { INTEL_MODULE_IDS } from '@shared/types'
+import { INTEL_MODULE_IDS, RAIL_IDS } from '@shared/types'
 import { IntelLayoutSetReq, WorkspaceStateSetReq } from './ipc-schemas'
 
 function fullValidLayout() {
@@ -50,8 +50,15 @@ describe('IntelLayoutSetReq', () => {
   })
 })
 
-describe('WorkspaceStateSetReq (P-048 landingWorkspace)', () => {
-  const base = { version: 1, workspace: 'Trade', quadSymbols: ['AAPL', 'MSFT', 'TSLA', 'AMZN'], chartSymbol: 'NVDA' }
+describe('WorkspaceStateSetReq (P-048 landingWorkspace / Phase-D collapsedRails)', () => {
+  const base = {
+    version: 1,
+    workspace: 'Trade',
+    quadSymbols: ['AAPL', 'MSFT', 'TSLA', 'AMZN'],
+    chartSymbol: 'NVDA',
+    landingWorkspace: 'Trade',
+    collapsedRails: [],
+  }
 
   it('accepts Intel as a landing workspace', () => {
     expect(WorkspaceStateSetReq.safeParse({ ...base, landingWorkspace: 'Intel' }).success).toBe(true)
@@ -59,5 +66,18 @@ describe('WorkspaceStateSetReq (P-048 landingWorkspace)', () => {
 
   it('rejects an unknown landing workspace', () => {
     expect(WorkspaceStateSetReq.safeParse({ ...base, landingWorkspace: 'Lobby' }).success).toBe(false)
+  })
+
+  it('accepts a full set of known rail ids in collapsedRails', () => {
+    expect(WorkspaceStateSetReq.safeParse({ ...base, collapsedRails: [...RAIL_IDS] }).success).toBe(true)
+  })
+
+  it('rejects an unknown rail id in collapsedRails', () => {
+    expect(WorkspaceStateSetReq.safeParse({ ...base, collapsedRails: ['sidebar'] }).success).toBe(false)
+  })
+
+  it('rejects a collapsedRails array longer than the known rail set (bounded, cf. quadSymbols/IntelLayoutSetReq)', () => {
+    const tooMany = [...RAIL_IDS, RAIL_IDS[0]]
+    expect(WorkspaceStateSetReq.safeParse({ ...base, collapsedRails: tooMany }).success).toBe(false)
   })
 })

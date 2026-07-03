@@ -26,6 +26,9 @@ import { BottomBar } from './components/BottomBar'
 import { CommandPalette } from './components/CommandPalette'
 import { TweaksPanel } from './components/TweaksPanel'
 import { IntelWorkspace } from './components/intel/IntelWorkspace'
+import { RailSlot } from './components/RailSlot'
+import type { RailId } from '@shared/types'
+import { computeRailTemplate, railTemplateIsDefault, type RailTrackSpec } from './lib/rail-layout'
 import { AboutModal } from './components/modals/AboutModal'
 import { ShortcutsModal } from './components/modals/ShortcutsModal'
 import { SettingsModal } from './components/modals/SettingsModal'
@@ -87,6 +90,43 @@ export default function App() {
   const landingWorkspace  = useWorkspaceStore(s => s.state.landingWorkspace)
   const wsHydrated        = useWorkspaceStore(s => s.hydrated)
   const landingAppliedRef = useRef(false)
+
+  // Fully-collapsible side rails (operator ask, 2026-07-02 — Intel-workspace
+  // ultraplan Phase D polish). View state only; routes no order. Track-size
+  // math is headless in lib/rail-layout.ts; an inline style is only ever
+  // applied when something on that stack is actually collapsed, so the
+  // nothing-collapsed render path is byte-for-byte the existing plain CSS.
+  const collapsedRails = useWorkspaceStore(s => s.state.collapsedRails)
+  const toggleRail     = useWorkspaceStore(s => s.toggleRail)
+  const collapsedSet   = new Set(collapsedRails)
+  const isRailCollapsed = (id: RailId): boolean => collapsedSet.has(id)
+
+  const mainRowSpecs: RailTrackSpec[] = [
+    { id: 'watchlist', expandedSize: '224px', flex: false },
+    { id: '__center',  expandedSize: 'minmax(0, 1fr)', flex: true },
+    { id: '__right',   expandedSize: '340px', flex: false },
+  ]
+  const rightStackSpecs: RailTrackSpec[] = [
+    { id: 'depth',  expandedSize: '288px', flex: false },
+    { id: 'regime', expandedSize: '268px', flex: false },
+    { id: 'exec',   expandedSize: 'minmax(0, 1fr)', flex: true },
+  ]
+  const secondaryRowSpecs: RailTrackSpec[] = [
+    { id: 'portfolio', expandedSize: '224px', flex: false },
+    { id: 'news',      expandedSize: 'minmax(0, 1fr)', flex: true },
+    { id: 'risk',      expandedSize: 'minmax(0, 1fr)', flex: true },
+    { id: 'logs',      expandedSize: '340px', flex: false },
+    { id: 'health',    expandedSize: '320px', flex: false },
+  ]
+  const mainRowStyle = railTemplateIsDefault(mainRowSpecs, collapsedSet)
+    ? undefined
+    : { gridTemplateColumns: computeRailTemplate(mainRowSpecs, collapsedSet).join(' 1px ') }
+  const rightStackStyle = railTemplateIsDefault(rightStackSpecs, collapsedSet)
+    ? undefined
+    : { gridTemplateRows: computeRailTemplate(rightStackSpecs, collapsedSet).join(' 1px ') }
+  const secondaryRowStyle = railTemplateIsDefault(secondaryRowSpecs, collapsedSet)
+    ? undefined
+    : { gridTemplateColumns: computeRailTemplate(secondaryRowSpecs, collapsedSet).join(' 1px ') }
 
   // Active replay sessions force the Replay workspace so the user can't
   // accidentally hide the scrubber while a historical tape is playing.
@@ -251,10 +291,12 @@ export default function App() {
 
       <TickerTape />
 
-      <div className="bb-main-row">
-        {/* Left rail: Watchlist */}
+      <div className="bb-main-row" style={mainRowStyle}>
+        {/* Left rail: Watchlist — fully collapsible (Phase D polish). */}
         <div className="bb-col-left">
-          <WatchlistPanel />
+          <RailSlot title="Watchlist" orientation="col" collapsed={isRailCollapsed('watchlist')} onToggle={() => toggleRail('watchlist')}>
+            <WatchlistPanel />
+          </RailSlot>
         </div>
         <span className="bb-divider-v" />
 
@@ -329,27 +371,56 @@ export default function App() {
         </div>
         <span className="bb-divider-v" />
 
-        {/* Right rail: Depth / Regime / Exec */}
-        <div className="bb-col-right">
-          <div className="bb-right-depth"><DepthBookPanel /></div>
+        {/* Right rail: Depth / Regime / Exec — each fully collapsible independently. */}
+        <div className="bb-col-right" style={rightStackStyle}>
+          <div className="bb-right-depth">
+            <RailSlot title="Depth" orientation="row" collapsed={isRailCollapsed('depth')} onToggle={() => toggleRail('depth')}>
+              <DepthBookPanel />
+            </RailSlot>
+          </div>
           <span className="bb-divider-h" />
-          <div className="bb-right-regime"><RegimeDashboardPanel /></div>
+          <div className="bb-right-regime">
+            <RailSlot title="Regime" orientation="row" collapsed={isRailCollapsed('regime')} onToggle={() => toggleRail('regime')}>
+              <RegimeDashboardPanel />
+            </RailSlot>
+          </div>
           <span className="bb-divider-h" />
-          <div className="bb-right-exec"><ExecTicketPanel /></div>
+          <div className="bb-right-exec">
+            <RailSlot title="Exec" orientation="row" collapsed={isRailCollapsed('exec')} onToggle={() => toggleRail('exec')}>
+              <ExecTicketPanel />
+            </RailSlot>
+          </div>
         </div>
       </div>
 
-      {/* Secondary: Portfolio | Catalysts | Risk | Logs */}
-      <div className="bb-secondary-row">
+      {/* Secondary: Portfolio | News | Risk | Logs | Health — each (except
+          Portfolio, out of the operator's collapse ask) fully collapsible. */}
+      <div className="bb-secondary-row" style={secondaryRowStyle}>
         <div className="bb-sec-portfolio"><PortfolioMiniPanel /></div>
         <span className="bb-divider-v" />
-        <div className="bb-sec-catalysts"><NewsDeskPanel /></div>
+        <div className="bb-sec-catalysts">
+          <RailSlot title="News" orientation="col" collapsed={isRailCollapsed('news')} onToggle={() => toggleRail('news')}>
+            <NewsDeskPanel />
+          </RailSlot>
+        </div>
         <span className="bb-divider-v" />
-        <div className="bb-sec-risk"><RiskGatePanel /></div>
+        <div className="bb-sec-risk">
+          <RailSlot title="Risk" orientation="col" collapsed={isRailCollapsed('risk')} onToggle={() => toggleRail('risk')}>
+            <RiskGatePanel />
+          </RailSlot>
+        </div>
         <span className="bb-divider-v" />
-        <div className="bb-sec-logs"><SystemLogsPanel /></div>
+        <div className="bb-sec-logs">
+          <RailSlot title="Logs" orientation="col" collapsed={isRailCollapsed('logs')} onToggle={() => toggleRail('logs')}>
+            <SystemLogsPanel />
+          </RailSlot>
+        </div>
         <span className="bb-divider-v" />
-        <div className="bb-sec-health"><HealthPanel /></div>
+        <div className="bb-sec-health">
+          <RailSlot title="Health" orientation="col" collapsed={isRailCollapsed('health')} onToggle={() => toggleRail('health')}>
+            <HealthPanel />
+          </RailSlot>
+        </div>
       </div>
 
       <BottomBar />

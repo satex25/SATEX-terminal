@@ -1159,7 +1159,20 @@ app.on('before-quit', (event) => {
   if (isQuitting) return
   event.preventDefault()
   isQuitting = true
+  // Hard-exit watchdog — guarantees no orphaned processes survive in Task
+  // Manager. If async teardown wedges (e.g. a WS `close` that never fires its
+  // 'close' event, leaving session.disconnect() pending forever so the
+  // `.finally()` below never runs), this forces the whole process down after
+  // 5s. Chromium's GPU / renderer / network-service children are owned by this
+  // main process and die with it, so a guaranteed main-process exit guarantees
+  // a clean Task Manager on every close path. Mirrors gracefulShutdown()'s
+  // crash-path net (app.exit(1)); exit(0) here because this is a clean quit.
+  const hardExit = setTimeout(() => {
+    log.warn('shutdown watchdog fired after 5s — forcing exit to prevent orphaned processes')
+    app.exit(0)
+  }, 5_000)
+  hardExit.unref()
   engine.shutdown()
     .catch((e) => log.warn('engine shutdown failed', { err: String(e) }))
-    .finally(() => app.quit())
+    .finally(() => { clearTimeout(hardExit); app.quit() })
 })

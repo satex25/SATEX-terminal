@@ -36,6 +36,17 @@ const EMPTY: FundedAccountStored = {
   updatedAt: 0,
 }
 
+/** Fresh-copy constructor for the empty state. P-061-class hardening: a bare
+ *  `{ ...EMPTY }` spread is shallow and would alias the SAME `ledger`/
+ *  `dailyPnl` array references into every caller — harmless only as long as
+ *  every consumer defensively copies before mutating (true today, verified at
+ *  equity-hwm.ts:58 and daily-pnl-ledger.ts:36, but fragile: a future direct
+ *  mutation of a returned empty state would corrupt every other holder of it,
+ *  including the shared module-level EMPTY constant itself). */
+function freshEmpty(): FundedAccountStored {
+  return { ...EMPTY, ledger: [], dailyPnl: [] }
+}
+
 export interface FundedAccountStoreDeps {
   readFile: (path: string) => string | null
   writeFile: (path: string, data: string) => void
@@ -80,7 +91,7 @@ function isDailyEntry(x: unknown): x is { date: string; realizedPnl: number; tra
 }
 
 function sanitize(raw: unknown): FundedAccountStored {
-  if (!raw || typeof raw !== 'object') return { ...EMPTY }
+  if (!raw || typeof raw !== 'object') return freshEmpty()
   const r = raw as Record<string, unknown>
   const activeProfileId = typeof r.activeProfileId === 'string' ? r.activeProfileId : null
   const lastEodFiredDate = typeof r.lastEodFiredDate === 'string'
@@ -108,11 +119,11 @@ export class FundedAccountStore {
   load(): FundedAccountStored {
     try {
       const raw = this.deps.readFile(this.deps.resolvePath())
-      if (raw === null) return { ...EMPTY }
+      if (raw === null) return freshEmpty()
       return sanitize(JSON.parse(raw))
     } catch (e) {
       log.warn('funded-account load failed — falling back to empty', { err: String(e) })
-      return { ...EMPTY }
+      return freshEmpty()
     }
   }
 

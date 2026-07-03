@@ -9,6 +9,56 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **P-074: `funded-account-store.ts` aliased its shared empty-state arrays
+  into every caller (the same class as P-061), plus an unbounded array-spread
+  in `FundedAccountPanel.tsx`.** All three `{ ...EMPTY }` fallback returns
+  (no file / corrupt JSON / read-throws) shared the SAME `ledger`/`dailyPnl`
+  array references — latent today because both current consumers
+  (`equity-hwm.ts`, `daily-pnl-ledger.ts`) already defensively copy before
+  mutating, but the same fragile pattern this repo has now hit three times.
+  Fixed with a `freshEmpty()` constructor that always returns new arrays, used
+  at all three sites. Separately, `FundedAccountPanel.tsx`'s `Sparkline` used
+  `Math.min(...values)`/`Math.max(...values)` — an unbounded spread (the
+  P-041 class), safe only because the sole call site caps the ledger to 10
+  entries; replaced with a bounded for-loop so the component is safe for any
+  future caller regardless of ledger size. Regression-pinned with a new test
+  asserting independent `load()` calls never share array references. Gates
+  included in the P-073 run above; `funded-account-store.test.ts` 11→12 tests,
+  `funded-account-integration.test.ts` unaffected (34/34).
+
+- **P-080: `Vault/00-Audit/MAY TACTICS.md` carried a 310-byte trailing NUL-byte
+  tail (file-bridge corruption, the P-021/P-078 class) on an otherwise
+  byte-for-byte-unchanged file.** Found during the mandated NUL/CRCR audit
+  sweep of every modified/untracked working-tree file (rule 5c). `git diff`
+  against HEAD showed zero content differences once the NUL tail is excluded
+  — `git show HEAD:<path>` was 37134 bytes with 0 NUL bytes; the working-tree
+  copy was 37444 bytes (exactly +310 NUL). Recovered via `git show HEAD:<path>`
+  restore through the Linux mount (P-078 workaround), re-verified 0 NUL / 0
+  CRCR / byte-identical to HEAD. Not a code defect — Cowork file-bridge scar
+  tissue on a Vault markdown file; off the trading-safety perimeter.
+
+### Fixed
+
+- **P-072: normal quit path had no hard-exit watchdog — a wedged async teardown
+  could orphan the Electron process (and its Chromium GPU/renderer children) in
+  Task Manager.** The crash path (`gracefulShutdown`, uncaught-exception /
+  unhandled-rejection) already force-exits after 5s via `app.exit(1)`, but the
+  normal `before-quit` handler (`src/main/index.ts`) did `engine.shutdown().finally(() => app.quit())`
+  with no timeout. `engine.shutdown()` awaits `session.disconnect()`
+  (`trading-engine.ts:853`); if a WebSocket `close` never fires its 'close' event
+  the promise stays pending forever, the `.finally()` never runs, `app.quit()` is
+  never called, and the process tree lingers after every window is closed. Fixed by
+  adding a 5s `.unref()`'d watchdog in `before-quit` that calls `app.exit(0)` if the
+  graceful path hasn't completed, and clearing it in the `.finally()` on the happy
+  path — mirroring the crash-path net. No SATEX-spawned child processes exist
+  (verified: no `child_process`/`spawn`/`fork`/`utilityProcess`/`worker_threads` in
+  `src/`), so a guaranteed main-process exit is sufficient to leave a clean Task
+  Manager on every close path. Off the trading-safety perimeter (process lifecycle,
+  no order path). `src/main/index.ts` is the Electron entry (top-level side effects,
+  not unit-tested), so verification is via the type/lint gates plus the reasoned
+  teardown-hang argument. Gates: typecheck exit 0 · lint exit 0 (0 warnings) · vitest
+  115 files / 1463 tests / 0 fail (segmented; single-pool sandbox stall is P-071,
+  sandbox-only) · knip sandbox-OOM (CI arbiter).
 - **P-061: `indicator-settings.ts` defaults-fallback paths aliased the shared
   `DEFAULT_INDICATOR_SETTINGS` module constant into the live cache.** The three "no
   file / no fence / read-error" fallback paths returned `{ ...DEFAULT_SETTINGS }` -- a
@@ -218,6 +268,52 @@ changes alongside fixes during the v0.x stabilization series.
   static `import { exportChartPng }` to a dynamic `import('../chart/export')`
   scoped to the PNG button's async handler, so any failure is isolated to
   that one action. TODO: add a `chart.pngExport` preload bridge.
+
+### Added
+
+- **P-076 / P-077: coverage for two untested main-process services.**
+  New-file-only Vitest suites for `live-candle-buffer.ts` (13 tests — OHLC
+  aggregation, negative-volume clamp, the `MAX_CANDLES_PER_SYMBOL`
+  bounded-growth cap, the intra-bar coalesced flush, the bucket-roll
+  fill-forward, and the `onCandle` unsubscribe/listener-leak contract) and
+  `system-logs.ts` (9 tests — ingest to tail mapping, the `BUFFER_SIZE = 60`
+  ring-buffer cap, EVENT/level classification, and the `onTail`
+  unsubscribe/listener-leak contract). Both service sources byte-for-byte
+  unchanged. Gates: typecheck 0, lint 0, +2 files / +22 tests, all green.
+
+- **P-073: Intel-workspace ultraplan Phase D — every side-rail panel
+  (Watchlist, Depth, Regime, Exec, News, Risk, Logs, Health) now fully
+  collapses**, matching the `FundedAccountPanel.tsx` collapse interaction but
+  standardized and — unlike that panel's "shorter card" — actually shrinking
+  the wrapping grid track to a thin re-open handle so the freed space returns
+  to the center charts / a sibling panel, never a dead gutter. New headless
+  `renderer/lib/rail-layout.ts` (`computeRailTemplate`, 13 tests) computes
+  each stack's CSS track sizes, promoting the last non-collapsed track to the
+  flex sink only when the stack's one naturally-flexible track was the one
+  collapsed. New presentational `renderer/components/RailSlot.tsx` wraps all
+  8 panels from `App.tsx` with zero changes to any panel's own source. State
+  is a new additive `WorkspaceState.collapsedRails: RailId[]` field (no
+  version bump, tolerant hydrate, persisted through the existing
+  `workspace-state.md` service and IPC channel). Off the trading-safety
+  perimeter throughout (view state only, routes no order). Gates: typecheck
+  exit 0 · lint exit 0 (0 warnings) · vitest 117 files / 1488 tests / 0 fail ·
+  knip exit 0 (55 lines, byte-identical to baseline).
+
+- **P-079: coverage for `env.ts` (85 LOC, the process.env validation/access
+  module every service reads through).** New-file-only Vitest suite (21
+  tests) via a `vi.resetModules()` + save/restore-`process.env` harness per
+  test (the module holds a top-level `_env` memoization cache, so each
+  scenario needs a fresh module instance). Covers all field defaults,
+  `SATEX_USE_SIMULATOR` case-insensitive parsing, `ALPACA_FEED` fallback to
+  `iex` on an unrecognized value, numeric overrides
+  (`SATEX_RNG_SEED`/`SATEX_DAILY_LOSS_LIMIT_PCT`/`SATEX_MAX_OPEN_POSITIONS`),
+  `loadEnv()`/`getEnv()` memoization (a second call after `process.env`
+  mutates still returns the first snapshot), and pins today's real — not
+  ideal — behavior of a malformed `SATEX_RNG_SEED` (`parseInt` → `NaN`,
+  un-null-guarded for the present-but-invalid case; only the *absent* case
+  falls back to `null`). Source byte-for-byte unchanged. Off the
+  trading-safety perimeter. Gates: typecheck exit 0 · lint exit 0 (0
+  warnings) · `env.test.ts` 21/21 pass.
 
 ### Added
 
@@ -1236,37 +1332,4 @@ place but the installer remains **unsigned** pending CA-issued certificate
 ### Added
 - Brand icon (ember colorway) embedded as multi-resolution `resources/icon.ico`.
   Replaces the prior `icon.png` reference in `electron-builder.yml` that
-  pointed at a file that never existed; packaged builds used the default
-  Electron icon as a result. Recipe documented in the project memory under
-  `reference_logo_assets`.
-
-## 0.4.0 (2026-05-18)
-
-### Fixed
-- 1 critical + 4 high + 13 medium/low findings from the 2026-05-17 audit
-  (commits `4982185 .. f3ced80`). Highlights:
-  - **Paper-mode sell-fill double-count** — `applyFill` no longer adds
-    `cost + pnl` to cash; the realized PnL is already implicit in the sale
-    proceeds. Pre-fix, every closed position inflated paper-mode cash by
-    the PnL delta.
-  - **Risk-gate daily-loss baseline** — gate now reads
-    `getSessionStartEquity` instead of the `STARTING_EQUITY` constant. The
-    constant lags any actual Alpaca account sync.
-  - **Volume / VWAP inflation** — `LiveMarket.onTick` only accumulates
-    `volume` and `vwap` on `kind === 't'` (trade) frames. Quote-update
-    frames previously contributed bid+ask depth to the volume metric,
-    inflating it ~10× and poisoning VWAP.
-  - **Replay tick skip** — `ReplaySource.refillPrefetch` pages until the
-    underlying `readTapeRange` returns fewer than `PAGE_LIMIT` rows. The
-    prior single-read silently dropped 25-50% of ticks at ≥30× speed on
-    live-recorded tape.
-  - **Kill-switch disarm native dialog** — `IPC.RISK_KILL false` now goes
-    through `dialog.showMessageBox` whenever live-mode is armed. Mirrors
-    the live-mode enable interlock (C6) so a renderer compromise can't
-    silently disarm via `window.satex.killSwitch(false)`.
-
-### Security
-- **Electron sandbox + CSP hardening (5 medium).** `sandbox: true` on the
-  BrowserWindow webPreferences; `script-src 'self'` (no `'unsafe-inline'`)
-  on the renderer CSP; scheme allowlist on `shell.openExternal`;
-  `AutonomousConfig` Zod schema tightened to `.strict()`; IPC byte-size ca
+  pointed at a file that

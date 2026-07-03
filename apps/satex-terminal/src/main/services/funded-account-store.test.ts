@@ -20,6 +20,25 @@ describe('FundedAccountStore.load', () => {
     expect(s.ledger).toEqual([])
   })
 
+  it('each empty-state read returns its OWN ledger/dailyPnl arrays (no shared-reference aliasing)', () => {
+    // Same lesson as P-061 (indicator-settings.ts): a shallow spread of a
+    // module-level EMPTY constant would alias the SAME array into every
+    // caller, so mutating one caller's result could corrupt every other
+    // holder of the "empty" state. Covers all three freshEmpty() call sites:
+    // no-file, corrupt-JSON, and read-throws.
+    const { store: noFile } = buildStore(null)
+    const { store: corrupt } = buildStore('{not json at all')
+    const a = noFile.load()
+    const b = noFile.load()
+    const c = corrupt.load()
+    expect(a.ledger).not.toBe(b.ledger)
+    expect(a.dailyPnl).not.toBe(b.dailyPnl)
+    expect(a.ledger).not.toBe(c.ledger)
+    a.ledger.push({ date: '2026-01-01', equity: 1, recordedAt: 0 })
+    expect(b.ledger).toEqual([])
+    expect(c.ledger).toEqual([])
+  })
+
   it('round-trips a saved state', () => {
     const { store } = buildStore()
     const written: FundedAccountStored = {
