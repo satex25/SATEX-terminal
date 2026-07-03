@@ -5,7 +5,7 @@
  * Uses Zustand directly (no DOM required).
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useDrawingStore } from './drawingStore'
+import { useDrawingStore, selectDrawings } from './drawingStore'
 import type { Drawing, LineDraw } from './DrawingModel'
 
 function line(id: string, symbol = 'AAPL'): LineDraw {
@@ -149,5 +149,40 @@ describe('drawingStore - undo/redo (CHART-09)', () => {
     expect(useDrawingStore.getState().getDrawings('AAPL')).toHaveLength(1)
     useDrawingStore.getState().redo('AAPL')
     expect(useDrawingStore.getState().getDrawings('AAPL')).toHaveLength(2)
+  })
+})
+
+describe('drawingStore - selectDrawings snapshot stability', () => {
+  beforeEach(() => {
+    useDrawingStore.setState({
+      drawings: {}, activeTool: 'select',
+      undoSymbol: '', undoStack: [], redoStack: [],
+    })
+  })
+
+  // Regression: an inline `s.drawings[symbol] ?? []` selector mints a fresh
+  // array each call, breaking the useSyncExternalStore snapshot-cache invariant
+  // and looping <DrawingLayer> into "Maximum update depth exceeded" on every
+  // boot (default symbol has no drawings). selectDrawings must return a stable
+  // reference for an empty symbol so React sees an unchanged snapshot.
+  it('returns a stable reference for an empty symbol across calls', () => {
+    const state = useDrawingStore.getState()
+    const a = selectDrawings('TSLA')(state)
+    const b = selectDrawings('TSLA')(state)
+    expect(a).toBe(b)
+    expect(a).toEqual([])
+  })
+
+  it('returns the same stable empty reference across distinct empty symbols', () => {
+    const state = useDrawingStore.getState()
+    expect(selectDrawings('TSLA')(state)).toBe(selectDrawings('NVDA')(state))
+  })
+
+  it('returns the live array when the symbol has drawings', () => {
+    useDrawingStore.getState().addDrawing('AAPL', line('d1'))
+    const state = useDrawingStore.getState()
+    const result = selectDrawings('AAPL')(state)
+    expect(result).toHaveLength(1)
+    expect(result).toBe(state.drawings['AAPL'])
   })
 })

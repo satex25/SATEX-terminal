@@ -409,3 +409,46 @@ describe('priorDayFromCandles', () => {
     expect(priorDayFromCandles(candles)).toBeNull()
   })
 })
+
+// ── P-049: degenerate window / lookback guards ───────────────────────────────
+
+describe('swing-points degenerate window/lookback (P-049)', () => {
+  const peaked = flatCandles([1, 2, 3, 10, 3, 2, 1])
+
+  it('window=0 yields no swings instead of marking every bar', () => {
+    expect(swingHighs(peaked, 0)).toEqual([])
+    expect(swingLows(peaked, 0)).toEqual([])
+  })
+
+  it('negative window yields no swings instead of throwing', () => {
+    expect(swingHighs(peaked, -2)).toEqual([])
+    expect(swingLows(peaked, -2)).toEqual([])
+  })
+
+  it('fractional window floors: 2.5 behaves exactly like 2', () => {
+    expect(swingHighs(peaked, 2.5)).toEqual(swingHighs(peaked, 2))
+    expect(swingHighs(peaked, 2.5)).toHaveLength(1)
+    expect(swingHighs(peaked, 2.5)[0]!.index).toBe(3)
+  })
+
+  it('fractional window floors for lows symmetrically', () => {
+    const trough = flatCandles([10, 9, 8, 1, 8, 9, 10])
+    expect(swingLows(trough, 2.5)).toEqual(swingLows(trough, 2))
+    expect(swingLows(trough, 2.5)).toHaveLength(1)
+  })
+
+  it('fractional lookback floors: averageVolume averages the last 2 bars', () => {
+    const candles = [
+      candle({ time: 0, volume: 100 }),
+      candle({ time: 1, volume: 200 }),
+      candle({ time: 2, volume: 300 }),
+    ]
+    expect(averageVolume(candles, 2.5)).toBe(250)
+  })
+
+  it('non-positive lookback returns 0, not NaN', () => {
+    const candles = [candle({ time: 0, volume: 100 })]
+    expect(averageVolume(candles, 0)).toBe(0)
+    expect(averageVolume(candles, -1)).toBe(0)
+  })
+})

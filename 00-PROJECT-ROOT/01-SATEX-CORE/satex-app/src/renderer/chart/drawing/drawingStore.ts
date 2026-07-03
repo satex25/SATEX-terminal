@@ -208,3 +208,16 @@ export const useDrawingStore = create<DrawingStoreState>((set, get) => ({
     return redoStack.length > 0 && undoSymbol === symbol
   },
 }))
+
+// ── Selectors ───────────────────────────────────────────────────────────────────
+//
+// useSyncExternalStore (Zustand v5) requires selectors to return stable references for
+// the same state — `?? []` mints a new array on every call and breaks the snapshot-cache
+// invariant, causing infinite render loops (same pitfall solved by EMPTY_CANDLES in
+// marketStore). Subscribe via this selector so an empty symbol yields one frozen array.
+
+const EMPTY_DRAWINGS: readonly Drawing[] = Object.freeze([])
+
+/** Stable per-symbol drawings selector for React subscriptions. */
+export const selectDrawings = (symbol: string) => (s: DrawingStoreState): readonly Drawing[] =>
+  s.drawings[symbol] ?? EMPTY_DRAWINGS

@@ -9,6 +9,99 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **P-061: `indicator-settings.ts` defaults-fallback paths aliased the shared
+  `DEFAULT_INDICATOR_SETTINGS` module constant into the live cache.** The three "no
+  file / no fence / read-error" fallback paths returned `{ ...DEFAULT_SETTINGS }` -- a
+  shallow spread holding the SAME `enabled` object and `emaPeriods` array reference as the
+  shared defaults constant, cached on top (`get()`), so any future in-main mutation of a
+  defaults read could have silently corrupted process-lifetime defaults for every later
+  caller. Latent (today's only consumer is IPC, structured-clone-shielded). Fixed by routing
+  all three sites through the existing `sanitize({})` normalizer, which already builds fresh
+  objects for every field -- one line changed per site, semantics unchanged. Regression-pinned:
+  a new test drives all three fallback paths -- including forcing the actual `readFileSync`
+  `catch` branch via an EISDIR (settings-path-as-directory) trick, never previously exercised
+  -- and asserts no returned object aliases the shared constant, plus that mutating a returned
+  object cannot corrupt it. Off the trading-safety perimeter (chart-toggle persistence routes
+  no order). Gates: typecheck OK · lint OK (0 warnings) · vitest 116 files / 1464 tests / 0
+  fail · knip OK (55 lines, no new).
+- **P-055: Intel workspace `live` freshness dot froze green when the intel feed died.** The dot
+  derives at render time (`lastUpdated` within 2x the poll interval), but a failing `getIntel` poll
+  updated no state -- no re-render, so the last derivation (typically green) persisted indefinitely:
+  stale shown as fresh (Constitution 3.2 "degrade loudly"), on the workspace whose whole job is honest
+  signal display. Fixed by bumping a `useState` counter in the poll's failure path (success already
+  re-renders via `setSnapshot`), so the dot re-derives and decays within one poll interval; the
+  keep-last-snapshot transient-error contract is unchanged and the `cancelled` guard keeps the bump
+  unmount-safe. Found auditing the unreviewed P-048 diff. Component-level test blocked on the standing
+  `@testing-library/react` operator item. Off the trading-safety perimeter (renderer display). Gates:
+  typecheck OK / lint OK (0 warnings) / vitest 113 files / 1419 tests / 0 fail / knip OK (no new
+  warnings).
+- **P-056: `IntelLayoutSetReq` accepted an unbounded placement array.** Every sibling wire contract
+  bounds its collections (`quadSymbols` `.length(4)`) but the Intel layout channel's array had no cap,
+  though a valid layout structurally holds at most one placement per module (ids are enum-validated,
+  renderer reducers enforce uniqueness, the service dedupes by id). Bounded with
+  `.max(INTEL_MODULE_IDS.length)` -- self-maintaining as modules are added. Plus the first co-located
+  coverage for the 375-line `ipc-schemas.ts`: NEW `ipc-schemas.test.ts` (+8 tests -- the P-056 bound,
+  `.strict()` extra-key rejection, integer/positive geometry, unknown-module-id rejection, and the
+  P-048 `landingWorkspace` accept/reject pair). Off the trading-safety perimeter. Gates: typecheck OK /
+  lint OK (0 warnings) / vitest 113 files / 1419 tests / 0 fail / knip OK (no new warnings).
+- **P-049: `swing-points.ts` accepted degenerate `window`/`lookback` parameters (every-bar swings
+  or TypeError).** `swingHighs`/`swingLows` ran their scan loops straight off the raw parameter:
+  `window=0` vacuously marked every bar a swing high AND swing low (garbage double-top/bottom pairs
+  plus O(n^2) pair churn downstream on the ChartPanel overlay path), while a negative or fractional
+  window indexed off the array (`TypeError` reading `.high` of `undefined`); `averageVolume` crashed
+  identically on a fractional `lookback`. Proven by `satex-agent-p049-repro.mjs` (OLD vs FIX; w=2/w=3
+  parity byte-identical). Latent -- every in-repo call-site passes integer defaults >= 3 -- the P-040
+  degenerate-parameter class on the layer's last unguarded file. Fixed by flooring both parameters
+  and bailing at `window < 1` to the layer's insufficient-parameter convention (`[]`). +6 regression
+  tests in `indicators.test.ts`. Off the trading-safety perimeter (chart display math). Gates:
+  typecheck OK · lint OK (0 warnings) · vitest 106 files / 1374 tests / 0 fail · knip OK (no new
+  warnings).
+- **P-046: `SettingsModal` self-eval poll timers fired setState after unmount (PR #6 leak class).**
+  `runSelfEvalNow` scheduled three untracked `setTimeout`s (1500/4000/8000 ms) that each call
+  `refreshSelfEval` → `setSeStatus` (a setState + a `getSelfEvalStatus` IPC round-trip) to reveal the
+  "Running… → result" transition. None were tracked or cleared, so closing the Settings dialog within
+  ~8 s of pressing "Run Self-Eval Now" fired three setState-after-unmount calls plus three orphaned IPC
+  reads into a closed modal. Fixed by holding the timer IDs in a `pollTimersRef` and clearing them in an
+  unmount cleanup effect — mirrors the canonical `App.tsx` `armTimerRef` + `clearTimeout` pattern. Off
+  the trading-safety perimeter (renderer presentation; routes no order). Gates: typecheck OK · lint OK
+  (0 warnings) · vitest 100 files / 1287 tests / 0 fail · knip OK (no new warnings).
+- **P-044: a render error in the Markets or Replay workspace blackscreened the whole terminal.** The
+  center-column workspace content had no error boundary, so any panel render-throw unmounted the entire
+  React tree (only the Quad workspace survived — it wraps each pane in `ErrorBoundary`). Wrapped the
+  center column in a keyed `ErrorBoundary` (key = active workspace) with a fallback that shows the
+  failing workspace + the real error message and keeps every other workspace and the kill-switch chord
+  reachable. Off the trading-safety perimeter. Gates: typecheck OK · lint OK (0 warnings) · vitest 100
+  files / 1287 tests / 0 fail · knip OK.
+- **P-045: Quad panes rendered empty/"sloppy" when switching into the Quad view with data present.** The
+  per-pane lightweight-charts series is created asynchronously, but the bulk `setData`/EMA/VWAP effects
+  keyed only on candle count and gated on the series ref — so they fired before the series existed and
+  never re-fired, leaving panes blank until the next bar ticked. Added a `ready` flag set on series
+  creation and threaded it into those effect deps so existing data is applied the instant the chart is
+  ready (no per-tick repaint cost). Off the trading-safety perimeter. Gates: typecheck OK · lint OK ·
+  vitest 100 files / 1287 tests / 0 fail · knip OK.
+- **P-043: `ChartPanel` leaked a `ResizeObserver` on every remount (PR #6 leak class).** The
+  single-chart init effect created `const ro = new ResizeObserver(...)` inside its async IIFE, so the
+  observer was local to that closure and the effect cleanup — which calls `chart.remove()` — never
+  disconnected it. Every unmount/remount of the central Trade/Focus chart (workspace switch,
+  symbol-change remount) orphaned a live observer that still referenced the container and whose callback
+  closed over the disposed chart (calling `.resize()` on a removed chart on the next resize). Fixed by
+  hoisting `ro` to an effect-scoped `let` and adding `ro?.disconnect()` in the cleanup before chart
+  disposal — byte-identical to the already-fixed `QuadPaneChart` sibling. Off the trading-safety
+  perimeter (renderer presentation; routes no order). Gates: typecheck OK · lint OK (0 warnings) ·
+  vitest 100 files / 1287 tests / 0 fail · knip OK (no new warnings).
+- **P-041: `PortfolioMiniPanel` spread an unbounded PnL-snapshot array into `Math.min`/`Math.max`.**
+  The equity-curve sparkline computed `Math.min(...snapshots)` / `Math.max(...snapshots)` (and
+  duplicated the same spread four times in the SVG baseline). `snapshots` comes from
+  `getPnlSnapshots` → `listPnlSnapshots` (`SELECT * FROM pnl …`, **no LIMIT**), and PnL rows are
+  written every 60s (`trading-engine.ts` `pnlTimer`) with no cap — so an always-on session crosses
+  the V8 spread-argument limit (~65k–125k) in ~45 days and the panel throws `RangeError: Maximum
+  call stack size exceeded`. Same class as P-027 (vol-heatmap) / QuadPaneChart. Fixed: a single-pass
+  `seriesExtent` helper (`renderer/lib/extent.ts`) computes min/max in one loop; the panel routes
+  both the polyline and the (now deduped) baseline through it — zero array spreads remain.
+  Behaviour-identical for in-cap arrays. Off the trading-safety perimeter (renderer display; the
+  other snapshot consumer, `risk-gates.ts`, already iterates with a `for` loop and is untouched).
+  +1 test file / +5 tests (`renderer/lib/extent.test.ts`, incl. a 300k-element no-throw case). Gates:
+  typecheck OK · lint OK (0 warnings) · vitest 100 files / 1287 tests / 0 fail · knip OK (Node-20 shim).
 - **P-040: `indicator-graph.ts` `applyStdev` divided by `period` with no `period <= 0` guard.**
   The rolling-stdev transform kernel (CHART-18 node graph) computed `mean`/`variance` as
   `… / period`; a `StdevNode` with `period === 0` produced a NaN-filled series (`0/0`), and a
@@ -128,6 +221,103 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Added
 
+- **P-060: `indicator-settings` service test suite (16 tests).** The last uncovered
+  JSON-in-markdown Vault settings service — and the richest sanitizer of the family. New
+  co-located `indicator-settings.test.ts` pins defaults + no-side-effect `get()`,
+  fresh-instance round-trip, the documented cache + `reload()` manual-edit contracts,
+  enabled-map filtering (unknown ids, non-booleans), `EMA_PERIODS` membership + fresh-copy
+  default fallback, rsiPeriod/fibLookback clamp+round tables, `legendVisible`
+  backward-compat, version pinning, corruption recovery (no fence / bad JSON → defaults),
+  and sanitize-BEFORE-write against the raw Vault markdown. Real-tmpdir harness
+  (subsecond-prefs convention); service source byte-for-byte unchanged. Settings-file
+  family now fully covered. See ledger P-060 (+ P-061 for a latent defaults-aliasing
+  find, source untouched).
+
+- **P-059: service-layer persistence tests for `intel-layout` + `workspace-state` (28 tests).** The
+  two JSON-in-markdown Vault settings services on the boot path had zero co-located coverage. New
+  `intel-layout.test.ts` (14) pins read-only `get()`, fresh-instance round-trip, the documented
+  in-instance cache, `sanitizeShape` (unknown/duplicate ids, non-objects, non-finite geometry,
+  non-array fence), corruption recovery (no fence / bad JSON -> `[]`), and sanitize-before-write
+  proven against the raw file. New `workspace-state.test.ts` (14) pins defaults + no-side-effect
+  `get()` + the defensive quad copy, full round-trip, quad normalize/dedupe/pad-to-4/trim,
+  chartSymbol fallback, the P-048 additive `landingWorkspace` tolerant hydrate (missing/invalid/
+  valid), version normalization, and corruption recovery. New-file-only — both service sources
+  byte-for-byte unchanged; real-tmpdir harness per the `subsecond-prefs.test.ts` convention. Gates:
+  typecheck OK / lint OK (0 warnings) / vitest 115 files / 1447 tests / 0 fail (+2 files / +28
+  tests) / knip OK (byte-identical output).
+
+- **P-052/P-053/P-054: renderer store-coverage sweep -- six untested Zustand stores pinned (+37
+  tests, zero source change).** Continues P-050/P-051 down the 2026-07-01 handoff's leverage order.
+  NEW `intelStore.test.ts` (7: uppercase + case-insensitive no-op symbol lifecycle, the
+  stale-snapshot-clearing invariant, `lastUpdated` stamping) and `intelLayoutStore.test.ts` (16:
+  hydrate sanitize/adopt, non-array + sanitize-to-empty + bridge-reject + missing-bridge fallbacks,
+  reducer-mediated add/remove/move/resize incl. reject-if-overlap through the store surface,
+  write-through persist + fire-and-forget failure warn, fresh-copy reset, edit-mode) pin the P-048
+  flagship Intel stores; `replayStore.test.ts` (5: the `active` derivation App.tsx branches the
+  center column on); `riskGatesStore` / `wireStore` / `macroStore` `.test.ts` (3 each: push-mirror
+  display contracts only -- risk-gate enforcement lives in `services/risk/` and is untouched). All
+  new-file-only per the `dataSourceStore.test.ts` convention. Gate checkpoint: typecheck OK / lint OK
+  (0 warnings) / vitest 112 files / 1411 tests / 0 fail / knip OK (no new warnings).
+- **P-050 / P-051: the two highest-value untested renderer Zustand stores pinned (28 tests, zero
+  source change).** New `workspaceStore.test.ts` (16) -- tab validation against `WORKSPACE_TABS`
+  (incl. the P-048 `Intel` tab), the Quad-pane uniqueness-swap invariant, uppercase normalization,
+  no-op short-circuits (no redundant persist), the additive `landingWorkspace` field, and hydrate's
+  defaults-on-empty/failing-IPC behavior. New `subsecondStore.test.ts` (12) -- the 1200-bar
+  hydration cap, `appendBar` append / same-openMs re-seal / out-of-order drop / head-trim branches,
+  per-(symbol,bucketMs) series isolation, the `hydratePrefs` {250|500} sanitizer, and `getPref`'s
+  null-when-unconfigured contract. Both store sources byte-for-byte unchanged. Gates: same run as
+  P-049 (106 files / 1374 tests / 0 fail).
+- **P-048 (Phase C): the Intel workspace now renders live read-only analytics.** Eight modules fuse
+  the existing intelligence layer for the selected symbol — a calibration **reliability diagram**
+  (Brier + reliability buckets), brain **feature attribution** (per-feature weight×feature
+  contribution to the decision score), the **regime** HMM posterior + metrics, brain **weight drift**
+  from session-start priors, a cross-asset **correlation** heatmap, **microstructure** (VPIN +
+  order-book imbalance + a mini depth ladder), upcoming **macro** catalysts, and a forward-looking
+  **scenario / convergence** read (Bull/Bear/Neutral probabilities + the ≥3-layer convergence tally,
+  Constitution §4.2/4.3). A research-mode symbol selector analyzes any symbol independent of the
+  chart; the workspace polls a single read-only `INTEL_GET` snapshot (leak-safe, 2.5s) that routes no
+  order. Every module renders `UNKNOWN — SIGNAL INSUFFICIENT` rather than fabricating a value when its
+  signal is absent (Constitution 0.1). New pure math (`@shared/intel-analytics`) + the fusion service
+  are unit-tested. Off the trading-safety perimeter (read-only). Gates: typecheck OK · lint OK (0
+  warnings) · vitest 104 files / 1337 tests / 0 fail · knip OK (no new warnings).
+- **P-048 (Phase A+B): composable Quant Intelligence workspace (⌘6) + configurable startup landing.**
+  New flagship `Intel` workspace — the only user-composable surface in SATEX. An **Edit Modules** mode
+  lets the operator add, remove, drag-rearrange, and resize analytics modules on a 12-column grid
+  (the iPhone-jiggle / desktop-window metaphor), scoped to this tab only; the layout persists to its
+  OWN `Vault/Settings/intel-layout.md` and survives a reload, with a curated default layout + a Reset
+  escape hatch. A new **Startup page** setting (Settings → Display) opens the operator's chosen
+  workspace after the intro and persists. The grid engine is **zero-dependency**: a pure
+  `grid-layout` reducer (reject-if-overlap, per-module min sizes, on-load sanitizer; 15 unit tests)
+  plus a leak-safe pointer-drag hook whose window listeners are removed on pointerup AND unmount
+  (the PR #6 teardown invariant). Modules render the Constitution-0.1 `UNKNOWN — SIGNAL INSUFFICIENT`
+  placeholder until the read-only analytics IPC lands (Phase C). Off the trading-safety perimeter
+  (read-only; routes no order). Blueprint:
+  `docs/superpowers/specs/2026-06-29-intel-workspace-composable-grid-ultraplan.md`. Gates: typecheck
+  OK · lint OK (0 warnings) · vitest 102 files / 1314 tests / 0 fail · knip OK (no new warnings).
+- **P-047: regression coverage for `computeJournalAggregates` (trading-journal stats).** New
+  `src/renderer/stores/journalStore.test.ts` (12 tests) pins the pure display-aggregation function
+  behind the journal panel — win/loss accounting (breakevens excluded from the win-rate denominator,
+  no NaN on an all-breakeven ring), conviction buckets (high ≥7 / low ≤4), mean entry slippage (finite-
+  only average, null when none captured), the per-regime P&L breakdown (null regime → `UNKNOWN`, sorted
+  by total P&L desc, breakeven-excluded per-regime win rate), and best/worst tag selection (per-tag P&L
+  accumulation across multi-tag trades, worst suppressed when only one distinct tag). The store had zero
+  co-located coverage; `journalStore.ts` is unchanged (new file only — lowest bridge risk, the P-042
+  zero-coverage-close pattern). Found via the work-layer code-audit coverage-gap sweep. Off the
+  trading-safety perimeter. Gates: typecheck OK · lint OK (0 warnings) · vitest 101 files / 1299 tests /
+  0 fail · knip OK (no new warnings).
+- **P-042: WebGLRenderer (CHART-10) leak-invariant test coverage.** New
+  `src/renderer/chart/webgl/WebGLRenderer.test.ts` (14 tests) pins the PR #6 "clean up what you create"
+  invariant on the previously-untested WebGL2 overlay base — the file every density-overlay layer
+  (footprint / volume-profile / vol-heatmap) composes. Drives the real class under jsdom with a stubbed
+  WebGL2 context + controlled `requestAnimationFrame`: construction (canvas attach, absolute/zIndex/
+  pointer-events, rAF start), the frame loop (paint dims + reschedule, paint-error swallowing, no-gl
+  skip), `invalidate` (sync frame / no-op after destroy), context loss→restore (preventDefault, stop,
+  re-acquire + `onContextRestored`, resume), and the **destroy teardown** (canvas detached, loop
+  cancelled, `WEBGL_lose_context.loseContext()` called, listeners removed so post-destroy events are
+  inert, idempotent second destroy, destroy-guarded stale tick). `WebGLRenderer.ts` is byte-for-byte
+  unchanged — a pure regression net against re-introducing the listener/timer/observer leak class.
+  Off the trading-safety perimeter (renderer presentation; routes no order). Gates: typecheck OK · lint
+  OK (0 warnings) · vitest 100 files / 1287 tests / 0 fail · knip OK (Node-20 shim; no new warnings).
 - **Cold-boot intro splash — film-style `SATEX` name reveal.** New `src/renderer/components/SplashIntro.tsx`: a fullscreen plate shown once per launch that resolves the `SATEX` wordmark letter-by-letter (blur-in + a single film flicker) out of a scanline sweep, draws an accent rule, then dissolves (~3.2s, within the 2–5s brief) to reveal the terminal. No logo — wordmark only. Pure CSS animation (CSP `script-src 'self'`-safe), auto-themes off the `--bb-accent` / `--font-mono` tokens across all 4 themes, honors `prefers-reduced-motion` (fast glitch-free fade), and skips on click or any key. Mounted as the first child of `bb-app` behind a `splashDone` flag in `App.tsx`; styles appended to `globals.css` (`.satex-splash*` + keyframes). Self-cleans its timers; fires `onComplete` exactly once. Off the trading-safety perimeter (presentation only). Gates: typecheck OK lint OK (0 warnings) vitest 98 files / 1268 tests / 0 fail knip OK.
  The pure
   P-036 `diagnoseHealth` core is now live: every status tick (~2s) the engine builds a `HealthSignals`

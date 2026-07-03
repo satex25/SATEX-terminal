@@ -11,7 +11,7 @@
  * (`selectCandles(symbol)`), so no cross-symbol bleed. Keyed by symbol in the
  * parent, so a swap remounts a fresh chart.
  */
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMarketStore, selectCandles } from '../stores/marketStore'
 import { useChartOpts } from '../hooks/useChartOpts'
 import { useThemeStore } from '../stores/themeStore'
@@ -61,6 +61,11 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
   const vwapRef   = useRef<unknown>(null)
   const lwcRef    = useRef<unknown>(null)
   const fittedRef = useRef(false)
+  // Gates the data-apply effects below so they (re)run the moment the async
+  // chart is actually created. Without this, switching INTO Quad with data
+  // already present left panes empty/'sloppy' until the next bar - the
+  // length-keyed effects never re-fired after the late series init.
+  const [ready, setReady] = useState(false)
 
   const entry  = findUniverseEntry(symbol)
   const dp     = entry?.dp ?? 2
@@ -125,6 +130,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
         chartRef.current  = chart
         candleRef.current = series
         lwcRef.current    = lwc
+        setReady(true)
         ro = new ResizeObserver(() => {
           if (!containerRef.current) return
           ;(chart as { resize: (w: number, h: number) => void })
@@ -137,6 +143,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     })()
     return () => {
       cancelled = true
+      setReady(false)
       ro?.disconnect()  // stop observing before dispose — was leaked (lived only in the init closure)
       if (chartRef.current) {
         try { (chartRef.current as { remove: () => void }).remove() } catch { /* ignore */ }
@@ -162,7 +169,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
       }
     } catch { /* stale ref between mount and first paint */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartCandles.length])
+  }, [chartCandles.length, ready])
 
   // ── in-flight ratchet — paint the live price onto the last bar ──────────────
   useEffect(() => {
@@ -204,7 +211,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
       s!.setData(series.map((v, i) => ({ time: chartCandles[i]!.time as unknown, value: v })))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartCandles.length, emaPeriods, opts.showEMA9, opts.showEMA21, theme])
+  }, [chartCandles.length, emaPeriods, opts.showEMA9, opts.showEMA21, theme, ready])
 
   // ── VWAP overlay ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -226,7 +233,7 @@ export function QuadPaneChart({ symbol, emaPeriods }: QuadPaneChartProps) {
     const series = vwapSeries(chartCandles)
     s!.setData(series.map((v, i) => ({ time: chartCandles[i]!.time as unknown, value: v })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartCandles.length, opts.showVWAP, theme])
+  }, [chartCandles.length, opts.showVWAP, theme, ready])
 
   // ── Off-hours backfill — fill an empty pane with real bars from Alpaca:
   //    equity/index → the last completed NY session (1Min, RTH window);

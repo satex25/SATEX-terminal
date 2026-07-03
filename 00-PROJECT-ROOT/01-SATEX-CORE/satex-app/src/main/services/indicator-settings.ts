@@ -66,19 +66,19 @@ export class IndicatorSettingsService {
     const path = this.settingsPath()
     if (!existsSync(path)) {
       log.info('no indicator-toggles.md yet — using defaults', { path })
-      return { ...DEFAULT_SETTINGS }
+      return sanitize({})
     }
     try {
       const raw = readFileSync(path, 'utf8')
       const parsed = parseJsonFence(raw)
       if (!parsed) {
         log.warn('indicator-toggles.md present but no parseable json fence', { path })
-        return { ...DEFAULT_SETTINGS }
+        return sanitize({})
       }
       return sanitize(parsed)
     } catch (e) {
       log.warn('failed to read indicator-toggles.md', { path, err: String(e) })
-      return { ...DEFAULT_SETTINGS }
+      return sanitize({})
     }
   }
 

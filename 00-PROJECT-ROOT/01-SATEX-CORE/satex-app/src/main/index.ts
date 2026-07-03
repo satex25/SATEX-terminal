@@ -18,7 +18,7 @@ import {
   CredentialsSetReq, LlmConfigSetReq, SelfEvalSetReq, WireSetReq, LiveModeSetReq, AlpacaModeSetReq, BrainDecisionReq, DataSourceSetReq,
   AutonomousConfigSetReq, VaultCheckpointReq, ReplayStartReq, ReplaySeekReq,
   ReplaySpeedReq, ReplayBookmarkAddReq, ReplayBookmarkDelReq, HistoricalImportReq, HistoricalBarsReq,
-  IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq,
+  IndicatorSettingsSetReq, WorkspaceStateSetReq, JournalReflectReq, LayoutSaveReq, IntelLayoutSetReq,
   WindowZoomReq, CspViolationReportReq, SubsecondCandlesGetReq, SubsecondPrefsSetReq,
   ChartDrawingsGetReq, ChartDrawingsSetReq, ChartPngExportReq,
   FundedAccountSetProfileReq, FundedAccountTriggerFlatReq, FundedAccountAdvancePhaseReq,
@@ -27,6 +27,7 @@ import { loadEnv } from './services/env'
 import { createLogger } from './services/logger'
 import { IndicatorSettingsService } from './services/indicator-settings'
 import { WorkspaceStateService } from './services/workspace-state'
+import { IntelLayoutService } from './services/intel-layout'
 import { SubsecondPrefsService } from './services/subsecond-prefs'
 import { migratePlaintextEnvLocalCreds } from './services/credential-store'
 import { isLive } from './services/live-mode'
@@ -150,6 +151,7 @@ const engine = new TradingEngine()
 // vault writer uses); we resolve from app.getAppPath() upward to find it.
 const indicatorSettings = new IndicatorSettingsService(resolveVaultProjectRoot())
 const workspaceState    = new WorkspaceStateService(resolveVaultProjectRoot())
+const intelLayout       = new IntelLayoutService(resolveVaultProjectRoot())
 // A1 Sprint 2 — per-symbol preferred default sub-second bucket. Crypto-only;
 // the service sanitizer drops non-crypto symbols defensively. Lives in the
 // same Vault/Settings tree as indicator-toggles.md / workspace-state.md.
@@ -794,6 +796,7 @@ function registerIpcHandlers(): void {
 
   // ── Brain ────────────────────────────────────────────────────────────────────
   register(IPC.BRAIN_GET, () => engine.getBrainParams())
+  register(IPC.INTEL_GET, validated(SymbolOnlyReq, (symbol) => engine.getIntelSnapshot(symbol)))
   register(IPC.CALIBRATION_GET, () => engine.getCalibration())
   register(IPC.SELF_EVAL_GET, () => engine.getSelfEvalStatus())
   register(IPC.SELF_EVAL_SET, validated(SelfEvalSetReq, (req) => engine.setSelfEvalEnabled(req.enabled)))
@@ -906,6 +909,10 @@ function registerIpcHandlers(): void {
   // ── Workspace state persistence (Phase 12) ───────────────────────────────────
   register(IPC.WORKSPACE_STATE_GET, ()                                       => workspaceState.get())
   register(IPC.WORKSPACE_STATE_SET, validated(WorkspaceStateSetReq, (next)   => workspaceState.set(next)))
+
+  // ── Intel grid layout persistence (own file) ──
+  register(IPC.INTEL_LAYOUT_GET, ()                                          => intelLayout.get())
+  register(IPC.INTEL_LAYOUT_SET, validated(IntelLayoutSetReq, (next)         => intelLayout.set(next)))
 
   // ── Trading journal (P0-2) ───────────────────────────────────────────────────
   register(IPC.CLOSED_TRADES_GET, ()                                  => engine.getClosedTrades(500))

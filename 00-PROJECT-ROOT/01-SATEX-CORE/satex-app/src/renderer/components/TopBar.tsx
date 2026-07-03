@@ -48,6 +48,7 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
   Markets: 'Universe scan — sortable Markets table',
   Replay:  'Historical replay — pick a session and scrub',
   Quad:    '4-pane synced chart grid',
+  Intel:   'Quant Intelligence — composable analytics modules',
 }
 
 interface Props {
