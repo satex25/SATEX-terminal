@@ -108,7 +108,9 @@ RUBBISH/
 
 # Dropped reference material (not SATEX source) -- see the declined in-app
 # agent-runtime directive; this is the jim-schwoebel/awesome_ai_agents README catalog.
-90-REFERENCE/
+# Relocated 2026-07-02 from 90-REFERENCE/ into reference/vendor/ (ledger P-064/P-066/P-070)
+# to sit alongside the reorg's tracked reference/README.md + reference/git-bundles/.
+reference/vendor/
 
 # Obsidian vault config — workspace-local, never shared. The markdown notes in
 # Vault/ stay tracked; the .obsidian/ app-config dir does not.
@@ -154,12 +156,4 @@ Vault/Tactics/*
 Vault/Brain/*
 !Vault/Brain/README.md
 
-# sandbox cleansing holding-pen (EPERM-unlink; operator: rm -rf .trash)
-/.trash/
-
-# electron-vite crash debris (timestamped config copies — P-057 class)
-electron.vite.config.*.mjs
-
-# Playwright / perf-canary output
-playwright-results/
-test-results/
+# sandbox cleansing holding-pen (EPERM-unlink; operator: rm -rf .trash

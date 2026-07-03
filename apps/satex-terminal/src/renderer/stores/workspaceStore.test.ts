@@ -16,7 +16,11 @@ import { useWorkspaceStore } from './workspaceStore'
 import { DEFAULT_WORKSPACE_STATE, type Workspace, type WorkspaceState } from '@shared/types'
 
 function freshDefaults(): WorkspaceState {
-  return { ...DEFAULT_WORKSPACE_STATE, quadSymbols: [...DEFAULT_WORKSPACE_STATE.quadSymbols] }
+  return {
+    ...DEFAULT_WORKSPACE_STATE,
+    quadSymbols: [...DEFAULT_WORKSPACE_STATE.quadSymbols],
+    collapsedRails: [...DEFAULT_WORKSPACE_STATE.collapsedRails],
+  }
 }
 
 function stubSatex(overrides: { getState?: ReturnType<typeof vi.fn> } = {}) {
@@ -145,6 +149,7 @@ describe('workspaceStore.hydrate', () => {
       quadSymbols: ['A', 'B', 'C', 'D'],
       chartSymbol: 'GC',
       landingWorkspace: 'Intel',
+      collapsedRails: ['exec', 'news'],
     }
     stubSatex({ getState: vi.fn().mockResolvedValue(fromDisk) })
     await useWorkspaceStore.getState().hydrate()
@@ -167,5 +172,39 @@ describe('workspaceStore.hydrate', () => {
     expect(useWorkspaceStore.getState().hydrated).toBe(true)
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+})
+
+describe('workspaceStore.toggleRail', () => {
+  it('collapses a rail not yet in collapsedRails and persists the next state', () => {
+    const { setState } = stubSatex()
+    useWorkspaceStore.getState().toggleRail('depth')
+    expect(useWorkspaceStore.getState().state.collapsedRails).toEqual(['depth'])
+    expect(setState).toHaveBeenCalledTimes(1)
+    expect(setState).toHaveBeenCalledWith(expect.objectContaining({ collapsedRails: ['depth'] }))
+  })
+
+  it('re-expands a rail already collapsed (toggle is symmetric)', () => {
+    const { setState } = stubSatex()
+    useWorkspaceStore.getState().toggleRail('depth')
+    useWorkspaceStore.getState().toggleRail('depth')
+    expect(useWorkspaceStore.getState().state.collapsedRails).toEqual([])
+    expect(setState).toHaveBeenCalledTimes(2)
+  })
+
+  it('tracks multiple independently-collapsed rails without disturbing each other', () => {
+    stubSatex()
+    useWorkspaceStore.getState().toggleRail('depth')
+    useWorkspaceStore.getState().toggleRail('news')
+    useWorkspaceStore.getState().toggleRail('health')
+    expect(useWorkspaceStore.getState().state.collapsedRails).toEqual(['depth', 'news', 'health'])
+    useWorkspaceStore.getState().toggleRail('news')
+    expect(useWorkspaceStore.getState().state.collapsedRails).toEqual(['depth', 'health'])
+  })
+
+  it('never mutates the shared DEFAULT_WORKSPACE_STATE.collapsedRails reference (P-061 aliasing class)', () => {
+    stubSatex()
+    useWorkspaceStore.getState().toggleRail('risk')
+    expect(DEFAULT_WORKSPACE_STATE.collapsedRails).toEqual([])
   })
 })

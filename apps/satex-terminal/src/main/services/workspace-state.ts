@@ -13,7 +13,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   DEFAULT_WORKSPACE_STATE,
+  RAIL_IDS,
   WORKSPACE_TABS,
+  type RailId,
   type Workspace,
   type WorkspaceState,
 } from '@shared/types'
@@ -60,19 +62,19 @@ export class WorkspaceStateService {
     const path = this.settingsPath()
     if (!existsSync(path)) {
       log.info('no workspace-state.md yet — using defaults', { path })
-      return { ...DEFAULT_STATE, quadSymbols: [...DEFAULT_STATE.quadSymbols] }
+      return { ...DEFAULT_STATE, quadSymbols: [...DEFAULT_STATE.quadSymbols], collapsedRails: [...DEFAULT_STATE.collapsedRails] }
     }
     try {
       const raw = readFileSync(path, 'utf8')
       const parsed = parseJsonFence(raw)
       if (!parsed) {
         log.warn('workspace-state.md present but no parseable json fence', { path })
-        return { ...DEFAULT_STATE, quadSymbols: [...DEFAULT_STATE.quadSymbols] }
+        return { ...DEFAULT_STATE, quadSymbols: [...DEFAULT_STATE.quadSymbols], collapsedRails: [...DEFAULT_STATE.collapsedRails] }
       }
       return sanitize(parsed)
     } catch (e) {
       log.warn('failed to read workspace-state.md', { path, err: String(e) })
-      return { ...DEFAULT_STATE, quadSymbols: [...DEFAULT_STATE.quadSymbols] }
+      return { ...DEFAULT_STATE, quadSymbols: [...DEFAULT_STATE.quadSymbols], collapsedRails: [...DEFAULT_STATE.collapsedRails] }
     }
   }
 
@@ -124,6 +126,10 @@ function isWorkspace(v: unknown): v is Workspace {
   return typeof v === 'string' && (WORKSPACE_TABS as readonly string[]).includes(v)
 }
 
+function isRailId(v: unknown): v is RailId {
+  return typeof v === 'string' && (RAIL_IDS as readonly string[]).includes(v)
+}
+
 /** Normalize a possibly-partial input into a valid WorkspaceState. Each
  *  field falls back to its default when invalid. quadSymbols is padded /
  *  trimmed to exactly 4 entries and filtered to symbols in UNIVERSE so a
@@ -163,5 +169,17 @@ function sanitize(input: Partial<WorkspaceState>): WorkspaceState {
     ? input.landingWorkspace
     : DEFAULT_STATE.landingWorkspace
 
-  return { version: 1, workspace, quadSymbols: validQuad, chartSymbol, landingWorkspace }
+  // Additive field (no version bump): a record written before collapsedRails
+  // existed simply lacks it → defaults to nothing collapsed. Unknown ids
+  // (a rail removed in a future build) are dropped, valid ids deduped.
+  const collapsedRails: RailId[] = []
+  if (Array.isArray(input.collapsedRails)) {
+    const seenRail = new Set<RailId>()
+    for (const r of input.collapsedRails) {
+      if (!isRailId(r) || seenRail.has(r)) continue
+      seenRail.add(r); collapsedRails.push(r)
+    }
+  }
+
+  return { version: 1, workspace, quadSymbols: validQuad, chartSymbol, landingWorkspace, collapsedRails }
 }

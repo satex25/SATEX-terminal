@@ -3,6 +3,37 @@
 > Execution-ready plan produced by `/ultraplan`. Sections carry stable IDs (§1-§7) so
 > the review loop can target them. Kept in sync with every accepted revision.
 
+---
+
+## ⊕ APPENDED REQUIREMENT — Fully-collapsible side modules (operator, 2026-07-02)
+
+> Captured here per operator request (no new P-0xx). Not part of the original Intel-tab
+> scope above — this applies to the **global side rails across all workspaces** (the
+> screenshot was the **Quad** workspace). Fold into this spec's Phase D polish, or the
+> next layout/shell ultraplan, whichever executes first.
+
+**Ask (verbatim intent):** every side module should collapse *fully*, the same way the
+chart-header collapse toggle already does (operator circled it in the 2026-06-29
+screenshot). "Fully" = the pane hides completely and yields its grid track back to the
+charts/center — not merely a shorter card.
+
+**In scope (the rails visible in the screenshot):**
+- Left rail: `WatchlistPanel.tsx`
+- Right rail stack: `DepthBookPanel.tsx`, `RegimeDashboardPanel.tsx`, `ExecTicketPanel.tsx`, `HealthPanel.tsx`
+- Bottom rail: `CatalystsPanel.tsx` / `WirePanel.tsx`, `RiskGatePanel.tsx`, `SystemLogsPanel.tsx`
+
+**Grounding / existing pattern to extend (don't reinvent):**
+- `FundedAccountPanel.tsx:269-332` already implements per-panel collapse: `const [collapsed,setCollapsed]=useState(false)`, a `fa-collapse-btn` with `▸`/`▾` glyphs, and `!collapsed && (...)` body gating. That header-toggle + glyph is the interaction model to standardize.
+- The rails are arranged by the top-level workspace grid in `App.tsx` (grid defined in `globals.css` around the `repeat(24, 1fr)` template, ~line 406). "Fully collapse" means the collapsed rail's **grid track must shrink to 0 (or a thin re-open gutter)** so the center charts reclaim the space — a pure per-panel `display:none` that leaves the track width behind is NOT sufficient and is the likely wrong-first-attempt to call out.
+
+**Acceptance criteria (measurable):**
+1. Each rail panel has a collapse affordance matching the chart-header toggle; collapsed state persists across reload (reuse the existing workspace-state persistence, `WorkspaceStateService`).
+2. Collapsing a rail returns its space to the center grid (verify: center charts widen/heighten; no dead gutter beyond a thin re-open handle).
+3. A collapsed rail is re-openable from a visible handle in every workspace state (never strands the control — same spirit as the kill-chord reachability rule).
+4. Off the trading-safety perimeter (view state only, routes no order). Gates green; leak-class check on any new listener/observer added for drag/resize handles.
+
+**Risk notes:** teardown/cleanup for any ResizeObserver or transition listener added (repo's recidivist leak class — PR#6 / P-041/P-043/P-046). Reduced-motion: collapse animation must respect the existing `prefers-reduced-motion` handling (globals.css ~line 3587).
+
 | Field | Value |
 |---|---|
 | **Goal (verbatim)** | "make this tab the one and only highly highly customizable using an 'edit modules' button ... draft their workspace module completely by themselves ... re-organizing the homepage of your iPhone or resizing windows/applications on a computer desktop ... resize these panes/modules on this tab of the terminal only. Extreme customization. Also ... let the user choose what tab/page is opened after the startup intro." (on top of: a flagship Quant Intelligence workspace fusing the intelligence layer, with deeper quant analytics, a forward-looking scenario layer, and research-mode interactivity) |

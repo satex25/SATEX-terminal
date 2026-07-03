@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-07-02
+updated: 2026-07-03
 ---
 
 # Problem Ledger
@@ -16,6 +16,212 @@ updated: 2026-07-02
 ---
 
 ## Open
+
+### P-080 · `Vault/00-Audit/MAY TACTICS.md` had a 310-byte NUL-tail (file-bridge corruption, extends P-021/P-078) — SHIPPED (fixed)
+- **Problem:** The mandatory NUL/CRCR byte-scan of every modified/untracked
+  working-tree file (work-layer rule 5c) found `Vault/00-Audit/MAY TACTICS.md`
+  at 37444 bytes with 310 trailing `\x00` bytes. `git show HEAD:"Vault/00-Audit/MAY TACTICS.md"`
+  was 37134 bytes, 0 NUL, and byte-identical to the working-tree file minus the
+  tail — confirming this was pure file-bridge corruption (a no-op touch that
+  got NUL-padded), not an in-flight content edit that got mangled.
+- **Solutions:** (a) restore via `git show HEAD:<path>` through the Linux
+  mount (the proven P-018/P-021/P-078 recovery tool), then byte-scan to
+  confirm; (b) manually truncate the trailing NUL bytes in place — riskier,
+  depends on correctly locating the exact corruption boundary by hand; (c)
+  leave it — rejected, NUL bytes in a tracked Vault file are exactly the class
+  this repo scans for and a `git add` of the corrupted file would commit binary
+  garbage into a markdown doc.
+- **Decision:** (a). Restored clean HEAD bytes via Python through the mount.
+- **Status:** SHIPPED (2026-07-03). Evidence: post-restore file is 37134 bytes,
+  0 NUL / 0 CRCR, `git diff --exit-code -- "Vault/00-Audit/MAY TACTICS.md"`
+  exits 0 (byte-identical to HEAD). Not a code defect — Cowork platform
+  tooling scar tissue, off the trading-safety perimeter.
+
+### P-079 · `env.ts` (process.env validation/access module) shipped untested — SHIPPED
+- **Problem:** `src/main/services/env.ts` (85 LOC) is the single module every
+  service reads `process.env` through (direct `process.env` access is
+  documented-forbidden elsewhere in the file's own header comment), yet had
+  zero test coverage. Unverified: all field defaults, `SATEX_USE_SIMULATOR`
+  case-insensitive boolean parsing, `ALPACA_FEED` fallback-to-`iex` on an
+  unrecognized value, the `loadEnv()`/`getEnv()` module-level memoization
+  (`_env` cache — first call wins, later `process.env` mutation is ignored
+  until process restart), and — found while writing the suite — a present-but-
+  malformed `SATEX_RNG_SEED` (e.g. `"not-a-number"`) silently produces `NaN`
+  rather than falling back to `null`; only the *absent* case is null-guarded
+  (`seedRaw ? parseInt(seedRaw, 10) : null`). That NaN-not-null gap is a real,
+  narrow degenerate-input crack (P-039/P-040 class) but low blast-radius
+  (operator-set env var, not user/market input) — pinned as documented
+  current behavior rather than silently "fixed," since changing it is a
+  1-line, reviewable call this session chose not to make unilaterally in a
+  pure-coverage pass; flagged here for a follow-up PSD if the operator wants
+  it null-guarded too.
+- **Solutions:** (a) new-file-only Vitest suite pinning observable behavior,
+  source untouched — the proven P-059/P-076/P-077 coverage pattern; (b)
+  fix the NaN gap in the same pass — rejected for this entry, keeps the
+  coverage-only diff reviewable and isolates the (arguably-a-taste-call)
+  behavior change into its own decision; (c) leave untested — rejected, this
+  is the credential/config gateway every service depends on.
+- **Decision:** (a). New `env.test.ts`, 21 tests, source byte-for-byte
+  unchanged. Uses `vi.resetModules()` + dynamic import + a `process.env`
+  save/restore harness per test since the module's `_env` cache is
+  process-lifetime singleton state that would otherwise leak across tests in
+  the same Vitest worker.
+- **Status:** SHIPPED (2026-07-03). Evidence: typecheck exit 0, lint exit 0,
+  `npx vitest run src/main/services/env.test.ts` 21/21 pass.
+
+### P-076 · `live-candle-buffer.ts` shipped untested — bounded-growth cap + `onCandle` unsubscribe unverified — SHIPPED
+- **Problem:** `src/main/services/live-candle-buffer.ts` (190 LOC, per-symbol
+  tick to OHLC buffer feeding ChartPanel) had zero test coverage. Two invariants
+  had no test guarding them: the `history.length > MAX_CANDLES_PER_SYMBOL` cap
+  (bounded growth) and the `onCandle` unsubscribe closure (the
+  PR#6 / P-041 / P-043 / P-046 listener-leak class), plus the intra-bar
+  coalesced flush (most-recent-wins) and the bucket-roll fill-forward.
+- **Solutions:** (a) new-file-only Vitest suite pinning observable behavior,
+  source untouched — the proven P-059 coverage pattern; (b) refactor for
+  testability first — unnecessary, the class is already pure/in-memory; (c)
+  leave untested — rejected, invariant-bearing hot-path code.
+- **Decision:** (a). New `live-candle-buffer.test.ts`, 13 tests, source
+  byte-for-byte unchanged. Off the trading-safety perimeter (pure aggregation,
+  no broker/execution/risk coupling).
+- **Status:** SHIPPED (2026-07-03). Evidence: typecheck exit 0, lint exit 0,
+  `npx vitest run live-candle-buffer.test.ts` 13/13 pass; services-flat segment
+  43 to 45 files / 567 to 589 tests (+2 / +22 with P-077). Blueprint:
+  `docs/superpowers/specs/2026-07-03-live-candle-buffer-system-logs-coverage-ultraplan.md`.
+
+### P-077 · `system-logs.ts` ring-buffer tail service shipped untested — SHIPPED
+- **Problem:** `src/main/services/system-logs.ts` (71 LOC, ring-buffer log tail
+  feeding the renderer SystemLogsPanel) had zero coverage. Unverified: the
+  `BUFFER_SIZE = 60` ring-buffer cap (the same unbounded-writer class as P-069's
+  Observer flood, here already bounded in code), the `onTail` unsubscribe
+  (listener-leak class), and level classification (EVENT tags + normalizeLevel
+  uppercase mapping).
+- **Solutions:** (a) new-file-only Vitest suite; (b)/(c) as P-076.
+- **Decision:** (a). New `system-logs.test.ts`, 9 tests, source unchanged.
+- **Status:** SHIPPED (2026-07-03). Evidence: same gate run as P-076;
+  `npx vitest run system-logs.test.ts` 9/9 pass.
+
+### P-078 · Cowork Write/Edit tool bridge truncates full-file writes of already-on-disk files (extends P-021) — SHIPPED (workaround)
+- **Problem:** while creating `live-candle-buffer.test.ts` this session, the
+  Edit tool truncated the file mid-line (esbuild: `167:31 Unexpected end of
+  file`, cut at "buf.getCa"), and a subsequent FULL `Write` of the complete
+  corrected content ALSO landed truncated (byte scan: 6749 bytes, last byte
+  `b'a'`, same cut point). The bridge's growing-write tail-truncation bites even
+  a whole-file overwrite once the path already exists — the "Write NEW files
+  normally" guidance only holds for paths not yet on disk.
+- **Solutions:** (a) write via `cat > file <<'EOF'` heredoc through the Linux
+  mount, bypassing the Cowork file bridge entirely — proven this session
+  (re-wrote clean: 7059 bytes, ends `b'\n})\n'`, 0 NUL / 0 CRCR); (b)
+  python-scripted write through bash — equivalent; (c) trust Write + always
+  byte-scan after — the scan catches it but does not fix it.
+- **Decision:** (a) is the reliable recovery when a bridge Write/Edit truncates
+  a file that already exists: heredoc/python through the mount, then byte-scan
+  to confirm. Ledgered as scar tissue; the tooling bug is a Cowork-platform
+  issue, not a SATEX code defect.
+- **Status:** SHIPPED workaround (2026-07-03). Evidence: byte scans recorded in
+  `Vault/Daily/2026-07-03-agent-handoff.md`.
+
+### P-073 · Intel-workspace ultraplan Phase D — fully-collapsible side rails (operator ask, 2026-07-02) — SHIPPED
+- **Problem:** The Phase-D appended requirement on the Intel-workspace ultraplan
+  (`docs/superpowers/specs/2026-06-29-intel-workspace-composable-grid-ultraplan.md`)
+  asked for every global side-rail panel — Watchlist, Depth, Regime, Exec,
+  News, Risk, Logs, Health — to collapse *fully* (grid track shrinks to a thin
+  re-open handle, not a shorter card), matching `FundedAccountPanel.tsx`'s
+  existing per-panel collapse interaction. None of the 8 rail panels had this;
+  `FundedAccountPanel.tsx` itself only does the "shorter card" collapse
+  (body hidden, header stays full width) — not a track-size change.
+- **Solutions:** (a) give each of the 8 panel components its own internal
+  collapse state + CSS, duplicating the interaction 8 times; (b) a single
+  headless track-sizing function (mirrors `grid-layout.ts`'s pure-reducer
+  idiom) + one presentational wrapper component (`RailSlot`) applied from
+  `App.tsx` around each existing panel from the OUTSIDE — zero changes to the
+  8 panels' own source; (c) reuse `react-resizable-panels` or similar — a new
+  dependency, against the 10-dep minimalism policy (knip-enforced) that
+  already ruled out a grid-layout library for the Intel workspace (Decision D2).
+- **Decision:** **(b)** — cheapest blast radius (App.tsx + globals.css + the
+  workspace-state persistence + 2 new small files), fully unit-testable
+  headless math, no new dependency, and doesn't touch any of the 8 wrapped
+  panels' internals (several of which — RiskGatePanel, ExecTicketPanel — sit
+  closer to the trading-safety perimeter; wrapping them from the outside as
+  pure view-chrome keeps this build unambiguously off-perimeter).
+- **Implementation:** `shared/types.ts` — `RAIL_IDS`/`RailId` + additive
+  `WorkspaceState.collapsedRails: RailId[]` (no version bump, tolerant hydrate,
+  mirrors the `landingWorkspace` P-048 pattern exactly, including a proactive
+  fresh-array-copy fix on all three `workspace-state.ts` fallback sites so the
+  new field doesn't repeat the P-061 aliasing class on day one).
+  `ipc-schemas.ts` — `WorkspaceStateSetReq.collapsedRails` bounded
+  `z.array(RailIdS).max(RAIL_IDS.length)`. NEW `renderer/lib/rail-layout.ts` —
+  pure `computeRailTemplate(specs, collapsed)`: any collapsed track renders as
+  a 28px handle; every other track keeps its natural size (fixed stays fixed,
+  already-flexible stays flexible) UNLESS the stack's only flexible track was
+  the one collapsed, in which case the last non-collapsed track is promoted to
+  `minmax(0, 1fr)` so freed space is never a dead gutter. NEW
+  `renderer/components/RailSlot.tsx` — presentational wrapper (full view:
+  small collapse button overlay; collapsed view: a clickable handle strip with
+  a re-open glyph + rotated label) — no listener/timer/ResizeObserver, nothing
+  for the PR#6 leak class to catch. `App.tsx` wraps all 8 panels; inline
+  `style` overrides for `bb-main-row`/`bb-col-right`/`bb-secondary-row`'s
+  grid-template are applied ONLY when something on that stack is actually
+  collapsed (`railTemplateIsDefault` short-circuit), so the nothing-collapsed
+  render path is byte-for-byte the pre-existing plain CSS — zero visual
+  regression when the feature is unused. `globals.css` — `.bb-rail-slot` /
+  `.bb-rail-handle` styles + a `:has(.bb-rail-handle)` override inside the
+  existing P-002 sub-1009px-height media query so a collapsed rail keeps its
+  handle height under that fallback layout too (an edge case the naive version
+  would have missed). CSS transitions on the three grid containers are
+  automatically neutralized by the repo's existing global
+  `prefers-reduced-motion: reduce` rule — no separate media query needed.
+- **Tests:** NEW `rail-layout.test.ts` (13 tests) — nothing-collapsed is
+  byte-identical to defaults, fixed-track collapse with an existing flex
+  sibling, sink-promotion when the only flex track collapses (including the
+  2-deep promotion chain), all-collapsed, and degenerate inputs (empty specs,
+  an unknown collapsed id). Extended `workspace-state.test.ts` (+4: tolerant
+  hydrate on a pre-Phase-D record, unknown-id-dropped + dedup sanitize, a
+  defensive-copy assertion mirroring the P-061 lesson) and
+  `workspaceStore.test.ts` (+4: toggle collapses/re-expands, tracks multiple
+  rails independently, never mutates the shared `DEFAULT_WORKSPACE_STATE`
+  reference) and `ipc-schemas.test.ts` (+3: accepts the full rail set, rejects
+  an unknown id, rejects an over-length array).
+- **Gates (measured, this session):** typecheck exit **0** | lint exit **0**
+  (0 warnings) | vitest **117 files / 1488 tests / 0 fail** (sharded 4×:
+  397+464+332+295) | knip exit **0** (55 lines, byte-identical to baseline —
+  no new unused exports).
+- **Status:** SHIPPED (unstaged) — off-perimeter (view state only, routes no
+  order; patch-grep of the diff shows zero `OrderManager`/risk-gates/
+  kill-switch/Alpaca-submit references).
+
+### P-074 · `funded-account-store.ts` — the same shallow-spread aliasing class as P-061, hardened proactively — SHIPPED
+- **Problem:** `EMPTY.ledger`/`EMPTY.dailyPnl` are module-level arrays;
+  `sanitize(null)`/`load()`'s three fallback paths all returned `{ ...EMPTY }`
+  — a shallow spread that aliased the SAME `ledger`/`dailyPnl` array
+  references into every caller, the exact pattern already found and fixed
+  once this session in `workspace-state.ts` and previously in
+  `indicator-settings.ts` (P-061). Traced both current consumers
+  (`equity-hwm.ts:58`, `daily-pnl-ledger.ts:36`) and both already defensively
+  copy before mutating, so this was latent, not an active production bug —
+  but fragile, and a class this repo has now hit three times.
+- **Solutions:** (a) leave it — both consumers copy defensively today; (b)
+  add a `freshEmpty()` constructor that always returns new arrays, used at
+  all three fallback sites, removing the hazard at the source instead of
+  relying on every future consumer remembering to copy; (c) freeze `EMPTY`
+  with `Object.freeze` so an accidental mutation throws instead of silently
+  corrupting — doesn't stop the aliasing, just changes the failure mode.
+- **Decision:** **(b)** — matches the fix already applied twice this session,
+  one-line-per-site, off-perimeter (account-state persistence, not order
+  routing), zero behavior change for any correct caller.
+- **Tests:** added a regression test asserting two independent `load()` calls
+  against a missing/corrupt file return different array references and that
+  mutating one never leaks into the other or into
+  `DEFAULT_WORKSPACE_STATE`-style shared state (mirrors the P-061 test
+  pattern). Also fixed, same audit pass: `FundedAccountPanel.tsx`'s
+  `Sparkline` used `Math.min(...values)`/`Math.max(...values)` — an unbounded
+  spread (the P-041 class); safe only because the sole call site caps the
+  ledger to 10 entries, but the component had no internal bound of its own.
+  Replaced with a single bounded for-loop.
+- **Gates:** included in the P-073 gate run above (same session, same green
+  numbers) — `funded-account-store.test.ts` 11→12 tests,
+  `funded-account-integration.test.ts` unaffected (34/34 still green).
+- **Status:** SHIPPED (unstaged) — off-perimeter (account-state persistence +
+  display component; no `OrderManager`/risk-gates/kill-switch touch).
 
 ### P-007 · Copilot chat window (operator-requested feature)
 - **Problem:** Operator wants a chat surface that opens with the app, journals trades into the conversation in real time, and answers questions over account state (col, 2026-06-10).
@@ -165,6 +371,97 @@ updated: 2026-07-02
 - **Status:** OPEN (found 2026-07-02, work-layer code audit of the shipped 2026-06-29 Intel
   workspace feature; `intelLayoutStore.ts:71`).
 
+### P-075 · ChartPanel.tsx — unstable inline Zustand selectors for trades/drawings caused "Maximum update depth exceeded" on Trade/Focus/Replay — root-caused and fixed
+- **Problem:** Operator report + screenshots: Trade, Focus, and Replay workspaces all
+  failed to render with React's "Maximum update depth exceeded" (caught by the P-044
+  ErrorBoundary — non-fatal, rest of the terminal unaffected). Markets/Quad/Intel
+  rendered fine. The one component common to all three failing workspaces and absent
+  from the three working ones is `ChartPanel` (`Quad` uses a separate `QuadChartPanel`;
+  `Markets`/`Intel` don't chart at all). Traced to two lines in `ChartPanel.tsx`
+  (`:206`, `:213`, HEAD `b5be6d0`):
+  `useTradesStore(s => s.bySymbol[symbol] ?? [])` and
+  `useDrawingStore(s => s.drawings[symbol] ?? [])`. Both selectors mint a **brand-new
+  empty array on every call** whenever the symbol has no trades/drawings yet (true for
+  most symbols on a fresh launch) — the exact Zustand v5 `useSyncExternalStore`
+  snapshot-instability class already identified and fixed in `marketStore`
+  (`selectCandles`/`EMPTY_CANDLES`) and `drawingStore` (`selectDrawings`/
+  `EMPTY_DRAWINGS`, per that file's own in-code warning comment). `useSyncExternalStore`
+  sees a "new" snapshot every render (`Object.is([], [])` is false), schedules another
+  render, gets another new `[]`, forever — a real, synchronous infinite loop, not a perf
+  smell. `drawingStore.ts` already exports a correct, stable `selectDrawings` — HEAD's
+  `ChartPanel.tsx` simply wasn't using it, and had its own separate inline unstable copy
+  of the same bug. `tradesStore.ts` had no equivalent `selectTrades` export at all.
+- **Solutions:** (a) add `EMPTY_TRADES`/`selectTrades` to `tradesStore.ts` mirroring the
+  proven `drawingStore.ts` pattern exactly, then repoint `ChartPanel.tsx`'s two selectors
+  at `selectTrades(symbol)` / `selectDrawings(symbol)` — smallest diff, reuses an
+  already-correct pattern twice over, zero behavior change beyond fixing the loop;
+  (b) wrap the inline selectors in `useMemo` at the call site instead — works but
+  duplicates the stabilization logic ChartPanel-locally instead of at the store, and
+  leaves `tradesStore.ts` without a reusable selector for future consumers.
+- **Decision:** (a). Shipped: `tradesStore.ts` gains `EMPTY_TRADES` + `export const
+  selectTrades`; `ChartPanel.tsx` imports both `selectTrades` and `selectDrawings` and
+  uses them at `:206`/`:213`. Also fixed in the same pass: `footprintStore.ts`'s
+  `useFootprintCandles` called `agg.recent()` unmemoized (fresh array every call,
+  feeding `DeltaStrip`, itself mounted by `ChartPanel`) — same instability class one
+  layer further out; wrapped in `useMemo(() => agg.recent(symbol, limit), [agg, version,
+  symbol, limit])`. Not confirmed as a second independent trigger of the exact crash,
+  but a real, same-class bug worth closing while in the file.
+- **Evidence:** `npx tsc --noEmit -p tsconfig.web.json` exit 0 (was 3 errors before —
+  see corruption note below); `npx eslint` on all three touched files: 0
+  errors/warnings. Full vitest run not yet executed this pass (no dedicated test files
+  exist for ChartPanel/tradesStore/footprintStore — targeted follow-up: add regression
+  coverage pinning "symbol with zero trades/drawings renders without looping").
+- **Sandbox-corruption note (extends P-066/P-067):** mid-investigation, the Cowork
+  sandbox's Edit tool silently **truncated** `footprintStore.ts` mid-comment on write
+  (reported success, but `wc -c`/`cat` showed a torn file cut off mid-sentence, no
+  trailing newline) — and independently, `ChartPanel.tsx` and `tradesStore.ts` were
+  *already* torn in the working tree before I touched them (likely from an earlier,
+  unrelated uncommitted edit that never finished writing). All three were confirmed via
+  `diff <(git show HEAD:<path>) <path>` — HEAD's committed blobs were clean; only the
+  working-tree copies were corrupted. Recovered all three via `git show HEAD:<path> >
+  <path>` (the Constitution's own documented recovery tool) before reapplying edits
+  through Python/bash instead of the Edit tool, verifying byte counts after every write.
+  **Pattern for future sessions:** after any Edit-tool write in this environment, verify
+  via `wc -c` + `tail` from bash — do not trust the tool's own success report alone.
+- **Status:** SHIPPED (uncommitted) — **at risk of loss** like every prior uncommitted
+  edit this session (P-070 class); needs a commit before the next `checkout -f` from any
+  tool discards it. Recommend bundling with the P-066 pattern: one docs-plus-code commit,
+  gates re-verified post-commit, pushed to `refactor/filesystem-reorganization` before
+  PR #30 merges — this bug should not ship to master un-fixed.
+
+### P-070 · Root `docs/` (21 tracked files) got dragged into `apps/satex-terminal/`, landed as `docs 1`, 14 nested files lost in transit — found, fixed
+- **Problem:** Post-reorg structural audit (operator directive, 2026-07-02) found
+  root-level `docs/` **entirely missing from disk** (`git status` showed all 21
+  tracked files as `D`), while `apps/satex-terminal/docs 1/` held 6 of them
+  (top-level only) plus 6 empty shell subfolders (`audits/`, `guides/`, `plans/`,
+  `policy/`, `superpowers/`, `vendor/` — 0 files each). Root cause: an accidental
+  drag/move of the whole `docs/` folder into `apps/satex-terminal/` (operator's
+  editor, per their own report) — the destination already had its own **different**
+  app-level `docs/` (design/, release-checklists/, superpowers/, correctly
+  untouched throughout), so the OS/editor auto-renamed the incoming one to
+  `docs 1` rather than overwrite. The move dropped 14 nested files somewhere in
+  transit (likely an interrupted recursive copy) — nothing was actually lost
+  because git still held every blob.
+- **Solutions:** (1) `mv "apps/satex-terminal/docs 1" docs` to restore the 6
+  top-level files instantly, then `git show HEAD:<path> > <path>` for each of the
+  14 missing nested files (Constitution §2.9's own documented recovery pattern) —
+  recommended, zero data loss, no git write needed; (2) `git checkout -f -- docs/`
+  would also restore it in one shot, but only from a tool with real (non-sandbox)
+  checkout access.
+- **Decision:** (1), executed this session. Verified byte-exact against git
+  (`git ls-tree -r HEAD -- docs/` vs. the restored tree — perfect match, `git
+  status --porcelain -- docs/` now empty). `apps/satex-terminal/docs/` (the real
+  app-level docs) confirmed untouched throughout. Swept the rest of the tree for
+  the same class (any `* 1`, `* copy`, `*(1)*` name) — nothing else found. Also
+  caught in the same pass: my P-066-era `.gitignore` edit (90-REFERENCE →
+  reference/vendor/) had been silently discarded by an intervening `git checkout
+  -f` from another tool — reapplied and reverified (`git check-ignore` now
+  matches). **Pattern worth naming: any Cowork-sandbox file edit made while this
+  repo also has an active native-session/operator workflow doing checkouts is at
+  risk of silent loss** — re-verify sandbox-side edits after any checkout, don't
+  assume they survived.
+- **Status:** SHIPPED — verified clean.
+
 ### P-065 · Stale `.git/index.lock` (2026-06-29 03:16, 0 bytes) is EPERM-locked — all index writes blocked from agent sandbox
 - **Problem:** `mc4/.git/index.lock` has existed since 2026-06-29 03:16 (0 bytes — a
   crashed git process, not an active one). The sandbox file bridge returns EPERM on
@@ -182,7 +479,191 @@ updated: 2026-07-02
 - **Decision:** OPERATOR ACTION REQUIRED — delete the lock, then
   `git checkout -f chore/backlog-checkpoint-p024-p063` (tree content is already
   identical; `-f` only reconciles the index).
-- **Status:** OPEN (operator)
+- **Status:** SHIPPED — the native Claude Code session (direct Windows filesystem
+  access) cleared 3 stale locks (`index.lock`, `HEAD.lock`,
+  `objects/maintenance.lock`, all dated 2026-06-28/29, no live process), reconciled
+  the working tree, re-ran all four gates on both branches (green, identical — see
+  P-064/P-066), and pushed both with PRs open (`#29` checkpoint→master, `#30`
+  reorg→checkpoint, both MERGEABLE). See P-067: the same class recurred within
+  this same session, self-inflicted by a different tool.
+
+### P-067 · Cowork sandbox's own `git status`/`git branch -vv` regenerated a fresh, EPERM-stuck `index.lock` immediately after P-065 was cleared
+- **Problem:** Once the native session's fix was confirmed (this session's mount
+  showed a clean `git status` on `refactor/filesystem-reorganization`, up to date
+  with origin), a follow-up verification pass in the *Cowork* sandbox — `git log` /
+  `git show` / `git merge-base` / `git branch -vv` / `git status --porcelain`
+  chained in one call — produced `warning: unable to unlink
+  '.../mc4/.git/index.lock': Operation not permitted` mid-run. A fresh
+  `index.lock` (new timestamp, 2026-07-02 19:12, confirmed via `ls`) existed
+  immediately after and this session cannot remove it (identical EPERM class to
+  P-065/P-066's sandbox categorically-blocks-unlink finding). Git tolerated the
+  stale lock for subsequent reads in this session, but it would block the next
+  commit/checkout attempted by any tool that isn't as forgiving — i.e. this
+  session almost reintroduced P-065 by merely reading git state.
+- **Solutions:** (1) Cowork-side agents restrict themselves to the minimal
+  read set against this mounted repo (`git log`, `git show`, `git diff` on
+  explicit refs) and stop calling `git status`/`git branch -vv` once a clean
+  state is confirmed once — don't re-verify what's already verified; (2)
+  operator/native-session sweeps stray `index.lock` after any Cowork session
+  touches this repo, same one-line `del`; (3) worth filing as a Cowork sandbox
+  bridge limitation (git's read-triggered index-refresh plus EPERM-on-unlink is
+  a bad combination for any mounted git repo, not SATEX-specific) — outside this
+  repo's power to fix.
+- **Decision:** (1) for this session onward — no more git status/branch calls
+  against the mounted repo beyond what's already gathered. A fresh `index.lock`
+  (2026-07-02 19:12) is sitting in `.git/` right now and needs the same `del
+  C:\Users\User\mc4\.git\index.lock` treatment before the next commit/checkout
+  from any tool.
+- **Status:** OPEN (operator — one more `del`, same remedy as P-065)
+
+### P-068 · `00-PROJECT-ROOT/` is a fully orphaned, 723 MB leftover — zero tracked files, safe to delete
+- **Problem:** Storage audit (operator directive, 2026-07-02) found
+  `00-PROJECT-ROOT/01-SATEX-CORE/` still on disk after the `apps/satex-terminal`
+  reorg checkout — 723 MB total, **0 files tracked by git** at HEAD (verified:
+  `git ls-tree -r HEAD -- 00-PROJECT-ROOT` returns empty). Breakdown: `satex-app/dist/`
+  698 MB (stale Electron build output, last built 2026-05-19 — a month before this
+  audit), `satex-app/out/` 1.5 MB, `satex-app/playwright-results/` 1.1 MB,
+  `01-SATEX-CORE/node_modules/` 22 MB, plus disposable debris (4 `push-chart-
+  interaction-layer*.log` totaling ~820 KB, `gates-results.log`, `electron-vite-
+  dev.log`, 2 `*.tsbuildinfo` caches, 4 superseded `.pr-body-l1a/l1b/l1c/audit-psd.md`
+  drafts from already-merged L1.A–L1.C work). `git mv` correctly relocated every
+  tracked file to `apps/satex-terminal/`; everything left behind was always
+  untracked (build output, logs, node_modules) and the checkout has no reason to
+  touch it.
+- **Solutions:** (1) delete `00-PROJECT-ROOT/` entirely once the reorg PR (#30) is
+  confirmed merged and the new path is the one in daily use — recommended; (2)
+  delete it now, since nothing under it is reachable from git regardless of merge
+  state — the only reason to wait is operator comfort seeing the old path stay put
+  during review; (3) leave it — costs 723 MB of disk for zero benefit, and risks a
+  future session mistaking it for a live copy.
+- **Decision:** (1) — wait for the merge to land as a matter of caution (matches
+  the operator's own review-before-delete instinct), then delete. Cowork sandbox
+  cannot perform the delete (categorical EPERM-on-unlink, P-066/P-067); needs the
+  native Claude Code session or a direct `rmdir /s /q
+  C:\Users\User\mc4\00-PROJECT-ROOT` from the operator.
+- **Status:** DECIDED — pending merge of PR #30, then delete.
+
+### P-069 · `Vault/Observer/` checkpoint files are never pruned in code — CONSTITUTION §5.1's "newest 48 + monthly archive" is aspirational, not implemented
+- **Problem:** Storage audit found 248 top-level files in `Vault/Observer/`
+  (should be ≤48 per CONSTITUTION.md §5.1) plus 1,278 more already sitting in
+  `Vault/Observer/archive/2026-05/` (852) and `archive/2026-06/` (426) — 1,528
+  files total, ~810 KB (small in bytes, but unbounded in count and still growing:
+  `vault-writer.ts::writeObserverCheckpoint` writes a new file every flush with
+  **no retention/rotation logic anywhere in the function or its callers** — grep
+  for prune/retain/rotate/48 near Observer in `apps/satex-terminal/src` returns
+  nothing). The archive/ subfolders almost certainly came from a manual (human or
+  agent) cleanup pass, not an automated job — there's no code that moves files
+  into dated archive folders either. Notably, `persistence.ts:414` has a real,
+  working bounded-retention prune for the *SQLite* `calibration_log` table with
+  the comment "Keep calibration_log bounded (**Observer-flood lesson**)" — i.e.
+  this exact failure class was already hit and fixed at the database layer, but
+  the fix was never mirrored to the Vault markdown layer that has the same
+  unbounded writer pattern.
+- **Solutions:** (a) add a `pruneObserverCheckpoints(keep=48)` alongside
+  `writeObserverCheckpoint` in `vault-writer.ts`, moving anything beyond the
+  newest 48 into `archive/<yyyy-mm>/`, mirroring the calibration_log pattern
+  and making the docs true; (b) lower the write frequency instead of pruning
+  (checkpoints currently fire on every flush cycle — reducing cadence shrinks
+  growth but doesn't bound it); (c) update CONSTITUTION.md §5.1 to describe
+  reality (unbounded, manually swept) instead of a cap that was never built —
+  the honesty-axiom-compliant move if (a) isn't picked. (a) is the correct fix;
+  it's what the doc already promises and what the DB layer already proves out.
+- **Decision:** deferred to operator — this is exactly the CONSTITUTION §2.3
+  judgment boundary (implement the documented cap vs. rewrite the doc to match
+  reality) rather than a single-answer defect; not freelanced. Low urgency: 810 KB
+  today, but the growth is linear and unbounded, so it compounds every session
+  the app runs.
+- **Status:** OPEN (found 2026-07-02, operator-directed storage audit)
+
+### P-071 · Full test suite in a single pool stalls on post-test open handles (sandbox) — segmented run is fully green
+- **Problem:** `npm test` (one vitest pool over all 115 files) reproducibly stops
+  emitting after ~58 files with 0 failures and never exits, in the Cowork Linux
+  sandbox (two independent runs, same stall point). Root cause is NOT an assertion
+  failure: running the tree in three segments passes completely — `src/shared`
+  21 files / 333 tests, `src/renderer`+`tests` 32 / 378, `src/main` 62 / 752 =
+  **115 files / 1463 tests / 0 fail**. The hang is a post-test open handle keeping
+  the worker event loop alive: the `tick-recorder` retry path logs real
+  `setTimeout`-driven retries (`SQLITE_BUSY`/`PROLONGED_OUTAGE`, attempt 1→2 with
+  1–2s waits) against better-sqlite3 under the sandbox filesystem bridge, exactly
+  the timer/handle-leak class the constitution flags (PR#6 / P-041 / P-043 / P-046).
+  Segmenting keeps each pool small enough that teardown completes before the next
+  file; the single pool accumulates handles and never drains.
+- **Evidence:** typecheck exit 0; lint exit 0 (0 warnings); segmented vitest exit 0
+  ×3 (counts above); single-pool `npm test` stalls (no exit) — measured 2026-07-02.
+  CI (Ubuntu, `.github/workflows/ci.yml` runs the same `npm test`) is green on the
+  last recorded run, so the stall is sandbox-specific (SQLite native handle +
+  bridge), not a portable defect.
+- **Solutions:** (a) confirm/adjust test teardown so `tick-recorder` clears its
+  retry timers on close (afterEach/afterAll `clearTimeout` + `unref()` on the
+  retry handle) so the single pool drains cleanly everywhere — correct if the leak
+  is real in production teardown too, worth auditing `tick-recorder.ts` cleanup
+  path; (b) set vitest `pool`/`poolOptions` (e.g. `forks`, bounded `maxForks`) so
+  the runner reaps workers regardless of stray handles — masks rather than fixes;
+  (c) treat as sandbox-only and run segmented locally, trust CI for the single-pool
+  arbiter — zero code change. Pick (a) only after confirming the handle survives in
+  a real (non-sandbox) teardown; if it doesn't, (c) and move on.
+- **Decision:** OPEN — needs an operator/next-session audit of `tick-recorder.ts`
+  teardown to decide (a) vs (c). Not freelanced: could be a genuine production
+  timer-leak (fix) or a pure sandbox artifact (document). Gates are green; this
+  blocks nothing.
+- **Status:** OPEN (found 2026-07-02, post-P-070 full-project validation)
+- **2026-07-02 investigation (operator-directed full-project validation session):**
+  read `tick-recorder.ts` in full. `start()`/`stop()` are symmetric —
+  `this.flushTimer = setInterval(...)` in `start()`, `clearInterval(this.flushTimer);
+  this.flushTimer = null` as the first line of `stop()` (tick-recorder.ts:68,75).
+  `SQLITE_BUSY` / `PROLONGED_OUTAGE` do NOT appear anywhere in `tick-recorder.ts`
+  itself — they only appear in `tick-recorder.test.ts` as mocked
+  `insertTickBatch` throw messages, and the "retry" is just the real
+  `flushTimer` re-firing under `vi.useFakeTimers()` + `vi.advanceTimersByTime()`,
+  not a separate ad-hoc setTimeout. All four retry-semantics tests
+  (`tick-recorder.test.ts:59,78,100,120`) explicitly call `rec.stop()` before
+  the test ends, and `afterEach` calls `vi.useRealTimers()`. Also checked
+  `persistence.ts`'s `scheduleBackgroundMaintenance` (the other SQLite-adjacent
+  timer): its `setTimeout` is explicitly `.unref()`'d (persistence.ts:963-968),
+  so it cannot hold the process alive. **No production-code timer leak found
+  in either file.** This narrows the stall toward a sandbox/native-handle or
+  vitest-fake-timer artifact (solution (c) in this entry) rather than a real
+  app-level teardown defect (solution (a)) — but this was a source-reading
+  audit, not a reproduction of the actual full-pool stall, so the entry stays
+  OPEN rather than being resolved unilaterally per the entry's own caution.
+
+### P-072 · Normal quit path had no hard-exit watchdog — a wedged teardown orphans the Electron process tree in Task Manager — fixed
+- **Problem:** `src/main/index.ts` `before-quit` handler (was ~line 1158) did
+  `event.preventDefault(); engine.shutdown().catch(...).finally(() => app.quit())`
+  with **no timeout**. `engine.shutdown()` (`trading-engine.ts:808`) clears all
+  timers synchronously but `await`s `session.disconnect()` (`:853`); a WebSocket
+  `close` that never fires its 'close' event leaves that promise pending forever, so
+  `.finally()` never runs, `app.quit()` is never called, and the Electron main
+  process + its Chromium GPU/renderer/network-service children linger in Task
+  Manager after every window is closed. The **crash** path (`gracefulShutdown`,
+  `index.ts:191`) already had the safety net (`setTimeout(() => app.exit(1), 5000).unref()`);
+  the **normal** path did not — asymmetric, and the normal path is the one users hit
+  every day. Confirmed no SATEX-spawned child processes exist (grep: no
+  `child_process`/`spawn`/`fork`/`utilityProcess`/`worker_threads` in `src/`; only
+  `db.exec` SQLite in-process + a regex `.exec`), so guaranteeing main-process exit
+  is sufficient to guarantee a clean Task Manager.
+- **Solutions:** (a) add a 5s `.unref()`'d watchdog in `before-quit` that force-exits
+  (`app.exit(0)`) if graceful teardown hasn't completed, cleared in the `.finally()`
+  on the happy path — mirrors the existing crash-path net, ~9 lines, no behavior
+  change on the normal fast path; (b) harden `session.disconnect()` itself with an
+  internal timeout on the WS close — narrower but only covers the one known hang
+  source, not future ones, and touches broker-session teardown (closer to the
+  perimeter); (c) both. Chose **(a)** — a single guaranteed-exit net at the lifecycle
+  boundary covers every current and future async-teardown hang class at once, off the
+  perimeter, minimal blast radius. (b) is a reasonable future hardening but not needed
+  for the no-orphan guarantee.
+- **Decision:** (a), shipped this session. `.unref()` ensures the watchdog never
+  itself keeps the loop alive (clean exits stay clean); if teardown wedges, the wedge
+  keeps the loop alive so the timer fires at 5s and `app.exit(0)` takes the whole
+  process tree down. Verification: `index.ts` is the Electron entry (top-level side
+  effects, not unit-tested), so gates + reasoned teardown-hang argument rather than a
+  new unit test; a future extraction of the handler into a testable
+  `orchestrateQuit(shutdownFn, quitFn, exitFn, ms)` unit would let us pin it — logged
+  as a nice-to-have, not blocking.
+- **Status:** SHIPPED — typecheck exit 0 · lint exit 0 (0 warnings) · vitest 115 files
+  / 1463 tests / 0 fail (segmented; P-071 single-pool stall is sandbox-only) · knip
+  sandbox-OOM (CI arbiter). `src/main/index.ts` before-quit watchdog added. UNSTAGED
+  per AGENTS.md — operator review → branch → PR → commit.
 
 ### P-066 · `npm install` fails on native build — bundled node-gyp v9.4.1 can't build under Python 3.12+ (distutils removed)
 - **Problem:** A fresh `npm install` in `apps/satex-terminal` (triggered because
@@ -1567,175 +2048,4 @@ updated: 2026-07-02
 - **Gates (working tree @ e158e48 + P-027 edits):** typecheck exit 0 | lint exit 0 (0 warn) | vitest
   95 files / 1195 tests / 0 fail | knip exit 0 (Node-20 shim). Handoff:
   `Vault/Daily/2026-06-26-agent-handoff.md`.
-- **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git add / commit).
-
-### Session: 2026-06-25 daily PSD (standing agent)
-- **Work:** Boot on **feat/d10-funded-account @ e158e48** — branch moved since the
-  ledger's last sessions (feat/chart-interaction-layer @ 1cf9b0e). HEAD e158e48 is
-  a 4,143-line commit: D.10 funded-account engine + P-013 bracket + L1.F ensemble
-  + P-024 tests. Read AGENTS/ARCHITECTURE/ledger; checked git log + status.
-- **Key finding — independent gate verification of the freshly-committed D.10/L1.F
-  branch (the ledger had none for it):** all four gates GREEN against the working
-  tree (HEAD e158e48 + untracked color.test.ts), including the trading-safety-
-  perimeter files committed in e158e48 (order-manager, risk-gates, trading-engine):
-  typecheck✅ exit 0 | lint✅ exit 0 (0 warnings) | vitest✅ 94 files / 1175 tests /
-  0 fail | knip✅ exit 0 (Node-20 shim). Perimeter code left untouched (operator
-  commit = sign-off); verified only.
-- **Observed committed since last ledger update:** P-024 (rng/id-generator) and
-  L1.F / P-009 (brain depth wiring + ensemble-fuser) are now committed in e158e48 —
-  both previously sat SHIPPED/DECIDED awaiting operator action. P-025 (color.test.ts)
-  remains untracked (awaiting commit). No status rewrite of those entries beyond this
-  note (minimizing existing-file edits = bridge risk).
-- **Shipped (autonomous, off-perimeter):** P-026 — `indicators.ts` core math test
-  coverage (+14 tests). New file only; verified green (see P-026).
-- **Ledger:** P-026 added (SHIPPED). frontmatter date → 2026-06-25.
-- **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git add /
-  commit).
-
-### Session: 2026-06-24 work-layer (standing agent — execution layer)
-- **Context:** Second daily scheduled task ("work-layer"), fires ~1h after the
-  `satex-psd-daily` planner to put execution behind the plan. Boot on
-  feat/chart-interaction-layer @ 1cf9b0e; read AGENTS + ledger; checked git log + status.
-- **Ground-truth gate read (full working tree; /tmp sandbox, node_modules symlinked):**
-  typecheck✅ exit 0 (node+web) | lint✅ exit 0 (0 warnings) | vitest✅ 93 files / 1165
-  tests / 0 fail (4 shards: 309+398+228+230) | knip✅ exit 0 (Node-20 version shim). The
-  entire uncommitted working tree is gate-green.
-- **Key finding — L1.F / P-009 implemented but UNCOMMITTED on the live-decision path:** the
-  working tree carries a large unstaged feature set — `brain.ts`, `trading-engine.ts`,
-  `risk-gates.ts`, `order-manager.ts` (+tests), new `ensemble-fuser.ts` (+test),
-  `blackout-window`, `daily-pnl-ledger`, `eod-flatten` (funded-compliance) — plus a
-  CHANGELOG "### Added" entry for "L1.F / P-009: Brain depth wiring + regime-aware ensemble
-  confidence fusion." Its own ledger decision marks **human sign-off required (live decision
-  path)**. Left entirely untouched per the trading-safety guardrails; gates confirmed green.
-  Flagged for operator: human sign-off → branch → PR → commit.
-- **Shipped (autonomous, off-perimeter):** P-025 — `color.ts` `applyOpacity` test coverage
-  (+10 tests). New file only; verified green (see P-025).
-- **Ledger:** P-025 added (SHIPPED). No status change to P-009 (human-sign-off gate; not an
-  agent decision).
-- **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git add / commit).
-
-### Session: 2026-06-24 daily PSD (standing agent)
-- **Work:** Boot on feat/chart-interaction-layer @ 1cf9b0e; read AGENTS/ARCHITECTURE/ledger;
-  verified no DECIDED entries to pick up. Surveyed safe utility layer; identified
-  `rng.ts` + `id-generator.ts` as foundational untested utilities (P-024).
-- **Shipped:** P-024 -- `rng.test.ts` (13 tests) + `id-generator.test.ts` (8 tests).
-  +21 tests total (79->81 files, 934->955 tests).
-- **Gate results:** typecheck✅ exit 0 | lint✅ exit 0 (0 warnings) |
-  vitest✅ 81 files / 955 tests / 0 fail | knip✅ exit 0.
-- **Ledger:** P-024 added (SHIPPED). Session recorded.
-- **Status:** Session complete -- changes UNSTAGED per AGENTS.md.
-
-- **Work:** Boot on feat/chart-interaction-layer @ 1cf9b0e; read AGENTS/ARCHITECTURE/ledger;
-  checked git log + working-tree diff.
-- **Key findings:** (1) No actionable DECIDED entries (P-009 human sign-off; P-011/P-012
-  deferred by their own decisions). (2) CHANGELOG.md line 56 corrupted by file bridge during
-  2026-06-22 session write — Chart-interaction-layer bullet header doubled. Fixed via Python
-  byte-level replacement. (3) Knip now completes in sandbox (EXIT:0, Node-20 shim); 27 unused
-  exports + 32 unused types listed as warnings only (knip.json "exports"/"types": "warn").
-  All four gates confirmed green against working tree (P-013 simulator-bracket + CHANGELOG fix).
-- **Gate results:** typecheck✅ exit 0 | lint✅ exit 0 (0 warnings) | vitest✅ 79/934 | knip✅ exit 0.
-- **Shipped:** CHANGELOG.md line-56 bridge-artifact repair (duplicate header). CHANGELOG entry
-  added under Unreleased ### Fixed.
-- **Ledger:** date updated 2026-06-24. Session added. No status changes to open entries.
-- **Status:** Session complete — changes UNSTAGED per AGENTS.md.
-
-### Session: 2026-06-22 daily PSD (standing agent)
-- **Work:** Boot on feat/chart-interaction-layer @ 1cf9b0e (HEAD 2 commits ahead of a13bd39: P-023 drawing-renderer split + knip cleanup, both committed by previous sessions). Read AGENTS/ARCHITECTURE/ledger. Checked all 12 working-tree diffs: all are NUL-padded HEAD versions (pure bridge artifact, no real content changes).
-- **Key findings:** (1) simulator-bracket.ts/test.ts never committed; lost from working tree — re-implemented. (2) P-023 COMMITTED (not just SHIPPED) — ledger updated. (3) Real committed test baseline is 78/920 (not 111/1304 — previous counts included untracked domain-subdir copies no longer on disk).
-- **Gate results (pre-work):** typecheck✅ | lint✅ (0 warnings) | vitest✅ 78/920 | knip⚠ OOM (sandbox).
-- **Gate results (post-P-013 re-ship):** typecheck✅ | lint✅ (0 warnings) | vitest✅ 79/934 (+1/+14) | knip⚠ OOM (sandbox; CI clean).
-- **Shipped:** P-013 re-implementation (simulator-bracket.ts, simulator-bracket.test.ts, trading-engine.ts wiring). CHANGELOG entry added under Unreleased ### Added.
-- **Ledger:** P-013 updated (re-shipped). P-023 moved to CLOSED. Session added. metadata date updated to 2026-06-22.
-- **Status:** Session complete — changes UNSTAGED per AGENTS.md.
-
-### Session: 2026-06-21 daily PSD (standing agent)
-- **Work:** Boot on feat/chart-interaction-layer @ a13bd39; read AGENTS/ARCHITECTURE/ledger;
-  checked git log + working-tree diff; ran all four gates in /tmp sandbox with working-tree
-  files (incl. simulator-bracket.ts + all domain-subdir service files).
-- **Key finding:** No actionable DECIDED entries (P-009 human sign-off; P-011/P-012 deferred
-  by their own decisions). Identified P-023 as new autonomous work: the sole persistent lint
-  warning (`react-refresh/only-export-components`) in `DrawingLayer.tsx` was fixable by
-  extracting `renderDrawing` into a sibling `drawing-renderer.ts`.
-- **Gate results (pre-P-023):** typecheck✅ exit 0 | lint✅ exit 0 (1 warning) | vitest✅
-  111/1304 | knip⚠ sandbox OOM (known; CI expected clean).
-- **Gate results (post-P-023):** typecheck✅ exit 0 | lint✅ exit 0 (0 warnings) | vitest✅
-  111/1304 | knip⚠ sandbox OOM (known; CI expected clean).
-- **Shipped:** P-023 — `drawing-renderer.ts` (new file), `DrawingLayer.tsx` (slimmed),
-  `ChartPanel.tsx` (import split). CHANGELOG entry added under Unreleased ### Fixed.
-- **Ledger:** P-023 added (SHIPPED). No other autonomous DECIDED/IN-PROGRESS work remains
-  (P-009/P-011/P-012 DECIDED/deferred; P-008b post-L1.G; P-022 awaiting operator git rm).
-- **Status:** Session complete — changes UNSTAGED per AGENTS.md.
-
-### Session: 2026-06-19 daily PSD (standing agent)
-- **Work:** Boot on feat/chart-interaction-layer @ a13bd39; audit P-013 working-tree state; run all four gates in /tmp sandbox.
-- **Key finding:** Working tree adds `checkSimulatorBracket` to `trading-engine.ts` (4 new refs vs HEAD) + two new untracked files `simulator-bracket.ts` + `simulator-bracket.test.ts`. HEAD commit a13bd39 imports `./simulator-bracket` but those files are NOT committed — operator must `git add` + commit them before next push or CI will fail on the import.
-- **Gate results:** typecheck ✅ exit 0 | lint ✅ exit 0 (1 warning) | vitest ✅ 111 files / 1304 tests / 0 fail | knip ⚠ sandbox native-binary (oxc-parser/oxc-resolver — CI expected clean, consistent with all prior sessions).
-- **Ledger:** P-013 moved from IN-PROGRESS to SHIPPED. No other autonomous DECIDED/IN-PROGRESS work remains (P-009/P-011/P-012 DECIDED/deferred; P-008b post-L1.G; P-022 awaiting operator git rm).
-- **Status:** Session complete — changes UNSTAGED per AGENTS.md.
-
-### P-010 · Risk-gate correlation computed on prices, not returns
-- **Evidence:** `toLogReturns()` function in `risk-gates.ts` guards zero prices; calls to `correlation(toLogReturns(aligned.a), toLogReturns(aligned.b))` use returns not prices; `correlationWatch` retuned 0.60→0.45 with comment explaining return-space ρ structural difference.
-- **Verified:** 2026-06-11 — code review confirms implementation matches problem statement.
-
-### P-001 · PatternLearner duplicate SGD updates (S1)
-- **Evidence:** `private lastLabeledTs = new Map<string, number>()` cursor in `pattern-learner.ts`; check `if (x.ts <= cursor) continue` prevents re-learning same observation; comment confirms "P-001: ONE gradient step per observation across overlapping cycles".
-- **Verified:** 2026-06-11 — cursor implementation prevents duplicate SGD updates.
-
-### P-002 · ExecTicket clips to invisible at min window height (S1)
-- **Evidence:** `@media (max-height: 1009px)` rule in `globals.css` makes `.bb-col-right` scrollable with `overflow-y: auto` below 1010px window height; comment cites P-002 and explains full-size panels remain reachable.
-- **Verified:** 2026-06-11 — media query makes order entry reachable at 1200×720.
-
-### P-003 · Accessibility floor: no focus rings, no reduced-motion (S3→prioritized)
-- **Evidence:** Global `:focus-visible { outline: 1px solid var(--bb-accent); outline-offset: 1px; }` rule; `:focus:not(:focus-visible) { outline: none; }` suppresses mouse-click outline; `@media (prefers-reduced-motion: reduce)` collapses animations to 0.01ms.
-- **Verified:** 2026-06-11 — focus ring and reduced-motion rules present in globals.css.
-
-### P-015 · THE WIRE — toggleable live world-news desk (operator request)
-- **Evidence:** `WireFeedService` in `wire-feed.ts` with RSS sources (BBC, NPR, Guardian, Hacker News); toggleable via `wire.stop()` when OFF; 10s fetch timeout; IPC push updates via `wire.onUpdate(snap) → IPC.WIRE_UPDATE`; comments confirm "OFF by default".
-- **Verified:** 2026-06-11 — live news desk implemented with RSS polling.
-
-### P-016 · Standing agent — daily PSD session scheduled
-- **Evidence:** `satex-psd-daily` scheduled task is executing this very session (this line is proof — the task was created, scheduled, and now running autonomously).
-- **Verified:** 2026-06-11 — standing agent functional (running now).
-
-### P-000 · 2026-06-10 audit remediation batch
-ERNIE timeout · CSP exfil channel · CLAUDE.md drift · provider-agnostic LLM (Groq default) ·
-Brier calibration (downgrade-only) · nightly self-eval + Settings toggle · LEARNINGS notes (capped) ·
-type scale (277 decls → 9 tokens) · theme leaks · vault reorg + ARCHITECTURE.md.
-Evidence: all four gates green, 651/651 tests; `Vault/00-Audit/2026-06-10-FULL-SYSTEM-AUDIT.md`.
-
-### Session: 2026-06-13 daily PSD (standing agent)
-- **Work:** Boot, verify ledger, assess gate status, update ledger
-- **Findings:** MIT License integration complete (GitHub + local package.json verified). All gates green: typecheck✓ lint✓ test(62/669)✓ knip(Node 22 OOM, expected; Node 20 CI OK). P-008(a) shipped 2026-06-12, gates verified 2026-06-13. P-013 awaiting operator diagnostic (autonomous work complete). No remaining autonomous DECIDED/IN-PROGRESS work.
-- **Evidence:** Branch `feat/audit-psd-batch-2026-06-11` @ `461f4b0`; typecheck clean; eslint clean; 669 tests PASS (34.90s); knip fails on oxc-parser memory (Node 22 sandbox ≠ CI Node 20).
-- **Status:** Session closed — next PSD cycle clear to proceed with operator diagnostics on P-013 or fresh DECIDED work.
-
-### Session: 2026-06-14 daily PSD (standing agent)
-- **Work:** Boot; classified the working tree (142 changed = 2 real diffs [package.json license, prior ledger note] + 140 CRLF churn — left untouched); grounded survey of the safe render/display layer; shipped P-019; logged P-020.
-- **Shipped:** P-019 — `fmt.k()` float-noise fix + first-ever `format.test.ts` (15 cases). All four gates green in /tmp sandbox: typecheck✓ lint✓ test(63/684)✓ knip✓ (exit 0; Node-20 shim, no OOM this run). Branch `feat/audit-psd-batch-2026-06-11` @ `461f4b0`; changes UNSTAGED per AGENTS.md.
-- **Findings:** P-020 (clock DST label + money sign-glyph) logged OPEN for operator ruling. No other autonomous DECIDED work remains (P-009/P-013 → human sign-off / runtime; P-011/P-012 deferred by their own decisions; P-008b → post-L1.G).
-- **Status:** Session closed.
-
-### Session: 2026-06-17 daily PSD (standing agent)
-- **Work:** Boot (git packed-refs corruption detected; fixed via truncation); assess ledger; gate readiness check.
-- **Findings:** (1) Git repo degraded: `.git/packed-refs` unterminated line (P-018 aftermath); HEAD refs branch `feat/chart-interaction-layer` unresolvable. Fixed packed-refs via `tail -20 | truncate` (3863→3605 bytes) but git still FAILED with "ambiguous HEAD". (2) Working tree: `package.json` truncated at `typescript-eslint: "^8.59.` (restored via bash cat to file); four test files structurally corrupted (P-021 logged). (3) Ledger audit: No autonomous DECIDED entries; P-008 IN-PROGRESS awaiting operator; P-009/P-011/P-012 DECIDED/deferred; P-013 IN-PROGRESS awaiting operator diagnostic; P-019 SHIPPED awaiting merge; P-020 OPEN (operator ruling).
-- **Actions:** Restored package.json (valid JSON verified). Fixed packed-refs truncation (git still broken). Added closing braces to two test files; four remain structurally broken. Logged P-021. Updated ledger metadata to 2026-06-17.
-- **Gate status:** BLOCKED — typecheck fails on four test files (brace imbalance: calibration/pattern-learner −1 each; replay-source/tick-recorder −2 each). Cannot proceed to lint/vitest/knip until corruption resolved.
-- **Status:** Session halted — operator intervention required (P-021); no autonomous path forward.
-
-### Session: 2026-06-18 operator-directed full cleanup (col)
-- **Work:** Full workspace audit + git repair + file corruption recovery + gate run + UI upgrade pass.
-- **Findings:** (1) `HEAD` had NUL bytes after newline (xxd confirmed `0a 00 00 00`) — fixed via `printf`. (2) `index.lock` stale (EPERM from sandbox, benign — git objects fully readable). (3) Additional corrupted files beyond P-021: `DrawingLayer.tsx` (2 lines missing), `ChartPanel.tsx` (261 lines missing), `knip.json` (truncated mid-JSON). All 7 corrupted files recovered via `git show HEAD:<path>` bypassing the locked index.
-- **Gate results:** typecheck ✅ (exit 0) | lint ✅ (exit 0, 1 warning) | vitest ✅ 99 suites / 1232 tests / 0 fail | knip ⚠ sandbox-only (oxc-parser 2GB ArrayBuffer > sandbox limit — not a code defect; CI Node-20 expected clean).
-- **UI (completed this continuation):** `globals.css` — session-icon breathing glow, `bb-bot-sep` 1px separator, `bb-log-live` opacity-pulse, `bb-panel-live-dot` green ring-pulse, `bb-panel-badge` utility, `bb-panel-head` to `align-items:center`. `BottomBar.tsx` — LOG uses class not inline style; sep span before DXY. `PanelHead.tsx` — optional `live?: boolean` prop. typecheck ✓ lint ✓ after fix.
-- **New rule discovered:** Edit tool SILENTLY TRUNCATES CRLF `.tsx` files — the portion of the file after the last replaced string is dropped. Safe fix: `git show HEAD:path | python3` to read original, apply changes in-memory, write complete file. CSS files (globals.css) appear safe with Edit tool.
-- **Closed:** P-021 (all corruption resolved, gates green).
-- **Status:** Session complete — feat/chart-interaction-layer @ a13bd39, 7 files repaired, gates green (typecheck ✓ lint ✓), UI polish unstaged for operator review.
-
-### Session: 2026-06-18 daily PSD (standing agent)
-- **Work:** Boot on feat/chart-interaction-layer @ a13bd39; survey working tree (11 modified + 83 new untracked service-subdir files); run all four gates; fix ChartPanel.tsx truncation; fix CHANGELOG.md truncation; log P-022.
-- **Key finding:** ChartPanel.tsx was truncated at line 1648 (missing 12 lines: closing `aria-label`, OrderFlowTape div, MultiTFOverlay mount, and component closing braces). Restored via git show HEAD + Python in-memory apply of 2 intended changes: (1) static `import { exportChartPng }` → comment block explaining why it must not be static-imported (renderer crash on Vite's __dirname shim); (2) onClick handler → async + dynamic import('../chart/export'). CHANGELOG.md similarly truncated — reconstructed from HEAD + diff additions.
-- **Service restructure status:** 81 old flat services/ files fully mapped to domain subdirs (100% match, 0 missing). Cannot delete old files from sandbox (EPERM). P-022 logged for operator `git rm` cleanup. Knip on CI expected clean: test files anchor their flat-path sources as entry points.
-- **Gate results (post-fix):** typecheck ✅ exit 0 | lint ✅ exit 0 (1 warning) | vitest ✅ 111 files / 1304 tests / 0 fail | knip ⚠ sandbox OOM (known; CI expected clean).
-- **Shipped:** ChartPanel.tsx renderer crash fix (dynamic PNG export import) + CHANGELOG.md reconstruction. Changes UNSTAGED per AGENTS.md.
-- **Status:** Session complete — feat/chart-interaction-layer @ a13bd39, 2 files repaired.
-
+- **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git 

@@ -35,6 +35,17 @@ export const useTradesStore = create<State>((set, get) => ({
   reset: () => set({ bySymbol: {} }),
 }))
 
+// useSyncExternalStore (Zustand v5) requires selectors to return stable references for
+// the same state -- `?? []` mints a new array on every call and breaks the snapshot-cache
+// invariant, causing infinite render loops (same pitfall solved by EMPTY_DRAWINGS in
+// drawingStore / EMPTY_CANDLES in marketStore). Subscribe via this selector so a symbol
+// with no prints yet yields one frozen array instead of a fresh one every render.
+const EMPTY_TRADES: readonly Trade[] = Object.freeze([])
+
+/** Stable per-symbol trades selector for React subscriptions. */
+export const selectTrades = (symbol: string) => (s: State): readonly Trade[] =>
+  s.bySymbol[symbol] ?? EMPTY_TRADES
+
 let subscribed = false
 let cleanup: (() => void) | null = null
 

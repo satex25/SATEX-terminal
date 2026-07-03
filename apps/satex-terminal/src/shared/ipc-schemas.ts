@@ -12,7 +12,7 @@
  * helper there.
  */
 import { z } from 'zod'
-import { INTEL_MODULE_IDS } from '@shared/types'
+import { INTEL_MODULE_IDS, RAIL_IDS } from '@shared/types'
 
 // ── Primitive enums + reusables ────────────────────────────────────────────
 const OrderSideS = z.enum(['buy', 'sell'])
@@ -22,6 +22,7 @@ const FeedS = z.enum(['iex', 'sip'])
 const JournalTagS = z.enum(['planned', 'breakout', 'fade', 'scalp', 'swing', 'revenge', 'FOMO'])
 const EmaPeriodS = z.union([z.literal(9), z.literal(21), z.literal(50), z.literal(200)])
 const WorkspaceS = z.enum(['Trade', 'Focus', 'Markets', 'Replay', 'Quad', 'Intel'])
+const RailIdS = z.enum(RAIL_IDS)
 const HistoricalTimeframeS = z.enum(['1Min', '1Hour'])
 const VaultScopeS = z.enum(['session', 'trade', 'tactics', 'brain', 'observer', 'manual'])
 
@@ -236,6 +237,10 @@ export const WorkspaceStateSetReq = z.object({
   quadSymbols: z.array(SymbolS).length(4),
   chartSymbol: SymbolS,
   landingWorkspace: WorkspaceS,
+  // Fully-collapsible side rails (operator ask, 2026-07-02) — bounded to at
+  // most one entry per known rail id, mirroring the quadSymbols .length(4)
+  // and IntelLayoutSetReq .max(...) bounded-array convention.
+  collapsedRails: z.array(RailIdS).max(RAIL_IDS.length),
 })
 export type WorkspaceStateSetReq = z.infer<typeof WorkspaceStateSetReq>
 

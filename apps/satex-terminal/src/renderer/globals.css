@@ -2113,12 +2113,55 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   min-height: 0;
   background: var(--bb-surf-1);
   overflow: hidden;
+  transition: grid-template-columns 180ms ease;
 }
-.bb-col-left   { background: var(--bb-surf-1); min-height: 0; overflow: hidden; }
+.bb-col-left   { background: var(--bb-surf-1); min-height: 0; overflow: hidden; display: grid; }
 .bb-col-center { display: grid; grid-template-rows: minmax(0, 1fr) 1px 64px; min-height: 0; background: var(--bb-bg); overflow: hidden; }
-.bb-col-right  { display: grid; grid-template-rows: 288px 1px 268px 1px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+.bb-col-right  { display: grid; grid-template-rows: 288px 1px 268px 1px minmax(0, 1fr); min-height: 0; overflow: hidden; transition: grid-template-rows 180ms ease; }
 .bb-center-chart { min-height: 0; overflow: hidden; }
-.bb-right-depth, .bb-right-regime, .bb-right-exec { min-height: 0; overflow: hidden; background: var(--bb-surf-1); }
+.bb-right-depth, .bb-right-regime, .bb-right-exec { min-height: 0; overflow: hidden; background: var(--bb-surf-1); display: grid; }
+
+/* ---- RailSlot — fully-collapsible side rails (operator ask, 2026-07-02) --
+   Standardizes FundedAccountPanel's fa-collapse-btn/▸▾ interaction across the
+   8 side-rail panels; "fully" collapse means the wrapping grid track shrinks
+   to a thin re-open handle (lib/rail-layout.ts computes the track sizes —
+   this is pure presentation). View state only; routes no order. */
+.bb-rail-slot {
+  position: relative;
+  min-width: 0; min-height: 0;
+  height: 100%; width: 100%;
+  display: grid; grid-template-rows: 1fr;
+}
+.bb-rail-slot-body { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+.bb-rail-collapse-btn {
+  position: absolute; top: 4px; right: 4px; z-index: 2;
+  width: 16px; height: 16px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--bb-surf-2, #0c0c0e) 82%, transparent);
+  border: 1px solid var(--bb-line); border-radius: 3px;
+  color: var(--bb-txt-mute); font-size: 10px; line-height: 1;
+  cursor: pointer; opacity: 0.35; transition: opacity 120ms ease, color 120ms ease;
+}
+.bb-rail-collapse-btn:hover, .bb-rail-collapse-btn:focus-visible { opacity: 1; color: var(--bb-accent); }
+.bb-rail-handle {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; height: 100%; min-width: 0; min-height: 0;
+  background: var(--bb-surf-1); border: 0; border-left: 1px solid var(--bb-line);
+  color: var(--bb-txt-mute); cursor: pointer; padding: 4px;
+  transition: color 120ms ease, background 120ms ease;
+}
+.bb-rail-handle:hover, .bb-rail-handle:focus-visible { color: var(--bb-txt); background: var(--bb-surf-2, #0c0c0e); }
+.bb-rail-handle--col { flex-direction: column; }
+.bb-rail-handle--col .bb-rail-handle-label {
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+.bb-rail-handle--row { flex-direction: row; border-left: 0; border-top: 1px solid var(--bb-line); }
+.bb-rail-handle--row .bb-rail-handle-label {
+  font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+.bb-rail-handle-glyph { font-size: 12px; line-height: 1; }
 .bb-replay-stack { display: grid; grid-template-rows: minmax(0, 1fr) 1px minmax(0, 1fr); min-height: 0; height: 100%; }
 
 /* Trade workspace: ChartPanel top, then TimeSales · AIInsights · Journal.
@@ -2197,9 +2240,10 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   border-top: 1px solid var(--bb-line);
   min-height: 0;
   overflow: hidden;
+  transition: grid-template-columns 180ms ease;
 }
 .bb-sec-portfolio, .bb-sec-catalysts, .bb-sec-risk, .bb-sec-logs, .bb-sec-health {
-  min-height: 0; overflow: hidden; background: var(--bb-surf-1);
+  min-height: 0; overflow: hidden; background: var(--bb-surf-1); display: grid;
 }
 
 /* ---- Utility color helpers (used inline by panels) -------------------- */
@@ -3577,6 +3621,13 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   .bb-col-right .bb-right-regime { height: 268px; }
   .bb-col-right .bb-right-exec   { height: 320px; }
   .bb-col-right .bb-divider-h    { display: block; height: 1px; }
+  /* A collapsed rail keeps its handle height under the P-002 scroll-column
+     mode too — 28px mirrors RAIL_HANDLE_SIZE in lib/rail-layout.ts. Without
+     this, the sub-1009px-height fallback would trap a thin re-open handle
+     inside its old fixed-height box instead of actually shrinking. */
+  .bb-col-right .bb-right-depth:has(.bb-rail-handle),
+  .bb-col-right .bb-right-regime:has(.bb-rail-handle),
+  .bb-col-right .bb-right-exec:has(.bb-rail-handle) { height: 28px; }
 }
 
 /* ────────────────────────────────────────────────────────────────────────────

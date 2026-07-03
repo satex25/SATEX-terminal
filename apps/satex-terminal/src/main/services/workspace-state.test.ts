@@ -56,6 +56,16 @@ describe('WorkspaceStateService — empty state', () => {
     // default (readFromDisk spreads + copies the array for exactly this reason).
     expect(svc.get().quadSymbols).not.toBe(DEFAULT_WORKSPACE_STATE.quadSymbols)
   })
+
+  it('the no-file default ALSO carries a defensive COPY of collapsedRails (P-061 aliasing class)', () => {
+    // Same lesson as P-061 (indicator-settings.ts): a shallow spread of the
+    // module-level default would alias the SAME empty array into every
+    // returned state, so mutating one caller's result could corrupt the
+    // shared DEFAULT_WORKSPACE_STATE.collapsedRails for every future reader.
+    const svc = new WorkspaceStateService(tmpdir)
+    expect(svc.get().collapsedRails).not.toBe(DEFAULT_WORKSPACE_STATE.collapsedRails)
+    expect(svc.get().collapsedRails).toEqual(DEFAULT_WORKSPACE_STATE.collapsedRails)
+  })
 })
 
 describe('WorkspaceStateService — round-trip', () => {
@@ -66,6 +76,7 @@ describe('WorkspaceStateService — round-trip', () => {
       quadSymbols: ['QQQ', 'SPY', 'ES', 'BTC'],
       chartSymbol: 'TSLA',
       landingWorkspace: 'Focus',
+      collapsedRails: ['depth', 'logs'],
     }
     new WorkspaceStateService(tmpdir).set(next)
 
@@ -81,6 +92,7 @@ describe('WorkspaceStateService — round-trip', () => {
       quadSymbols: ['qqq', 'ZZZZ', 'qqq'],
       chartSymbol: 'tsla',
       landingWorkspace: 'Trade',
+      collapsedRails: ['risk'],
     })
     // QQQ survives (uppercased, deduped); ZZZZ is not in UNIVERSE; the pad
     // fills from the defaults in order, skipping already-present symbols.
@@ -155,6 +167,28 @@ describe('WorkspaceStateService — sanitize on load', () => {
   it('a foreign version number is normalized to 1 on read', () => {
     writeFenceJson({ ...DEFAULT_WORKSPACE_STATE, version: 99 })
     expect(new WorkspaceStateService(tmpdir).get().version).toBe(1)
+  })
+
+  it('a record written BEFORE collapsedRails existed hydrates to an empty array (additive field)', () => {
+    // Simulate the pre-Phase-D on-disk shape: no collapsedRails key at all.
+    writeFenceJson({
+      version: 1,
+      workspace: 'Trade',
+      quadSymbols: ['NVDA', 'SPY', 'ES', 'BTC'],
+      chartSymbol: 'NVDA',
+      landingWorkspace: 'Trade',
+    })
+    const s = new WorkspaceStateService(tmpdir).get()
+    expect(s.collapsedRails).toEqual([])
+    expect(s.workspace).toBe('Trade')
+  })
+
+  it('collapsedRails: unknown ids dropped, valid ids deduped, non-array falls back to empty', () => {
+    writeFenceJson({ ...DEFAULT_WORKSPACE_STATE, collapsedRails: ['depth', 'not-a-rail', 'depth', 'health'] })
+    expect(new WorkspaceStateService(tmpdir).get().collapsedRails).toEqual(['depth', 'health'])
+
+    writeFenceJson({ ...DEFAULT_WORKSPACE_STATE, collapsedRails: 'watchlist' })
+    expect(new WorkspaceStateService(tmpdir).get().collapsedRails).toEqual([])
   })
 })
 

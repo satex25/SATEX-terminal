@@ -2,7 +2,7 @@
 type: home
 title: SATEX — Home
 tags: [satex, home, moc]
-updated: 2026-06-14
+updated: 2026-07-02
 ---
 
 # SATEX — Home
@@ -10,8 +10,18 @@ updated: 2026-06-14
 > [!abstract] The cockpit
 > One screen between you and everything this system knows. Machine notes flow
 > in by themselves — sessions, observer checkpoints, learnings, self-evals,
-> and trades once P-013 closes. The maps below are curated and never dead-end.
-> Structure last reviewed **2026-06-12**.
+> and trades. The maps below are curated and never dead-end.
+> Structure last reviewed **2026-07-02**.
+
+> [!tip] Mile-marker, not a stopping point — 2026-07-02
+> Filesystem reorganized to `apps/satex-terminal/`; Intel workspace (composable
+> quant-intelligence tab) shipped; every side-rail panel now fully collapses
+> (P-073); a recurring aliasing-bug class caught and hardened a third time
+> (P-074). Gates: **117 files / 1488 tests / 0 fail**, typecheck/lint/knip all
+> clean. Full writeup: [[Vault/Daily/2026-07-02-full-project-validation|2026-07-02 Full-Project Validation]].
+> Next horizon: a full-day / multi-strategy review surface for the Brain (see
+> the ledger and the validation note for the honest read on what's built vs.
+> what needs your sign-off).
 
 ## Start here
 
@@ -47,8 +57,8 @@ More views: [[Vault/_dashboards/trades.base|trades]] · [[Vault/_dashboards/lear
 | [[Vault/Brain/README\|Brain]] | brain milestones | rare, on milestone |
 | [[Vault/Daily/README\|Daily]] · [[Vault/Manual/README\|Manual]] | **you** | daily note · phase retros |
 
-## Program state (dated 2026-06-12 — the ledger is the truth)
+## Program state (dated 2026-07-02 — the ledger is the truth)
 
-- Ladder: **L1.A–C merged** · branch `feat/audit-psd-batch-2026-06-11` awaiting push → PR · **L1.D (funded compliance) next**
-- P-013 instrumented and decisive — run one simulated close, read the log, watch [[Vault/_dashboards/trades.base|trades]]
-- Live numbers are never copied here — they rot. Open the newest note in `Learnings/` or the dashboards above.
+- Branch: `refactor/filesystem-reorganization` — app now lives at `apps/satex-terminal/`. Ladder: **L1.A–C merged**; L1.D funded-compliance primitives built (topstep-50k-xfa, daily-pnl-ledger, eod-flatten, blackout-window); **L1.F (ensemble → autonomous wiring)** built but uncommitted, awaiting operator sign-off (ledger P-009 — touches the live-decision path).
+- Everything this session is **unstaged, gate-verified, awaiting your branch→PR review** per AGENTS.md — nothing was committed on your behalf.
+- Live numbers are never copied here — they rot. Open the newest note in `Learnings/`, `Vault/Backtests/`, or the dashboards above.
