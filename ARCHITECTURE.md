@@ -1,8 +1,8 @@
 # SATEX — System Architecture
 
 > The one-page map of everything in this workspace. *How to work the repo* →
-> [`AGENTS.md`](AGENTS.md). *App invariants* → [`satex-app/CLAUDE.md`](00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CLAUDE.md).
-> *What changed when* → [`satex-app/CHANGELOG.md`](00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CHANGELOG.md).
+> [`AGENTS.md`](AGENTS.md). *App invariants* → [`satex-app/CLAUDE.md`](apps/satex-terminal/CLAUDE.md).
+> *What changed when* → [`satex-app/CHANGELOG.md`](apps/satex-terminal/CHANGELOG.md).
 > Last structural update: **2026-06-16**.
 
 ---
@@ -15,9 +15,8 @@ mc4/                                ← canonical repo (master @ github.com/sate
 ├─ AGENTS.md                        ← how to work: gates, branch flow, safety guardrails
 ├─ README.md                        ← quick start
 ├─ scripts/                         ← operator one-shot scripts (cleanup, migration aids)
-├─ 00-PROJECT-ROOT/
-│  └─ 01-SATEX-CORE/
-│     └─ satex-app/                 ← THE app (Electron + React 18 + TS, Windows-only)
+├─ apps/
+│  └─ satex-terminal/                 ← THE app (Electron + React 18 + TS, Windows-only)
 ├─ Vault/                           ← Obsidian vault — runtime data, untracked by design
 │  ├─ 00-Audit/                     ← forensic audits (latest: 2026-06-10-FULL-SYSTEM-AUDIT)
 │  ├─ Backtests/  + baselines/      ← nightly self-eval verdicts + locked baselines

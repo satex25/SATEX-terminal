@@ -184,6 +184,33 @@ updated: 2026-07-02
   identical; `-f` only reconciles the index).
 - **Status:** OPEN (operator)
 
+### P-066 · `npm install` fails on native build — bundled node-gyp v9.4.1 can't build under Python 3.12+ (distutils removed)
+- **Problem:** A fresh `npm install` in `apps/satex-terminal` (triggered because
+  `node_modules` doesn't follow a `git mv`) aborts building the `better-sqlite3`
+  native addon: `ModuleNotFoundError: No module named 'distutils'` →
+  `gyp ERR! configure error`. Root cause: the machine runs Node v24.15.0 whose npm
+  bundles **node-gyp v9.4.1**, and node-gyp ≤9 imports `distutils`, which was removed
+  from the Python standard library in **Python 3.12**. So any native-addon rebuild on
+  this box fails at configure time. This session dodged it by reusing the already-built
+  `node_modules` (the one that passed Branch 1's 1464 tests, with a valid
+  `better_sqlite3.node`) — moved intact from the old `satex-app/` path to
+  `apps/satex-terminal/`. That worked, but it is a workaround: the underlying toolchain
+  is broken for **every** future `npm install` / fresh clone on this machine, and very
+  plausibly for CI if CI shares the same Node/Python pairing.
+- **Solutions:** (a) upgrade node-gyp to **≥10** (drops the `distutils` import) — e.g.
+  `npm i -g node-gyp@latest` and/or pin `node-gyp` in the app so npm uses the modern one;
+  (b) `pip install setuptools` to restore the `distutils` shim for the existing node-gyp
+  (smallest change, but leaves the stale node-gyp in place); (c) pin the build Python to
+  3.11 (has `distutils`) via `npm config set python` / a `.python-version`. (a) is the
+  durable fix and the one Node itself moved to.
+- **Decision:** flagged, NOT fixed this session — out of scope for the gate-verification
+  task, and rushing a toolchain change alongside a push/PR run risks masking a real
+  native-build regression. Recommend (a) on its own change, verified by a clean
+  from-scratch `npm install` in `apps/satex-terminal`, before the next fresh clone or CI
+  run depends on it.
+- **Status:** OPEN (found 2026-07-02 during reorg-branch gate verification;
+  `apps/satex-terminal` fresh install; workaround = reused prebuilt `node_modules`).
+
 ### P-063 · `shared/indicators.ts` kernels accept an unvalidated `period`/`lookback` — latent NaN / silent-wrong-window class
 - **Problem:** `ema`/`rsi`/`atr`/`sma`/`trendStrength`/`rollingVolatility`
   (`src/shared/indicators.ts:9,20,27,43,58,72,81`) all take a `period`/`lookback` number

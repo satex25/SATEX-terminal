@@ -5,7 +5,7 @@
 set -e
 
 ROOT="$(git rev-parse --show-toplevel)"
-cd "$ROOT/00-PROJECT-ROOT/01-SATEX-CORE/satex-app"
+cd "$ROOT/apps/satex-terminal"
 
 echo "[pre-commit] typecheck..."
 npm run typecheck

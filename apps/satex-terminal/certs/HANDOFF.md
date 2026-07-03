@@ -72,7 +72,7 @@ Place the issued cert in `certs/satex-codesign.cer` (overwriting if needed).
 Then **on the build machine** (same machine where the CSR was generated):
 
 ```powershell
-cd C:\Users\User\mc4\00-PROJECT-ROOT\01-SATEX-CORE\satex-app\certs
+cd C:\Users\User\mc4\apps\satex-terminal\certs
 certreq -accept satex-codesign.cer
 ```
 
@@ -99,7 +99,7 @@ $thumbprint = '<paste thumbprint from step 4>'
 $pwd = Read-Host -AsSecureString -Prompt 'Choose a .pfx password'
 $cert = Get-ChildItem Cert:\CurrentUser\My\$thumbprint
 Export-PfxCertificate -Cert $cert `
-  -FilePath 'C:\Users\User\mc4\00-PROJECT-ROOT\01-SATEX-CORE\satex-app\certs\satex-codesign.pfx' `
+  -FilePath 'C:\Users\User\mc4\apps\satex-terminal\certs\satex-codesign.pfx' `
   -Password $pwd
 ```
 
@@ -114,7 +114,7 @@ The pack script reads two env vars (electron-builder native convention):
 
 ```powershell
 # In your build shell — one-time per session, NOT persisted to disk:
-$env:CSC_LINK         = 'C:\Users\User\mc4\00-PROJECT-ROOT\01-SATEX-CORE\satex-app\certs\satex-codesign.pfx'
+$env:CSC_LINK         = 'C:\Users\User\mc4\apps\satex-terminal\certs\satex-codesign.pfx'
 $env:CSC_KEY_PASSWORD = '<your .pfx password from step 5>'
 ```
 
@@ -128,7 +128,7 @@ repository secrets; Azure DevOps: variable groups marked as secret).
 ## 7. Build a signed installer
 
 ```powershell
-cd C:\Users\User\mc4\00-PROJECT-ROOT\01-SATEX-CORE\satex-app
+cd C:\Users\User\mc4\apps\satex-terminal
 npm run pack:win
 ```
 

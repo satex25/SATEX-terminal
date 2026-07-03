@@ -73,7 +73,7 @@ code is the truth and this file has a bug** — file it in the Problem Ledger
 ## 1.1 What SATEX Is
 
 **SATEX — Smart Autonomous Trading EXperience** (canonical name per
-`satex-app/package.json`; the v2-era backronym "Systematic Autonomous Trading Execution
+`apps/satex-terminal/package.json`; the v2-era backronym "Systematic Autonomous Trading Execution
 Engine" is retired).
 
 A **Windows-only** desktop trading terminal:
@@ -119,7 +119,7 @@ Paper is the proving ground; live is the product; the wall between them is code.
 
 The v2 gate ("500 paper trades then maybe live") is retired. The real program is the
 **Topstep-eval-capable ladder** (spec:
-`satex-app/docs/plans/specs/2026-06-02-topstep-eval-capable-program-design.md`):
+`apps/satex-terminal/docs/plans/specs/2026-06-02-topstep-eval-capable-program-design.md`):
 
 ```
 L1.A ✅ → L1.B ✅ → L1.C ✅ → L1.D (funded compliance) → L1.E (payouts)
@@ -136,7 +136,7 @@ Two permanent structural truths:
    MAY-TACTICS graduation interlock gates autonomous-tactic promotion the same way.
 
 **Known release blocker:** shipping a signed Windows installer awaits an Authenticode
-certificate (CSR ready at `satex-app/certs/`, workflow in `certs/HANDOFF.md`). Once a
+certificate (CSR ready at `apps/satex-terminal/certs/`, workflow in `certs/HANDOFF.md`). Once a
 `.pfx` lands, `npm run pack:win` signs with zero code changes.
 
 ## 1.5 Newcomer's Orientation — The First 15 Minutes
@@ -145,11 +145,11 @@ You are a new intelligence joining SATEX. Do this, in order, before touching any
 
 1. **Read the authority chain** (each file owns a different truth — Appendix B):
    `CONSTITUTION.md` (this) → root `AGENTS.md` (how to work) →
-   `ARCHITECTURE.md` (system map) → `satex-app/CLAUDE.md` (app invariants) →
+   `ARCHITECTURE.md` (system map) → `apps/satex-terminal/CLAUDE.md` (app invariants) →
    `Vault/00-Audit/PROBLEM-LEDGER.md` (the living work queue).
 2. **Verify the world**: `git log --oneline -5`, `git status`, current branch. Never
    assume the previous session's state survived.
-3. **Run the gate bar** from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/` if you intend to
+3. **Run the gate bar** from `apps/satex-terminal/` if you intend to
    change code: `npm run typecheck` · `npm run lint` · `npm test` · `npm run knip`.
    Record the real numbers.
 4. **Pick up DECIDED / IN-PROGRESS ledger entries** before inventing new work.
@@ -167,7 +167,7 @@ and leave the next agent a runnable starting point.*
 
 ## 2.1 The Gate Bar — All Four, Always
 
-Run from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`:
+Run from `apps/satex-terminal/`:
 
 | Gate | Command | What it proves |
 |---|---|---|
@@ -185,7 +185,7 @@ Run from `00-PROJECT-ROOT/01-SATEX-CORE/satex-app/`:
 - One-time per clone: `git config core.hooksPath .husky` then `npm install` in the app dir.
 - **Report real results** — exit codes, file/test counts — in every changelog entry and
   PR description. The repo's changelog style is the standard: every fix ends with its
-  measured gate line (see any P-0xx entry in `satex-app/CHANGELOG.md`).
+  measured gate line (see any P-0xx entry in `apps/satex-terminal/CHANGELOG.md`).
 - **Green gates are the floor, not the goal** (operator directive, 2026-06-10). A passing
   typecheck does not mean the operator is looking at a world-class quant terminal. After
   the gates: does the change make a live session calmer, faster, more legible?
@@ -252,7 +252,7 @@ is an automatic stop regardless of how green the gates are.
 
 ## 2.5 Load-Bearing Invariants — Do Not Break
 
-The distilled do-not-break list (full set: `satex-app/CLAUDE.md` + git history):
+The distilled do-not-break list (full set: `apps/satex-terminal/CLAUDE.md` + git history):
 
 1. **State is Zustand, not Redux.** No direct cross-store coupling — go through stores/IPC.
 2. **Equity is `DEFAULT_EQUITY`** — never reintroduce a `STARTING_EQUITY` symbol. Risk
@@ -309,7 +309,7 @@ The distilled do-not-break list (full set: `satex-app/CLAUDE.md` + git history):
   assembled plan), optionally reviewed by `/autoplan`'s multi-persona pass. Mandatory for:
   broker abstraction work, risk engine, execution pipeline, data-feed changes, IPC
   contract changes, anything on the live-capital path.
-- Plans live in `docs/plans/` (workspace) or `satex-app/docs/plans/specs/` (app-level).
+- Plans live in `docs/plans/` (workspace) or `apps/satex-terminal/docs/plans/specs/` (app-level).
   A plan that was executed becomes documentation; link it from the changelog entry.
 - **The task-completion standard** (inherited from the Infrastructure Mandate, still
   binding): a task is not done without (1) explicit confirmation methodology, (2)
@@ -328,10 +328,10 @@ Single-ownership prevents drift. Update the owner, link from elsewhere:
 | Behavior constitution (this) | `CONSTITUTION.md` |
 | How to work the repo: gates, branch flow, guardrails, PSD | root `AGENTS.md` |
 | One-page system map | `ARCHITECTURE.md` (update §1 on folder moves, §2 on service changes, §3 on loop changes, §4 on ladder advances) |
-| Durable app architecture facts + invariants | `satex-app/CLAUDE.md` |
-| What changed when (per-release detail) | `satex-app/CHANGELOG.md` |
+| Durable app architecture facts + invariants | `apps/satex-terminal/CLAUDE.md` |
+| What changed when (per-release detail) | `apps/satex-terminal/CHANGELOG.md` |
 | Living problem queue | `Vault/00-Audit/PROBLEM-LEDGER.md` |
-| Design decisions | `docs/design/`, `docs/plans/`, `satex-app/docs/plans/specs/` |
+| Design decisions | `docs/design/`, `docs/plans/`, `apps/satex-terminal/docs/plans/specs/` |
 
 Keep owners durable: per-release detail goes in the CHANGELOG, not in architecture files.
 Every shipped change updates its owning docs **in the same PR**.
@@ -717,9 +717,9 @@ Be ruthless about errors — especially your own.
 1. CONSTITUTION.md                          ← you are here: behavior + boundaries
 2. AGENTS.md                                ← how to work: gates, flow, guardrails
 3. ARCHITECTURE.md                          ← the one-page system map
-4. 00-PROJECT-ROOT/01-SATEX-CORE/satex-app/CLAUDE.md   ← app invariants + contracts
+4. apps/satex-terminal/CLAUDE.md   ← app invariants + contracts
 5. Vault/00-Audit/PROBLEM-LEDGER.md         ← what needs doing (boot + close)
-6. satex-app/CHANGELOG.md                   ← what changed when
+6. apps/satex-terminal/CHANGELOG.md                   ← what changed when
 7. docs/plans/ · docs/design/ · docs/policy/ ← decisions and their reasons
 ```
 

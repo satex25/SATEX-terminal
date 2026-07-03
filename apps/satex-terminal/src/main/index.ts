@@ -205,7 +205,7 @@ function resolveVaultProjectRoot(): string {
   if (envRoot && existsSync(envRoot)) {
     return envRoot
   }
-  // electron-vite builds main into <repo>/00-PROJECT-ROOT/01-SATEX-CORE/satex-app/out/main/
+  // electron-vite builds main into <repo>/apps/satex-terminal/out/main/
   // and the vault lives at <repo-root>/Vault/. app.getAppPath() returns the
   // satex-app dir; walk up to find the directory that contains .obsidian/.
   // Falls back to userData/Vault (always writable, predictable) if no marker

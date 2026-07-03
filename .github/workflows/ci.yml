@@ -20,7 +20,7 @@ jobs:
     # once so every shell step lands in the satex-app dir without per-step cd boilerplate.
     defaults:
       run:
-        working-directory: 00-PROJECT-ROOT/01-SATEX-CORE/satex-app
+        working-directory: apps/satex-terminal
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '20.19'
           cache: npm
-          cache-dependency-path: 00-PROJECT-ROOT/01-SATEX-CORE/satex-app/package-lock.json
+          cache-dependency-path: apps/satex-terminal/package-lock.json
 
       # npm ci respects the lockfile and refuses to mutate it — what we want in CI.
       # postinstall runs `electron-builder install-app-deps` which rebuilds better-sqlite3

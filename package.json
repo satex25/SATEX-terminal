@@ -1,0 +1,19 @@
+{
+  "name": "satex-monorepo",
+  "version": "0.5.0",
+  "description": "SATEX — Smart Autonomous Trading EXperience: Windows-only Electron trading terminal with a live-capital path via Alpaca",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "typecheck": "npm --prefix apps/satex-terminal run typecheck",
+    "lint": "npm --prefix apps/satex-terminal run lint",
+    "test": "npm --prefix apps/satex-terminal test",
+    "knip": "npm --prefix apps/satex-terminal run knip",
+    "gates": "npm run typecheck && npm run lint && npm test && npm run knip",
+    "build": "npm --prefix apps/satex-terminal run build",
+    "dev": "npm --prefix apps/satex-terminal run dev"
+  }
+}
