@@ -29,4 +29,4 @@ App-internal docs (design specs, release procedures, ultraplans) live in
 | Third-party vendor references | Component ultraplans and implementation specs |
 | Workspace-wide audits | Funded programme master plans |
 
-Workspace onboarding docs: [GETTING-STARTED.md](GETTING-STARTED.md) · [CONTRIBUTING.md](apps/satex-terminal/docs%201/CONTRIBUTING.md) · [SECURITY.md](apps
+Workspace onboarding docs: [GETTING-STARTED.md](GETTING-STARTED.md) · [CONTRIBUTING.md](apps/satex-terminal/docs%201/CONTRIBUTING.md) · [SECURITY.md](apps/satex-terminal/docs%201/SECURITY.md) · [FAQ.md](FAQ.md)

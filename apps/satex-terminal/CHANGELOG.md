@@ -9,6 +9,10 @@ changes alongside fixes during the v0.x stabilization series.
 
 ### Fixed
 
+- **P-087: moved the Simulator/Live data-feed toggle out of the TopBar and into Settings.** The `FeedSwitch` chip previously sat beside the PAPER/LIVE real-capital toggle, reading as equally important — it isn't (one flips market-data source, the other flips capital endpoint). Relocated to a new "Market Data Feed" section in `SettingsModal.tsx` (`View → Settings…`), positioned next to "AI Advisor." Reuses the exact same `useDataSourceStore` hook and `data-source-guard.ts` interlock — no IPC or engine changes, UI relocation only. Watchlist SIM badges (`isSyntheticFeed`) remain the always-visible situational-awareness signal. Gates: typecheck node+web exit 0 · lint exit 0 (0 warnings) · targeted vitest `dataSourceStore.test.ts` 3/3.
+
+- **P-084: stale ledger cross-reference in the PNG-export IPC hardening (`ipc-schemas.ts:361`, `export.ts:104`).** Both comments cited `P-083` as the ledger record for the `ChartPngExportReq` `data` field's move from `Array.from(Uint8Array)` to a raw `Uint8Array` (with a `byteLength <= 20_000_000` refine, replacing the old per-element `.int().min().max()` array check). `P-083` was independently assigned the same day to an unrelated entry (`market-observer.ts` coverage) — the PNG-export change had been sitting unstaged and *never actually ledgered* under its own number, so the in-code citation pointed at the wrong PSD record (a broken evidence trail per CONSTITUTION 0.1/0.10). Corrected both comments to cite `P-084` (this entry) instead of `P-083`. The underlying Uint8Array change itself was re-inspected and is functionally sound — the main-process handler (`src/main/index.ts:1081`, `Buffer.from(data)`) accepts either a `number[]` or a `Uint8Array` unchanged, and `ipc-schemas.test.ts` already covers the schema. Gates: typecheck node+web exit 0 · lint exit 0 (0 warnings) · targeted vitest `ipc-schemas.test.ts` 11/11.
+
 - **P-074: `funded-account-store.ts` aliased its shared empty-state arrays
   into every caller (the same class as P-061), plus an unbounded array-spread
   in `FundedAccountPanel.tsx`.** All three `{ ...EMPTY }` fallback returns
@@ -270,6 +274,41 @@ changes alongside fixes during the v0.x stabilization series.
   that one action. TODO: add a `chart.pngExport` preload bridge.
 
 ### Added
+
+- **P-088: coverage for the untested `edgar.ts` (SEC EDGAR catalysts poller).**
+  New-file-only Vitest suite (25 tests) for `EdgarService` — the 5-minute
+  poller that turns SEC filings into Catalysts-panel `NewsItem`s. Pins the
+  `start()`/`stop()` timer lifecycle (idempotent double-start, safe
+  double-stop, the ~10s initial-poll delay), the 24h `ensureCikMap` ticker-map
+  cache + re-fetch-after-expiry, ticker-case uppercasing, the `TRACKED_FORMS`
+  filter, the 7-day lookback cutoff + NaN-date guard, per-form `kind`/
+  `sentiment` mapping in `emit()`, the 20-filings-per-symbol cap in
+  `fetchSubmissions`, the 404-is-quiet vs. non-404-throws-but-`poll()`-
+  swallows distinction, and — the headline bounded-growth pin (the PR#6/
+  P-041/P-043/P-046 class) — the `seen` accession-number set halving once it
+  exceeds 5000 entries, verified black-box by resending an old (evicted) and
+  a recent (retained) accession number after crossing the threshold. Source
+  byte-for-byte unchanged. Gates: typecheck node+web exit 0 · lint exit 0 (0
+  warnings) · targeted vitest 25/25 · 3-file services segment (edgar +
+  market-observer + llm) 63/63, no cross-file mock leakage. knip not run
+  (sandbox oxc-parser 2 GB OOM, §2.9 ceiling — new test exports nothing,
+  knip-neutral; CI is arbiter).
+
+- **P-083: coverage for the untested `market-observer.ts` (continuous intel
+  recorder).** New-file-only Vitest suite (28 tests) for `MarketObserver` —
+  the dense, always-on quote recorder that feeds PatternLearner + VaultWriter
+  and is intentionally separate from the Brain (it learns nothing). Pins the
+  lifecycle + flush-timer cleanup (the PR#6/P-041/P-043/P-046 leak class), the
+  bounded per-symbol ring buffer (`RING_PER_SYMBOL` cap), the rolling
+  per-minute window trim, the `≥21`-candle and computeSnapshot-throw
+  null-guards, the degenerate `last<=0` spread guard, the `MAX_BUFFER`
+  auto-flush, the intentional flush error-swallow ("dropping batch"), and all
+  five `classifyRegime` branches. `./persistence` + `@shared/indicators`
+  mocked; fake timers drive the flush/window paths. Source byte-for-byte
+  unchanged. Gates: typecheck node+web exit 0 · lint exit 0 (0 warnings) ·
+  targeted vitest 28/28 · 4-file services segment 49/49. Surfaced a pinned
+  finding (see ledger P-083): `getRecent` is not reordered post-ring-wrap, so
+  its "newest last" contract holds only pre-wrap — documented, not changed.
 
 - **P-076 / P-077: coverage for two untested main-process services.**
   New-file-only Vitest suites for `live-candle-buffer.ts` (13 tests — OHLC

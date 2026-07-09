@@ -60,4 +60,4 @@ npm run knip         # dead-code / unused deps
 SATEX can trade **real capital** in live mode. Autonomous financial execution is
 **forbidden**: the order/execution path, risk gates, kill-switch, and the live-mode
 and MAY-TACTICS interlocks are off-limits to automated change without explicit human
-approval. See the guar
+approval. See the guardrails in **[AGENTS.md](AGENTS.md)**.

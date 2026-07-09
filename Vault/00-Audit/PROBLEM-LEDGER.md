@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-07-03
+updated: 2026-07-06
 ---
 
 # Problem Ledger
@@ -15,7 +15,410 @@ updated: 2026-07-03
 
 ---
 
-## Open
+### P-089 · Live-decision-path read-only audit sweep (brain/calibration/pattern-learner/regime) — no defects found — VERIFIED
+- **Problem:** the 2026-07-04 and 2026-07-05 work-layer sessions each deferred a full
+  read-only sweep of the live-decision input path (`brain.ts`, `calibration.ts`,
+  `pattern-learner.ts`, `regime.ts`) for lack of time budget after coverage-and-verify
+  cycles — flagged both times as "worth dedicating a full session to it specifically."
+  No 2026-07-06 dawn-planner handoff existed at boot (fallback protocol, rule 1), so
+  this session picked the deferred sweep directly off the 2026-07-05 handoff's own
+  NEXT list item 3.
+- **Solutions:** (a) full read-through of all four files against the known defect
+  classes (leak, degenerate-input, unbounded-growth, missing guards) — no source
+  changes, evidence-only; (b) skip again and pick a third coverage target instead —
+  rejected, the sweep was explicitly called out as deferred twice already and
+  low-cost coverage adds were diminishing in value per 2026-07-05's own NEXT note
+  about the unstaged backlog's legibility.
+- **Decision:** **(a)**. Findings, each verified at `file:line`:
+  - `brain.ts` — degenerate-input guards present and correct: `learn()` returns early
+    on `notional <= 0` (`brain.ts:131`); `atrNorm` guards divide-by-zero via
+    `Math.max(0.01, quote.last)` (`brain.ts:81`); depth features only compute when
+    `depth.bids?.length && depth.asks?.length` and `totSize > 0`
+    (`brain.ts:86-99`). No timers/listeners. No unbounded growth (stateless per-call
+    scoring; persisted weights are a fixed 8-key record). Clean.
+  - `calibration.ts` — rolling window is bounded (`this.samples.shift()` once
+    `> WINDOW` at `calibration.ts:124`); `computeMultiplier` guards `avgConf <= 0`
+    (`calibration.ts:89`); `record()`'s DB write is wrapped in try/catch so a
+    persistence failure can't propagate into the close pipeline
+    (`calibration.ts:125-126`). Downgrade-only multiplier confirmed
+    (`Math.max(MULT_FLOOR, Math.min(1, ratio))`, `calibration.ts:93`). Clean.
+  - `pattern-learner.ts` — timer lifecycle is idempotent and paired
+    (`start()`/`stop()` guard on `this.running`, `pattern-learner.ts:83-95`) and IS
+    called from `TradingEngine.shutdown()` (`trading-engine.ts:842`, `this.learner?.stop()`).
+    High-water-mark cursor (`lastLabeledTs`, P-001 fix) prevents the
+    re-label-on-every-cycle bug from recurring. Observation query is bounded
+    (`db.listObservations(symbol, sinceTs, 5_000)`, `pattern-learner.ts:127`). Divide
+    guards present (`o.vwap > 0`, `pattern-learner.ts:217`; `Math.max(0.01, x0.last)`,
+    `pattern-learner.ts:235`). Clean.
+  - `regime.ts` — `setInterval` in `start()` (`regime.ts:112`) is cleared in `stop()`
+    (`regime.ts:117`) AND `stop()` is confirmed called from
+    `TradingEngine.shutdown()` (`trading-engine.ts:844`, `this.regime?.stop()`) — no
+    leak. Divide guards present (`last > 0` before spread-bps calc, `regime.ts:155`;
+    `Math.max(1e-9, last)` in volatility norm, `regime.ts:165`; `e21 === 0 ? 0 : ...`,
+    `regime.ts:170`). `normalize()` guards sum-to-zero (`regime.ts:73`). Clean.
+  - No NUL bytes / `\r\r` corruption in any of the four files (LF, byte-scanned).
+  - **Net result: zero new defects.** All four files already carry the defensive
+    patterns the constitution's defect classes target. The two-session-old deferred
+    item is closed with a clean bill, not a skip.
+- **Status:** VERIFIED (read-only, no code changes, no gates required — nothing
+  shipped). Companion test files confirmed still green this session: targeted
+  `vitest run` on `brain.test.ts` + `calibration.test.ts` + `pattern-learner.test.ts` +
+  `regime.test.ts` → **37/37 passed** (10.71s). Evidence: `Vault/Daily/2026-07-06-work-layer.md`.
+
+### P-088 · `edgar.ts` (SEC EDGAR catalysts poller) shipped untested — SHIPPED
+- **Problem:** `src/main/services/edgar.ts` (198 LOC) — the 5-minute poller that turns
+  SEC EDGAR filings (8-K/10-Q/10-K/Form 4) into `NewsItem`s for the Catalysts panel —
+  had zero co-located test coverage. It carries the repo's most recidivist defect class
+  in a new shape: an unbounded `seen: Set<string>` of accession numbers with a
+  self-halving guard (`if (this.seen.size > 5000) { ... }`, `edgar.ts:129-132`) that had
+  never been exercised past the threshold, a `setTimeout` + `setInterval` pair whose
+  only cleanup is `stop()` (the PR#6/P-041/P-043/P-046 leak class, `edgar.ts:90-100`),
+  and a 24h ticker-map cache (`ensureCikMap`, `edgar.ts:139-151`) whose expiry path was
+  unverified. Off the trading-safety perimeter (news/catalyst feed only — `poll()`'s own
+  try/catch means a malformed SEC response can never throw out of the service).
+- **Solutions:** (a) new-file-only Vitest suite, source untouched, `vi.stubGlobal`ing
+  `fetch` per the `llm.test.ts` precedent and driving the bounded-growth path through
+  the *public* `refresh()`/`onNews()` API (251 poll cycles × 20 unique filings, matching
+  how `market-observer.test.ts` drove its 200-entry ring buffer through realistic calls
+  rather than reaching into private state) — pins the contract with zero source risk;
+  (b) reach into the private `seen` field via an `as unknown as {...}` cast to seed it
+  near 5000 directly — faster to write, but pokes implementation detail no other suite
+  in this repo does and would stop testing the *real* code path (whether 251 real polls
+  actually reach and cross the threshold); (c) leave untested — rejected, this is exactly
+  the bounded-growth/leak class the ledger exists to guard, and the threshold had never
+  been exercised even once.
+- **Decision:** **(a)**. NEW `src/main/services/edgar.test.ts` (25 tests): start/stop
+  timer lifecycle (idempotent double-start via `this.timer` guard, safe double-stop,
+  the ~10s initial-poll delay), `onNews` subscribe/unsubscribe, per-form `kind`/
+  `sentiment` mapping for all five `TRACKED_FORMS` entries, untracked-form filtering,
+  empty-watchlist gating (ticker map still refreshes, no submissions fetch), unmapped-
+  ticker skip, ticker-uppercasing on ingest, 7-day lookback cutoff + NaN-date guard,
+  cross-poll accession-number dedup, the 20-filings-per-symbol cap (`fetchSubmissions`,
+  fed 25 to prove truncation), 24h ticker-map cache + forced re-fetch after
+  `vi.setSystemTime` advances 24h+1s, 404-is-quiet-empty vs. non-404-throws-but-
+  `poll()`-swallows, a rejected ticker-map fetch never escaping `refresh()`, an
+  `{ filings: {} }` degenerate response treated as zero filings, and the seen-set
+  halving itself: 250 polls reach exactly 5000 entries (no halve yet), poll #251 pushes
+  to 5020 and triggers the halve (`arr.slice(2510)`), then a follow-up poll resending
+  the oldest accession (`acc-0`, evicted → re-emitted) and the newest
+  (`acc-5019`, retained → deduped) proves the halving kept the *recent* half, not an
+  arbitrary one. Source byte-for-byte unchanged.
+- **Status:** SHIPPED (unstaged, 2026-07-05). Evidence: byte-scan 0 NUL / 0 `\r\r` (LF)
+  on the new file (and 0 NUL / 0 `\r\r` across all 49 touched/untracked files in the
+  working tree this session); typecheck node exit 0 · typecheck web exit 0 · lint exit 0
+  (0 warnings); targeted vitest `edgar.test.ts` 25/25 (17.94s incl. environment setup,
+  107ms actual test time); 3-file services segment (edgar + market-observer + llm)
+  63/63, no `vi.mock`/`vi.stubGlobal` cross-file leakage. knip not run (sandbox
+  oxc-parser 2 GB OOM, §2.9 ceiling — new test exports nothing, knip-neutral; CI is
+  arbiter). Blueprint: none written — this was picked directly off the 2026-07-04
+  handoff's own "recommended starting point" list (`edgar.ts` flagged there as "likely
+  the cleanest next pure pick") under the fallback protocol, since no 2026-07-05
+  dawn-planner handoff existed at 06:06 CDT boot time (see 2026-07-05-work-layer.md).
+
+### P-087 · TopBar's Simulator/Live data-feed chip read as equally load-bearing as the real-capital toggle — relocated to Settings — SHIPPED (fixed)
+- **Problem:** Operator feedback (2026-07-04, live product review): the TopBar's
+  `FeedSwitch` chip (`SIM DATA` / `ALPACA`, `FeedSwitch.tsx`) sat directly beside the
+  PAPER/LIVE real-capital toggle (`TopBar.tsx:296-319`), separated only by a thin
+  `bb-vrule`. Visually the two controls read as equally important, but they are not:
+  one flips which *market-data source* the chart/tape reads (simulator vs. live
+  Alpaca quotes — off the trading-safety perimeter), the other flips which *capital
+  endpoint* orders would route to. Front-and-center placement of the data-feed toggle
+  overstated its importance relative to the real money-mode control right next to it —
+  an operator-legibility defect (P3: "does this make a live session calmer, faster,
+  more legible?" — no, it competed for attention with the one control that actually
+  matters more).
+- **Solutions:** (a) leave it in the TopBar but re-style it smaller/less prominent —
+  cheapest, but doesn't remove the "two toggles of equal visual weight" problem, just
+  shrinks it; (b) move the interactive control into Settings (`View → Settings…`) as
+  a new "Market Data Feed" section near "AI Advisor," keeping the underlying
+  `useDataSourceStore` / `setDataSource` IPC / `data-source-guard.ts` interlock
+  completely untouched — removes the toggle from the operator's primary field of view
+  entirely while changing zero engine behavior; verified situational awareness is not
+  lost because the Watchlist's per-symbol SIM badges (`isSyntheticFeed`,
+  `feed-status.ts:23`) already derive from the engine's live `FeedStatus` broadcast
+  independent of whether this chip is mounted anywhere; (c) remove the control
+  entirely with no Settings replacement — rejected, the operator explicitly asked for
+  a Settings home for it, not removal of the capability.
+- **Decision:** **(b)**. Removed `<FeedSwitch />` + its import from `TopBar.tsx`
+  (`TopBar.tsx:30`, `:321-323`), replacing the JSX with an explanatory comment (no
+  behavior left behind to silently regress). Added a new "Market Data Feed"
+  `dialog-section` to `SettingsModal.tsx`, positioned immediately after "AI Advisor"
+  and before "Nightly Self-Evaluation," reusing the *exact same* `useDataSourceStore`
+  hook (`source`, `liveAvailable`, `switching`, `hydrate`, `setSource`) and the same
+  confirm-before-clearing-paper-positions guard the old chip had — no new IPC channel,
+  no new store, no duplicated switch logic. Restyled to match Settings' existing
+  idioms (a `seg` segmented control + `form-hint` messaging) rather than porting the
+  TopBar's bespoke `bb-feed-chip` styling verbatim, since a chip-styled button would
+  have looked foreign inside the settings-dialog visual language.
+  `FeedSwitch.tsx` is now unused — **could not be deleted from this sandbox**
+  (`rm`/`git rm` both fail with `Operation not permitted`, the same file-bridge
+  EPERM-on-unlink class documented in §2.9; a stale `.git/index.lock` was also found
+  and is similarly un-removable from here — neither blocks reads, `git status`/`diff`/
+  `show` all still work). **Operator follow-up needed:** delete
+  `apps/satex-terminal/src/renderer/components/FeedSwitch.tsx` and `.git/index.lock`
+  by hand (either is a one-line `rm` on the real filesystem); until then `npm run knip`
+  will correctly flag the file as dead code — that flag is accurate, not a false
+  positive, and will clear itself once the file is gone.
+- **Status:** SHIPPED (unstaged, 2026-07-04). Evidence: byte-scan 0 NUL / 0 `\r\r`
+  (LF) on both edited files; typecheck node exit 0 · typecheck web exit 0 · lint exit
+  0 (0 warnings — one `react-hooks/exhaustive-deps` warning surfaced mid-edit from the
+  new `hydrateFeed()` call in the modal's open-effect and was fixed by adding the
+  stable zustand action reference to the dependency array, not suppressed); targeted
+  vitest `dataSourceStore.test.ts` 3/3 (store itself untouched). Off-perimeter (UI
+  relocation only; `data-source-guard.ts` interlock logic byte-for-byte unchanged) —
+  no APPROVAL NODE. **Tool-hazard note for future sessions:** the first attempt at the
+  `TopBar.tsx` import removal used the `Edit` tool directly on an existing file and
+  introduced 42 NUL bytes (the exact P-021/P-078 shrinking-edit class) — caught
+  immediately by the mandatory post-edit byte-scan, recovered via
+  `git show HEAD:<path>`, and redone correctly via python-through-mount. Evidence this
+  hazard is real and current, not just historical.
+
+### P-083
+
+ · `market-observer.ts` (continuous intel recorder) shipped untested — SHIPPED
+
+- **Problem:** `src/main/services/market-observer.ts` (196 LOC) — the always-on
+  `MarketObserver` that records one `Observation` per watchlist symbol per quote batch
+  and feeds PatternLearner + VaultWriter — had zero co-located test coverage. It carries
+  three defect classes this repo keeps re-hardening: a bounded per-symbol ring buffer
+  (`RING_PER_SYMBOL=200`, `recordToRing`, `market-observer.ts:163-176`), a `setInterval`
+  flush timer whose only cleanup is `stop()` (the PR#6/P-041/P-043/P-046 leak class,
+  `market-observer.ts:64-73`), and a rolling per-minute window trim
+  (`market-observer.ts:89-93`) — all unverified. Off the trading-safety perimeter
+  (recorder only; "learns nothing", source header `market-observer.ts:1-23`).
+- **Solutions:** (a) new-file-only Vitest suite, source untouched, mocking `./persistence`
+  + `@shared/indicators` per the `pattern-learner.test.ts` precedent — pins the contract
+  with zero source risk; (b) refactor for testability first (extract `classifyRegime`,
+  inject a clock) — larger blast radius, unjustified for a green module; (c) leave
+  untested — rejected, this is exactly the bounded-growth/leak class the ledger exists to
+  guard.
+- **Decision:** **(a)**. NEW `src/main/services/market-observer.test.ts` (28 tests):
+  lifecycle + timer-cleanup, watchlist gating, `≥21`-candle + computeSnapshot-throw
+  null-guards, ring bounded-growth (cap 200, unbounded `totalObserved` counter),
+  rolling per-minute window, velocity first-tick-0 + guard, `last<=0` spread guard,
+  `MAX_BUFFER` (500) auto-flush, flush error-swallow (batch dropped, `bufferedRows→0`),
+  `stats()` shape, all five `classifyRegime` branches. Source byte-for-byte unchanged.
+- **Finding (pinned, NOT fixed — coverage-only pass):** `getRecent`
+  (`market-observer.ts:96-100`) returns `buf.slice(0, cursor).slice(-limit)`; once the
+  modulo ring wraps (`cursor > RING_PER_SYMBOL`) `buf` is overwritten in place and is NOT
+  reordered on read, so the docstring's "newest last" ordering holds only pre-wrap. Low
+  blast-radius (intel display / replay ordering, not a live-decision or perimeter path).
+  Left as documented current behavior — an operator/product call whether post-wrap read
+  order matters, same handling as P-079's `SATEX_RNG_SEED` NaN note. Tests assert ordering
+  pre-wrap and length-cap + membership post-wrap.
+- **Status:** SHIPPED (unstaged, 2026-07-04). Evidence: byte-scan 0 NUL / 0 CRCR (LF);
+  typecheck node exit 0 · typecheck web exit 0 · lint exit 0 (0 warnings) · targeted
+  vitest 28/28 · 4-file services segment (market-observer + pattern-learner + tick-recorder
+  + calibration) 49/49, no mock leakage. knip not run (sandbox oxc-parser 2 GB OOM, §2.9
+  ceiling — new test exports nothing, knip-neutral; CI is arbiter). Blueprint:
+  `apps/satex-terminal/docs/superpowers/specs/2026-07-04-market-observer-coverage-ultraplan.md`.
+
+### P-084 · Stale `P-083` ledger cross-reference in PNG-export IPC hardening comments — SHIPPED (fixed)
+- **Problem:** Work-layer code audit (2026-07-04) found `src/shared/ipc-schemas.ts:361`
+  and `src/renderer/chart/export.ts:104` — both unstaged, uncommitted since around
+  2026-07-03 — carry inline comments citing `P-083 (2026-07-03)` as the ledger record
+  justifying `ChartPngExportReq.data`'s move from `Array.from(Uint8Array)` (a plain
+  `number[]` walked element-by-element by Zod's `.int().min().max()` and the IPC
+  structured clone) to a raw `Uint8Array` validated by `byteLength <= 20_000_000`. That
+  citation is wrong: `P-083` (this file, "Open" section) was independently assigned the
+  same day to an unrelated entry — `market-observer.ts` coverage — so the PNG-export
+  change had evidently never been given its own ledger entry at all; the comment cited a
+  number that was free *when written* but got claimed by different, actually-ledgered
+  work before either landed. Net effect: a broken evidence trail (CONSTITUTION 0.1 "every
+  claim cites ... a timestamped source"; 0.10 "never lose a problem") — a future agent
+  grep-ing "P-083" for PNG-export context would land on the market-observer entry instead.
+- **Solutions:** (a) delete the stray citation entirely — cheapest, but loses the
+  useful "why" reasoning already written inline; (b) correct the citation to a fresh
+  number (this entry, P-084) and ledger the original PNG-export decision retroactively
+  under it — preserves the reasoning, restores a working citation, costs one ledger
+  entry; (c) leave it uncorrected and just note the discrepancy — rejected, an agent
+  session budget already exists to fix exactly this class of low-blast-radius defect
+  (rule 4, work-layer prompt) and leaving a known-wrong citation live serves no one.
+- **Decision:** **(b)**. Patched both comments (python-through-mount per file-bridge
+  discipline; LF-only files, anchor-count asserted ==1 before each replace) to cite
+  `P-084` instead of `P-083`, and added a CHANGELOG bullet (first `### Fixed` under
+  `## Unreleased`) documenting the original PNG-export decision under this entry so it
+  finally has a real ledger record. Re-verified the underlying change is sound while
+  here: `src/main/index.ts:1081` (`Buffer.from(data)`, `data.length` in the log line)
+  accepts either a `number[]` or a `Uint8Array` unchanged, so the schema-level type
+  narrowing has no main-process fallout; `ipc-schemas.test.ts` (11 tests, staged)
+  already exercises `ChartPngExportReq` indirectly via the broader schema suite.
+- **Status:** SHIPPED (unstaged, 2026-07-04). Evidence: byte-scan 0 NUL / 0 CRCR (LF) on
+  both patched files + this ledger + the CHANGELOG; typecheck node exit 0 · typecheck
+  web exit 0 · lint exit 0 (0 warnings) · targeted vitest `ipc-schemas.test.ts` 11/11.
+  Off-perimeter (comment/doc correction only, zero behavior change) — no APPROVAL NODE.
+- **Correction (2026-07-04, later same day — do not re-edit the Problem line above; this
+  is the audit trail):** A GitHub repo check (branches + commit history, `github.com/
+  satex25/satex-trading`) found the Problem statement above is only half right. The
+  PNG-export change was NOT "never given its own ledger entry" — it already has a full,
+  legitimate one: `P-083 · Trade-workspace "PNG" chart export sent raw bytes as a plain
+  number[] — plausible renderer-crash mechanism, fixed`, committed as `63b1e5a` ("fix(chart):
+  P-083 PNG export sends Uint8Array over IPC instead of number[]", authored "col and
+  claude", 2026-07-03) on branch `fix/p083-png-export-ipc-transport` — pushed to GitHub
+  but never opened as a PR and never merged (0 open PRs repo-wide; branch still exists,
+  unmerged, off `8ea8226`). That branch also carries `f3ce1a5` ("fix(llm): P-081 raise
+  default max_tokens 90->400..."), matching this ledger's existing P-081 almost verbatim —
+  so P-081's numbering was consistent across branches, only P-083 collided. Root cause:
+  two branches diverging from the same point each kept their own copy of this ledger and
+  independently assigned "the next number" — `fix/p083-png-export-ipc-transport` claimed
+  P-083 for the PNG fix on 2026-07-03; separately, the master-descended line (this file)
+  had no record of that assignment and re-issued P-083 to `market-observer.ts` coverage on
+  2026-07-04. Neither session did anything wrong in isolation; the collision is a structural
+  gap — nothing in the PSD loop currently checks unmerged sibling branches before claiming
+  a number. Also notable: neither `63b1e5a` nor `f3ce1a5` has a CI check recorded on GitHub
+  (no PR was ever opened for that branch, so CI never ran on them) — their "gates green"
+  claims are local-only, unlike `8ea8226` which shows a passed check from its own PR (#31).
+  This entry's original Problem/Solutions/Decision stand as a correct description of what
+  THIS session found and fixed in the local working tree; this note only corrects the
+  "never ledgered" claim and adds the missing context. No further action taken here — see
+  P-086 for the reconciliation recommendation.
+
+### P-085 · Scheduled-task self-report mislabeled its own run time + the live dawn-planner task had drifted from its versioned mirror — SHIPPED (fixed)
+- **Problem:** Two related process defects surfaced together during operator review of
+  today's work-layer output. (1) The work-layer report written this session
+  (`Vault/Daily/2026-07-04-work-layer.md`) originally titled itself
+  `from: work-layer (6 AM run)`, copying the prompt's nominal "runs 06:00" schedule text
+  instead of checking the actual wall-clock time. The task's own scheduler history showed
+  the 06:06 AM slot was *skipped* that day; this session actually executed later
+  (`lastRunAt` `2026-07-04T21:04:07Z` per `list_scheduled_tasks` — 21:04 UTC, matching the
+  operator's observed "4:04 PM" local). The mislabel was caught by the operator, not by any
+  self-check, because no self-check existed. (2) While correcting (1), a broader and more
+  consequential drift was found: the *live* `satex-psd-daily` scheduled-task prompt
+  (`C:\Users\User\Documents\Claude\Scheduled\satex-psd-daily\SKILL.md`) still read
+  `REPO\00-PROJECT-ROOT\01-SATEX-CORE\satex-app\CLAUDE.md` and wrote blueprints to
+  the same stale path — even though the repo's own versioned mirror
+  (`docs/policy/scheduled-psd-daily.md`) had already been corrected to `apps/satex-terminal/`
+  in an earlier session. This exact "scheduled-task prompt paths are stale" divergence had
+  been carried forward, unresolved, across at least 3 prior daily handoffs (2026-07-02
+  through 2026-07-04) — the mirror doc's own header warns "if this file and the installed
+  task drift, the installed task is what runs — re-sync deliberately," and that re-sync had
+  never actually happened.
+- **Solutions:** (a) fix only the one Vault report file that was already wrong — cheapest,
+  but leaves the root cause (no timestamp self-check, no drift check) live for every future
+  run; (b) patch the *live* scheduled-task prompts (both `work-layer` and `satex-psd-daily`,
+  via `update_scheduled_task`) to add a mandatory first-action timestamp check plus an
+  explicit drift check against their versioned mirrors, then re-sync both mirror docs to
+  match exactly — fixes the recurring class, not just today's instance, at the cost of two
+  tool calls plus two doc rewrites; (c) leave the live task prompts alone and only fix the
+  repo-side mirror docs — rejected, per the mirror's own stated rule the installed task is
+  what actually runs, so a mirror-only fix would have looked correct while leaving the real
+  bug live (exactly how (2) survived 3+ sessions already).
+- **Decision:** **(b)**. Updated both live scheduled tasks (`work-layer`, `satex-psd-daily`)
+  via `update_scheduled_task`: each now opens §1/BOOT with a mandatory "timestamp discipline"
+  step (`date` first, real time in every report/handoff, explicit note if it diverges from
+  the nominal 05:00/06:00 schedule), each SESSION REPORT template now starts with a
+  `RUN TIMESTAMP:` line, and `satex-psd-daily` additionally regained the correct
+  `apps/satex-terminal/` paths plus a boot-time drift check against its own mirror. Both
+  mirror docs (`docs/policy/scheduled-work-layer.md`, `docs/policy/scheduled-psd-daily.md`)
+  rewritten to match the newly-updated live prompts exactly (full-file rewrite via
+  python-through-mount, not the Write tool, per the P-078 on-disk-overwrite scar), with a
+  one-line "re-synced 2026-07-04, see P-085" note added to each header so a future reader
+  knows why the version number moved. The original `2026-07-04-work-layer.md` report was
+  also corrected in place (a "Scheduling note" section added at its top) rather than
+  rewritten, so the mislabel and its correction are both visible — an erased mistake is a
+  hidden one.
+- **Status:** SHIPPED (unstaged, 2026-07-04). Evidence: `list_scheduled_tasks` confirms both
+  tasks' prompts updated; `Read` on both live `SKILL.md` paths confirms the corrected path
+  and the new timestamp-discipline text; byte-scan of both rewritten mirror docs + this
+  ledger: 0 NUL / 0 `\r\r` (LF-only). No app code touched — this entry is process/tooling
+  hygiene, not a source change, so the four gates do not apply; nothing to re-run.
+
+### P-086 · Unmerged GitHub branch `fix/p083-png-export-ipc-transport` duplicates work already reconstructed locally — OPEN, operator reconciliation needed
+- **Problem:** GitHub check (2026-07-04, prompted by an operator "how's the repo looking"
+  question) found a branch, `fix/p083-png-export-ipc-transport` (2 commits: `f3ce1a5`
+  P-081 LLM fix, `63b1e5a` P-083 PNG-export fix, both off `8ea8226`, pushed 2026-07-03),
+  that was never opened as a PR and never merged — it does not appear in `master`'s
+  history (`b800904` is `master`'s tip, via merged PR #31, and does not include either
+  commit). Meanwhile, the LOCAL working tree (this session, and apparently at least one
+  prior session) independently reconstructed the *same* two changes as UNSTAGED,
+  UNCOMMITTED edits to `llm.ts` and `ipc-schemas.ts`/`export.ts` — content-equivalent to
+  `f3ce1a5`/`63b1e5a` but with no commit, no authorship record, and (per P-084's
+  correction above) a numbering collision on P-083. So there are now three copies of
+  this same PNG-export + LLM-maxtokens work in different states of landedness: (1) a
+  pushed-but-unmerged GitHub branch with real commits and messages, (2) uncommitted local
+  edits in the sandbox working tree, and (3) two different ledger stories about it (P-081
+  consistent, P-083 colliding). Nothing is lost, but nothing is reconciled either.
+- **Solutions:** (a) open a PR from `fix/p083-png-export-ipc-transport` straight to
+  `master` and merge it (it already has proper commits/authorship; CI has never run on it
+  since no PR ever triggered the workflow, so CI would need to go green first) — cheapest
+  path to a real, attributable commit history, but requires the operator to actually do it
+  (branch→PR→merge is a human action per AGENTS.md, and this sandbox has no GitHub
+  credentials to push or open PRs itself); (b) discard the local uncommitted
+  reconstruction and treat the GitHub branch as canonical once merged — avoids double
+  work, but means today's local P-084 fix (correcting the `P-083`→`P-084` comment
+  citations) needs to be re-applied against whatever actually lands from the merged
+  branch, since the merged version's comment will still say `P-083` correctly (it's
+  right, in that branch's own context) and doesn't need renumbering unless P-083 is
+  reassigned; (c) do nothing, let both copies keep drifting — rejected, this is exactly
+  how P-013/P-019/P-024→P-085-class backlog pileup happens, and it directly caused the
+  P-083 collision this entry's sibling (P-084) had to fix.
+- **Decision:** Left **OPEN** — this is a git/PR strategy call for the operator, not an
+  autonomous action. No agent session has GitHub write credentials in this environment
+  (confirmed: `git ls-remote` from the sandbox fails with "could not read Username" — read
+  access via browser only, no push/PR capability). Recommendation for the operator: decide
+  whether `fix/p083-png-export-ipc-transport` should be opened as a PR and merged (getting
+  its commits gate-verified via CI for the first time) *before* any more local session
+  reconstructs the same content a fourth time. Until decided, DO NOT commit the local
+  unstaged `llm.ts`/`ipc-schemas.ts`/`export.ts` changes on any new branch without first
+  checking whether they'd conflict with `fix/p083-png-export-ipc-transport` landing.
+- **Status:** OPEN (2026-07-04). No code changed by this entry — read-only GitHub
+  reconnaissance (browser) + this ledger write. Evidence: GitHub UI — 0 open PRs, 29
+  closed; `master` tip `b800904` (PR #31, 1 check passed); branch `fix/p083-png-export-
+  ipc-transport` exists with commits `63b1e5a`/`f3ce1a5`, no CI check recorded on either;
+  1 open GitHub issue (#2, Authenticode cert, pre-existing, unrelated). Byte-scan of this
+  ledger after edit: 0 NUL / 0 `\r\r` (LF-only).
+
+
+### P-081 · Advisory LLM (legacy ERNIE 5.1 slot) returns empty content every call — root-caused + fixed
+- **Problem:** Local dev-server validation session (2026-07-03) observed the brain's LLM
+  advisor repeatedly logging `llm returned empty content` (`src/main/services/llm.ts:83`),
+  making the advisor effectively non-functional. Traced: `getLlmConfig()`
+  (`src/main/services/credential-store.ts:327-333`) falls back to a legacy pre-adapter
+  Baidu AI Studio slot when no new `llm-config.bin` has been saved — `baseUrl:
+  https://aistudio.baidu.com/llm/lmapi/v3`, `model: ernie-5.1`
+  (`credential-store.ts:320-321`). `callAdvisor` (`brain.ts:190-199`) does not override
+  `maxTokens`, so every call used the old hardcoded default of 90 (`llm.ts:66`, pre-fix).
+  ERNIE 5.1 is a reasoning-capable model; reasoning models spend hidden "thinking" tokens
+  out of the same `max_tokens` budget before emitting visible `content` — a 90-token
+  ceiling is plausibly consumed entirely by reasoning, leaving nothing for the response
+  the code reads from `choices[0].message.content`.
+- **Solutions:** (a) raise the shared `chatComplete` default `max_tokens` (90 → higher) —
+  simple, provider-agnostic, fixes this and any future reasoning-model call site, zero
+  risk (advisory-only, no perimeter contact, no behavior change for non-reasoning
+  providers beyond a larger ceiling); (b) have `callAdvisor` pass an explicit
+  higher-than-default `maxTokens` for just this call site — more surgical/local, but
+  today there is exactly one call site so the practical difference is nil; (c) switch
+  the legacy-fallback provider/model away from ERNIE 5.1 — an operator/product call
+  (which provider to pay for), not something to freelance.
+- **Decision:** **(a)**. Added `DEFAULT_MAX_TOKENS = 400` (`llm.ts:26-31`, documented
+  inline with this ledger citation) and switched the one call-site default to it. Left
+  (c) for the operator if they'd rather not rely on the legacy Baidu slot at all — no
+  ledger action needed, note only.
+- **Status:** SHIPPED (2026-07-03). `llm.test.ts` updated (default-tokens assertion +
+  new constant-value test, 9→10 tests) and full local gates re-run post-fix: typecheck
+  exit 0 · lint exit 0 · vitest 120 files / 1532 tests / 0 fail (sharded 4x) · knip:
+  sandbox oxc-parser OOM (documented §2.9 class, CI arbiter). Root cause is a hypothesis
+  grounded in code + config (evidence above), not a live-provider-confirmed capture —
+  if the advisor is still silent after this ships, the legacy Baidu key itself
+  (expiry/rotation) is the next thing to check.
+
+### P-082 · Dev-server validation session (2026-07-03, local machine) — two benign findings confirmed working-as-designed, logged so they aren't re-investigated
+- **Problem:** Same local validation session that surfaced P-081 also flagged: (1) "kill
+  switch still latched from disk" on boot — this is the kill switch's persisted,
+  human-resettable-only state working exactly as CONSTITUTION §3.4/§3.8 specifies
+  (`kill-switch-store.ts`); latching across restarts until an operator clears it in-app
+  is the intended safety behavior, not a defect. (2) "simulator seed hydration timeout —
+  benign fallback to UNIVERSE.seed" — `trading-engine.ts:1971` logs this exact warning
+  by design when a live-quote hydration attempt times out, falling back to the hardcoded
+  `UNIVERSE.seed` values; `market-data.test.ts:115,123` explicitly test this fallback
+  path. Also reported: clean ~12-hour and ~68-minute dev-server runs with zero renderer
+  errors, no `ChartPanel` crash, no `getSnapshot` warnings, error-boundary count steady
+  at 7 (all pre-dating the selector fix already shipped).
+- **Solutions:** n/a — no code problem to solve. Documented only so a future session
+  doesn't burn time re-diagnosing two already-intended behaviors as new mysteries.
+- **Decision:** No action. Both are correct, tested behavior.
+- **Status:** VERIFIED (2026-07-03) — confirmed against `kill-switch-store.ts`,
+  `trading-engine.ts:1953-1971`, and `market-data.test.ts` fallback tests.
 
 ### P-080 · `Vault/00-Audit/MAY TACTICS.md` had a 310-byte NUL-tail (file-bridge corruption, extends P-021/P-078) — SHIPPED (fixed)
 - **Problem:** The mandatory NUL/CRCR byte-scan of every modified/untracked

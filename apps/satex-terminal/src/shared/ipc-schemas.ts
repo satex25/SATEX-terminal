@@ -356,10 +356,20 @@ export const ChartDrawingsSetReq = z.object({
 export type ChartDrawingsSetReq = z.infer<typeof ChartDrawingsSetReq>
 
 /** PNG export: renderer sends raw PNG bytes to main for filesystem write.
- *  data is Array.from(Uint8Array) -- JSON-serialisable byte array. */
+ *  `data` is a Uint8Array, sent as-is over IPC's structured-clone boundary
+ *  (Electron transfers TypedArrays natively -- no per-byte JS-array boxing).
+ *  P-084 (2026-07-04, corrected from a stale P-083 cross-reference -- see
+ *  went over the wire as `Array.from(Uint8Array)` -- a plain number[] that
+ *  both Zod (per-element .int().min().max() checks) and the IPC structured
+ *  clone have to walk element-by-element. For a big enough export this was
+ *  a plausible renderer memory/CPU spike; validating a Uint8Array's
+ *  byteLength is O(1) instead. Ledger: Vault/00-Audit/PROBLEM-LEDGER.md). */
 export const ChartPngExportReq = z.object({
   filename: z.string().max(200).regex(/^[\w\-. ]+\.png$/, 'must end in .png'),
-  data:     z.array(z.number().int().min(0).max(255)).max(20_000_000),
+  data:     z.instanceof(Uint8Array).refine(
+    (u) => u.byteLength <= 20_000_000,
+    { message: 'PNG payload exceeds 20MB limit' },
+  ),
 }).strict()
 export type ChartPngExportReq = z.infer<typeof ChartPngExportReq>
 // ── Tier-1 (D.10, 2026-05-29) — funded-account compliance overlay ──────────

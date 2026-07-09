@@ -14,6 +14,8 @@ import { WORKSPACE_TABS, type Workspace, type SelfEvalStatus } from '@shared/typ
 import { useSubsecondStore, type PreferredBucketMs } from '../../stores/subsecondStore'
 import { useThemeStore, THEMES, type ThemeId } from '../../stores/themeStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { useDataSourceStore } from '../../stores/dataSourceStore'
+import { useAccountStore } from '../../stores/accountStore'
 
 interface Props { open: boolean; onClose: () => void }
 
@@ -109,6 +111,28 @@ export function SettingsModal({ open, onClose }: Props) {
   const landingWorkspace    = useWorkspaceStore((s) => s.state.landingWorkspace)
   const setLandingWorkspace = useWorkspaceStore((s) => s.setLandingWorkspace)
 
+  // Market Data Feed (moved from the TopBar chip, operator ask 2026-07-04) —
+  // same useDataSourceStore the old FeedSwitch used, so the data-source-guard.ts
+  // interlock (blocked while real capital is armed or replay is active) and the
+  // reset-to-clean semantics are completely unchanged; only the UI surface moved.
+  const { source: feedSource, liveAvailable: feedLiveAvailable, switching: feedSwitching, hydrate: hydrateFeed, setSource: setFeedSource } = useDataSourceStore()
+  const openPositions = useAccountStore((s) => s.account?.openPositions?.length ?? 0)
+  const [feedErr, setFeedErr] = useState<string | null>(null)
+
+  async function switchFeed(target: 'simulator' | 'live') {
+    setFeedErr(null)
+    const res = await setFeedSource(target)
+    if (!res.ok && res.reason) setFeedErr(res.reason)
+  }
+
+  function requestFeedSwitch(target: 'simulator' | 'live') {
+    if (feedSwitching || feedSource === target) return
+    if (target === 'live' && openPositions > 0) {
+      if (!confirm('Switch to the live Alpaca data feed?\n\nYour simulated paper positions will be cleared.')) return
+    }
+    void switchFeed(target)
+  }
+
   // Data-source state (simulator vs Alpaca live) — surfaced so the user has
   // a single in-app place to swap from the env-forced simulator over to
   // Alpaca live without editing .env.local.
@@ -139,7 +163,8 @@ export function SettingsModal({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return
-    setPaperMsg(null); setLiveMsg(null); setLlmMsg(null); setReconnectMsg(null)
+    setPaperMsg(null); setLiveMsg(null); setLlmMsg(null); setReconnectMsg(null); setFeedErr(null)
+    void hydrateFeed()
     void (async () => {
       await refreshMaskedStatus()
       await refreshAlpacaModeStatus()
@@ -158,7 +183,10 @@ export function SettingsModal({ open, onClose }: Props) {
         if (p) useSubsecondStore.getState().hydratePrefs(p)
       } catch { /* ignore */ }
     })()
-  }, [open])
+    // hydrateFeed is a stable zustand action reference (create() binds it once
+    // per store, not per render) — safe to list without re-firing this effect
+    // on anything but `open`.
+  }, [open, hydrateFeed])
 
   async function saveSubsecondPref(symbol: string, bucketMs: PreferredBucketMs): Promise<void> {
     if (!window.satex?.setSubsecondPref) return
@@ -469,6 +497,58 @@ export function SettingsModal({ open, onClose }: Props) {
             {llmBusy ? 'Saving…' : llmHas ? 'Update Advisor Config' : 'Save Advisor Config'}
           </button>
         </div>
+      </div>
+
+      <div className="dialog-section">
+        <div className="dialog-section-title">
+          Market Data Feed
+          <span style={{
+            marginLeft: 10, fontFamily: 'var(--font-mono)', fontSize: 10,
+            padding: '2px 6px', borderRadius: 3,
+            background: feedSource === 'live' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(6, 182, 212, 0.15)',
+            color:      feedSource === 'live' ? 'var(--bb-pos)'          : 'var(--accent, #06b6d4)',
+            border:     `1px solid ${feedSource === 'live' ? 'var(--bb-pos)' : 'var(--accent, #06b6d4)'}`,
+          }}>
+            {feedSource === 'live' ? 'LIVE ALPACA' : 'SIMULATOR'}
+          </span>
+        </div>
+        <div className="form-hint">
+          Simulator ⇄ live Alpaca <em>market data</em> — separate from the PAPER/LIVE
+          real-capital toggle (top right) and from real-order arming. Switching to live
+          requires a configured Alpaca connection (see Data Source above) and is blocked
+          while a replay is active or real capital is armed.
+        </div>
+        <div className="form-row" style={{ marginTop: 10 }}>
+          <label id="feed-seg-label">Feed source</label>
+          <div className="seg" style={{ width: 'fit-content', opacity: feedSwitching ? 0.6 : 1 }} role="group" aria-labelledby="feed-seg-label">
+            <button
+              type="button"
+              className={feedSource === 'simulator' ? 'on' : ''}
+              aria-pressed={feedSource === 'simulator'}
+              disabled={feedSwitching}
+              onClick={() => requestFeedSwitch('simulator')}
+              title="Simulated data — no live feed required"
+            >
+              Simulator
+            </button>
+            <button
+              type="button"
+              className={feedSource === 'live' ? 'on' : ''}
+              aria-pressed={feedSource === 'live'}
+              disabled={feedSwitching || (feedSource !== 'live' && !feedLiveAvailable)}
+              onClick={() => requestFeedSwitch('live')}
+              title={
+                feedSource !== 'live' && !feedLiveAvailable
+                  ? 'Add Alpaca paper keys above to enable the live feed'
+                  : 'Live Alpaca market data'
+              }
+            >
+              Live Alpaca
+            </button>
+          </div>
+        </div>
+        {feedSwitching && <div className="form-hint" style={{ marginTop: 8 }}>Switching data feed…</div>}
+        {feedErr && <div className="form-hint err" style={{ marginTop: 8 }}>{feedErr}</div>}
       </div>
 
       <div className="dialog-section">
