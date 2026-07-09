@@ -22,6 +22,14 @@ const log = createLogger('llm')
 /** Hard ceiling on any advisory round trip. Mirrors AlpacaClient.REST_TIMEOUT_MS. */
 export const LLM_TIMEOUT_MS = 10_000
 
+/** Default output budget for a one-sentence advisory rationale. Deliberately
+ *  higher than the ~20-30 tokens the prompt asks for: reasoning-capable models
+ *  (e.g. ERNIE 5.1 / o1-style providers) spend hidden "thinking" tokens out of
+ *  the same max_tokens budget before ever emitting visible content — with a
+ *  90-token ceiling a reasoning model can burn the whole budget on reasoning
+ *  and return an empty `content` (see P-081, Vault/00-Audit/PROBLEM-LEDGER.md). */
+export const DEFAULT_MAX_TOKENS = 400
+
 export interface LlmConfig {
   /** Provider base URL up to (not including) `/chat/completions`,
    *  e.g. `https://api.groq.com/openai/v1` or `http://127.0.0.1:11434/v1`. */
@@ -63,7 +71,7 @@ export async function chatComplete(cfg: LlmConfig, req: LlmChatRequest): Promise
     },
     body: JSON.stringify({
       model: cfg.model,
-      max_tokens: req.maxTokens ?? 90,
+      max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
       temperature: req.temperature ?? 0.4,
       messages: [
         { role: 'system', content: req.system },

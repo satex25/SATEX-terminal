@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { chatComplete, chatCompletionsUrl, LLM_TIMEOUT_MS } from './llm'
+import { chatComplete, chatCompletionsUrl, LLM_TIMEOUT_MS, DEFAULT_MAX_TOKENS } from './llm'
 
 const CFG = { baseUrl: 'https://api.example.com/v1', model: 'test-model', apiKey: 'sk-test' }
 const REQ = { system: 'sys', user: 'usr' }
@@ -55,8 +55,12 @@ describe('chatComplete', () => {
     vi.stubGlobal('fetch', fetchMock)
     await chatComplete(CFG, REQ)
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as { max_tokens: number; temperature: number }
-    expect(body.max_tokens).toBe(90)
+    expect(body.max_tokens).toBe(DEFAULT_MAX_TOKENS)
     expect(body.temperature).toBe(0.4)
+  })
+
+  it('exports a sane default max_tokens constant', () => {
+    expect(DEFAULT_MAX_TOKENS).toBe(400)
   })
 
   it('throws on non-2xx with status + capped detail', async () => {

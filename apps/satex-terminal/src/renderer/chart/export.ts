@@ -98,14 +98,19 @@ export async function exportChartPng(opts: ChartExportOptions): Promise<boolean>
   const blob = await canvasToBlob(offscreen, 'image/png')
   if (!blob) return false
 
-  // Forward to main process for filesystem write
+  // Forward to main process for filesystem write. Send the Uint8Array
+  // directly -- Electron's IPC structured clone transfers TypedArrays
+  // natively, so main receives an equivalent Uint8Array with no per-byte
+  // JS-array boxing on either side (P-084: the old Array.from(Uint8Array)
+  // shape was an O(n) plain-number-array allocation + per-element Zod
+  // validation, a real cost for a large composited screenshot).
   const arrayBuffer = await blob.arrayBuffer()
-  const uint8 = Array.from(new Uint8Array(arrayBuffer))
+  const bytes = new Uint8Array(arrayBuffer)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const filename = `${filenameStem}-${stamp}.png`
 
   try {
-    await ipcRenderer.invoke(CHART_PNG_EXPORT_CHANNEL, { filename, data: uint8 })
+    await ipcRenderer.invoke(CHART_PNG_EXPORT_CHANNEL, { filename, data: bytes })
     return true
   } catch {
     return false

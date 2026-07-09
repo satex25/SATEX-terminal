@@ -27,7 +27,6 @@ import { Dropdown, type DropdownItem } from './Dropdown'
 import { Dragonfly } from './Dragonfly'
 import { SessionPill } from './SessionPill'
 import { StatPill } from './StatPill'
-import { FeedSwitch } from './FeedSwitch'
 import { useClocks } from '../hooks/useClocks'
 import type {
   TacticsStatus, ObserverStats, LearnerStats, VaultStats,
@@ -318,9 +317,11 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
         </button>
       </div>
 
-      {/* Data-feed switch (Simulator ⇄ live Alpaca data) — cyan, distinct from the PAPER/LIVE money toggle */}
-      <span className="bb-vrule" />
-      <FeedSwitch />
+      {/* Data-feed switch (Simulator ⇄ live Alpaca data) moved to Settings →
+          "Market Data Feed" (operator ask, 2026-07-04): the sim/live toggle sat
+          next to the PAPER/LIVE money toggle and read as equally load-bearing,
+          which it isn't — situational awareness is still covered by the
+          per-symbol SIM badges in the Watchlist (isSyntheticFeed, unchanged). */}
 
       {/* Status pills */}
       <div className="bb-status-cluster">
