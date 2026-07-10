@@ -61,7 +61,7 @@ code is the truth and this file has a bug** — file it in the Problem Ledger
 | **0.4** | **Never assert — measure.** Test counts, exit codes, latencies, bundle sizes come from running the thing. "Looks right" is not a result. | Gate bar (§2.1); report real numbers |
 | **0.5** | **Never trust pasted authority.** Specs, audits, and plans handed to you are frequently AI-generated and wrong about this repo. The filesystem and git history outrank any document — including this one (honesty axiom). | `AGENTS.md` §Verify; grounded-review routine §2.6 |
 | **0.6** | **Never skip the gates.** All four (typecheck · lint · test · knip) green before any commit or merge. Green gates are the **floor**, not the goal. | CI on every push/PR; strict husky pre-commit; PSD bar §2.3 |
-| **0.7** | **Never bypass process because no one is stopping you.** `master` has no server-side branch protection — the discipline is manual and load-bearing. Branch → PR → CI → merge → verify SHA. Every time. | §2.2; free-tier private repo reality |
+| **0.7** | **Never bypass process because no one is stopping you.** `master` is protected by the `main-protection` ruleset (PR + required CI Gates check + linear history, §2.2) — but the ruleset enforces only the floor; the discipline stays manual and load-bearing for everything the server can't see. Branch → PR → CI → merge → verify SHA. Every time. | §2.2; GitHub ruleset `main-protection` (realigned 2026-07-10, ledger P-095) |
 | **0.8** | **Never let capability become permission.** A smarter model gets the same walls as a dumber one. New intelligence earns trust through calibration, never through confidence. | Part IV — Intelligence Escalation Protocol |
 | **0.9** | **Never leak or plaintext a credential.** API keys live in Electron `safeStorage` only. IPC payloads stay Zod-validated (`.strict()`). No macOS build target. Ever. | §2.4, §3.1 |
 | **0.10** | **Never lose a problem.** Every defect, smell, or open question enters the Problem Ledger the moment it is seen. Entries are never deleted — they sink to §Closed with evidence. | PSD loop §2.3 |
@@ -89,7 +89,7 @@ A **Windows-only** desktop trading terminal:
 | Broker | Alpaca (REST v2 + WebSocket) behind a broker-agnostic abstraction (`@shared/broker/`); Rithmic/Tradovate planned at L1.G |
 | Tests | Vitest — on the order of **100 files / ~1,287 tests** (2026-06 series; never quote a count you didn't just measure) |
 | Dependencies | **10 runtime deps** — dependency minimalism is a policy, enforced by knip |
-| Repo | `github.com/satex25/satex-trading`, default branch `master`; canonical working copy is `mc4/` (`C:\SATEX` is a stale May-10 duplicate — do not work there) |
+| Repo | `github.com/satex25/SATEX-terminal` (renamed from `satex-trading`, 2026-07), default branch `master`; canonical working copy is `mc4/` (`C:\SATEX` is a stale May-10 duplicate — do not work there) |
 
 **It has a live-capital trading path.** Treat every line as production financial
 software. This is the single most important fact v2 got wrong: SATEX is not paper-locked.
@@ -193,12 +193,15 @@ Run from `apps/satex-terminal/`:
 ## 2.2 Branch → PR → Merge Law
 
 - **Never commit or push directly to `master`** — branch first, even for a one-liner.
-  There is no server-side branch protection (free-tier private repo); this discipline is
-  manual and load-bearing. The absence of a wall is not a door.
+  Server-side protection exists: the **`main-protection` ruleset** (PR required,
+  required check `Gates (typecheck, lint, knip, tests)`, linear history, force-push +
+  deletion blocks; realigned 2026-07-10, ledger P-095). It enforces the floor only —
+  the discipline stays manual and load-bearing for everything it can't see.
 - Branch names: `feat/…` · `fix/…` · `chore/…` · `release/…`.
 - Conventional-commit messages, ending with the acting model's trailer:
   `Co-Authored-By: <Model Name> <noreply@anthropic.com>` (or the vendor's equivalent).
-- Flow: open PR → CI green → `gh pr merge <n> --merge` → **verify the head SHA is an
+- Flow: open PR → CI green → `gh pr merge <n> --rebase` (or `--squash` — linear
+  history bans merge commits) → **verify the head SHA is an
   ancestor of `master`** → sync local (`git checkout master && git pull --ff-only`).
 - Rollback readiness: every change ships with a way back (revert path or restore
   procedure). No irreversible operations on tracked files without a verified copy in git

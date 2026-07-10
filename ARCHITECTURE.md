@@ -10,7 +10,7 @@
 ## 1. Workspace map
 
 ```
-mc4/                                ← canonical repo (master @ github.com/satex25/satex-trading)
+mc4/                                ← canonical repo (master @ github.com/satex25/SATEX-terminal)
 ├─ ARCHITECTURE.md                  ← this file
 ├─ AGENTS.md                        ← how to work: gates, branch flow, safety guardrails
 ├─ README.md                        ← quick start

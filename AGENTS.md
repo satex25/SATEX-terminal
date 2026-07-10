@@ -19,7 +19,7 @@ trading path** via Alpaca. Treat it as production financial software, not a toy.
 - **Vault (Obsidian, runtime data — untracked by design):** `Vault/` — incl.
   `Backtests/` (nightly self-eval + baselines) and `Learnings/` (capped session notes)
 - **Reference dumps (gitignored):** `90-REFERENCE/`
-- **Default branch:** `master` · **Remote:** github.com/satex25/satex-trading
+- **Default branch:** `master` · **Remote:** github.com/satex25/SATEX-terminal (renamed from `satex-trading`, 2026-07)
 
 ## The gate bar — all four must be green
 
@@ -42,10 +42,14 @@ Report **real** results — exit codes, test counts — never assert them.
 - Branch names: `feat/…`, `fix/…`, `chore/…`, `release/…`.
 - Conventional-commit messages; end with
   `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` (or the acting model).
-- Open a PR → let CI go green → `gh pr merge <n> --merge` → verify the head SHA is
+- Open a PR → let CI go green → `gh pr merge <n> --rebase` (or `--squash`; **merge
+  commits are banned** by the ruleset's linear-history rule) → verify the head SHA is
   an ancestor of `master` → sync local (`git checkout master && git pull --ff-only`).
-- `master` is a **free-tier private repo → no branch protection exists**, so this
-  discipline is manual and load-bearing. Do not rely on the server to stop you.
+- `master` is protected by the GitHub ruleset **`main-protection`** (realigned
+  2026-07-10 — ledger P-095): PR required, required check
+  `Gates (typecheck, lint, knip, tests)`, linear history, force-push + deletion
+  blocks, empty bypass list. The server enforces the floor; the discipline above
+  stays load-bearing for everything the ruleset can't see.
 
 ## Agent operating constitution
 
@@ -128,7 +132,7 @@ When asked to review a change / PR / branch:
    unsafe casts, unguarded IPC, error-swallowing.
 5. **Evidence-backed verdict:** what's verified true, what's unverified, what's wrong.
    No theatrical scores or "CERTIFIED" stamps.
-6. **If merging:** branch → PR → CI green → `gh pr merge` → verify SHA in master → sync.
+6. **If merging:** branch → PR → CI green → `gh pr merge --rebase` → verify SHA in master → sync.
 
 ## Pre-commit (strict, local)
 
