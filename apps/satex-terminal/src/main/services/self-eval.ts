@@ -24,8 +24,10 @@
  * report logic are fully unit-testable without Electron, Alpaca, or a disk.
  */
 import type { Candle } from '@shared/types'
-import type { BacktestReport } from '@shared/backtest/types'
+import type { BacktestReport, SignificanceMetrics } from '@shared/backtest/types'
+import { barReturns } from '@shared/backtest/metrics'
 import { compareReports, DEFAULT_TOLERANCES } from '@shared/backtest/regression'
+import { significanceFromReturns, withDsr } from '@shared/backtest/significance'
 import type { Strategy } from '../backtest/strategy'
 import { BacktestRunner } from '../backtest/runner'
 import { SpreadHalfPlusImpactModel } from '../backtest/slippage-model'
@@ -86,6 +88,7 @@ export function renderReportMd(args: {
     report: BacktestReport
     status: 'baselined' | 'ok' | 'regression'
     violations: string[]
+    sig: SignificanceMetrics
   }>
   skipped: Array<{ symbol: string; reason: string }>
 }): string {
@@ -102,17 +105,23 @@ export function renderReportMd(args: {
   lines.push('Strategies re-run over the latest completed session with live learned')
   lines.push('weights; regression-checked against locked baselines. Observational only.')
   lines.push('')
-  lines.push('| Strategy · Symbol | Trades | Hit | Sharpe | MaxDD | PnL | Verdict |')
-  lines.push('|---|---:|---:|---:|---:|---:|---|')
+  lines.push('| Strategy · Symbol | Trades | Hit | Sharpe | PSR | DSR | Signif. | MaxDD | PnL | Verdict |')
+  lines.push('|---|---:|---:|---:|---:|---:|---|---:|---:|---|')
   for (const r of args.rows) {
     const m = r.report.metrics
     const verdict = r.status === 'baselined' ? '🆕 baseline locked'
                   : r.status === 'ok'         ? '✅ within tolerance'
                   : `🔴 ${r.violations.join('; ')}`
     const pnl = r.report.endingEquity - r.report.startingEquity
-    lines.push(`| ${r.key} | ${m.tradeCount} | ${fmtPct(m.hitRate)} | ${m.sharpe.toFixed(2)} | ${fmtPct(m.maxDrawdown)} | $${pnl.toFixed(0)} | ${verdict} |`)
+    const { psr, dsr } = r.sig
+    const signif = dsr != null && dsr >= 0.95 ? '✅ real'
+                 : psr != null && psr >= 0.95 ? '⚠️ selection-risk'
+                 : '🔬 noise-band'
+    const psrCell = psr == null ? 'n/a' : fmtPct(psr)
+    const dsrCell = dsr == null ? 'n/a' : fmtPct(dsr)
+    lines.push(`| ${r.key} | ${m.tradeCount} | ${fmtPct(m.hitRate)} | ${m.sharpe.toFixed(2)} | ${psrCell} | ${dsrCell} | ${signif} | ${fmtPct(m.maxDrawdown)} | $${pnl.toFixed(0)} | ${verdict} |`)
   }
-  if (args.rows.length === 0) lines.push('| _no runs — insufficient data_ | | | | | | |')
+  if (args.rows.length === 0) lines.push('| _no runs — insufficient data_ | | | | | | | | | |')
   lines.push('')
   if (args.skipped.length > 0) {
     lines.push('## Skipped')
@@ -120,6 +129,8 @@ export function renderReportMd(args: {
     for (const s of args.skipped) lines.push(`- ${s.symbol} — ${s.reason}`)
     lines.push('')
   }
+  lines.push(`> Signif. uses PSR (vs SR*=0) and DSR deflated across N=${args.rows.length} trials this run.`)
+  lines.push('')
   lines.push('> Promote an intentional improvement by deleting its stale baseline in')
   lines.push('> `Vault/Backtests/baselines/` — the next nightly run re-locks it.')
   lines.push('')
@@ -169,7 +180,7 @@ export class SelfEvalService {
     this.running = true
     const startedAt = this.deps.now?.() ?? Date.now()
     try {
-      const rows: Array<{ key: string; report: BacktestReport; status: 'baselined' | 'ok' | 'regression'; violations: string[] }> = []
+      const rows: Array<{ key: string; report: BacktestReport; status: 'baselined' | 'ok' | 'regression'; violations: string[]; sig: SignificanceMetrics }> = []
       const skipped: Array<{ symbol: string; reason: string }> = []
       let baselined = 0
       const regressions: Array<{ key: string; violations: string[] }> = []
@@ -194,23 +205,31 @@ export class SelfEvalService {
             notionalPct: NOTIONAL_PCT,
           })
           const report = runner.run({ candles, assetClass: 'equity', periodsPerYear: 252 * 6.5 * 60 })
+          // P-096: single-series significance (PSR/minTRL) from the run's own
+          // returns; DSR needs the whole trial set — deflated after the loops.
+          const sig = significanceFromReturns(barReturns(report.equityCurve))
 
           const baseline = this.deps.readBaseline(key)
           if (!baseline) {
             this.deps.writeBaseline(key, report)
             baselined++
-            rows.push({ key, report, status: 'baselined', violations: [] })
+            rows.push({ key, report, status: 'baselined', violations: [], sig })
           } else {
             const cmp = compareReports(baseline, report, DEFAULT_TOLERANCES)
             if (cmp.ok) {
-              rows.push({ key, report, status: 'ok', violations: [] })
+              rows.push({ key, report, status: 'ok', violations: [], sig })
             } else {
-              rows.push({ key, report, status: 'regression', violations: cmp.violations })
+              rows.push({ key, report, status: 'regression', violations: cmp.violations, sig })
               regressions.push({ key, violations: cmp.violations })
             }
           }
         }
       }
+
+      // P-096: trial-aware second pass — deflate each row's Sharpe against the
+      // expected max-Sharpe under the null for THIS run's trial set (N = rows).
+      const trialSRs = rows.map(r => r.sig.perObsSharpe).filter((x): x is number => x != null && Number.isFinite(x))
+      rows.forEach(r => { r.sig = withDsr(r.sig, trialSRs) })
 
       const finishedAt = this.deps.now?.() ?? Date.now()
       const stamp = new Date(startedAt)

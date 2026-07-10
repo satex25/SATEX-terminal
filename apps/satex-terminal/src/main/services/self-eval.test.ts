@@ -3,6 +3,8 @@ import { SelfEvalService, msUntilNext, renderReportMd, type SelfEvalDeps } from 
 import type { Strategy, StrategySnapshot } from '../backtest/strategy'
 import type { BacktestReport } from '@shared/backtest/types'
 import type { Candle, StrategySignal } from '@shared/types'
+import { barReturns } from '@shared/backtest/metrics'
+import { significanceFromReturns } from '@shared/backtest/significance'
 
 /** Deterministic up-trending tape: a long entry + bracket resolution is
  *  guaranteed for the always-long strategy below. */
@@ -151,6 +153,96 @@ describe('renderReportMd', () => {
     const md = renderReportMd({ ts: Date.parse('2026-06-10T02:30:00Z'), rows: [], skipped: [] })
     expect(md).toMatch(/no runs — insufficient data/)
     expect(md).toMatch(/2026-06-10/)
+  })
+})
+
+describe('significance columns (P-096)', () => {
+  /** Minimal but complete BacktestReport for driving renderReportMd directly. */
+  function fakeReport(): BacktestReport {
+    return {
+      config: { strategy: 'toy', symbol: 'NVDA', tape: 'test', startingEquity: 100_000, slippageModel: 'none' },
+      startedAt: 0,
+      endedAt: 0,
+      startingEquity: 100_000,
+      endingEquity: 100_000,
+      equityCurve: [{ ts: 0, equity: 100_000 }],   // 1 point -> 0 returns -> degenerate
+      trades: [],
+      metrics: {
+        totalReturn: 0, annualizedReturn: 0, sharpe: 0, sortino: 0, calmar: 0,
+        maxDrawdown: 0, maxDrawdownDollar: 0, maxDrawdownDuration: 0,
+        hitRate: 0, profitFactor: 0, expectancy: 0,
+        tradeCount: 0, winCount: 0, lossCount: 0,
+        avgWinDollar: 0, avgLossDollar: 0, largestWinDollar: 0, largestLossDollar: 0,
+      },
+    }
+  }
+
+  /** `| a | b |` -> trimmed cell array; index 1 is the first column. */
+  function cells(line: string): string[] {
+    return line.split('|').map(c => c.trim())
+  }
+
+  it('renders PSR, DSR and Signif. columns plus the N-trials footer', async () => {
+    const deps = makeDeps()
+    const svc = new SelfEvalService(deps)
+    const res = await svc.runOnce()
+    const md = deps.reports.get(res!.reportFilename)!
+    expect(md).toContain('| Strategy · Symbol | Trades | Hit | Sharpe | PSR | DSR | Signif. | MaxDD | PnL | Verdict |')
+    expect(md).toContain('> Signif. uses PSR (vs SR*=0) and DSR deflated across N=1 trials this run.')
+  })
+
+  it('renders %-formatted PSR/DSR on a live row (single trial: DSR === PSR)', async () => {
+    const deps = makeDeps()
+    const svc = new SelfEvalService(deps)
+    const res = await svc.runOnce()
+    const md = deps.reports.get(res!.reportFilename)!
+    const row = md.split('\n').find(l => l.startsWith('| toy · NVDA |'))
+    expect(row).toBeDefined()
+    const c = cells(row!)
+    expect(c[5]).toMatch(/^\d+(\.\d+)?%$/)   // PSR
+    expect(c[6]).toMatch(/^\d+(\.\d+)?%$/)   // DSR
+    expect(c[6]).toBe(c[5])                   // no deflation possible with one trial
+    expect(['✅ real', '⚠️ selection-risk', '🔬 noise-band']).toContain(c[7])
+  })
+
+  it('degenerate report (equityCurve < 2 points) renders n/a — never NaN, never throws', () => {
+    const report = fakeReport()
+    const sig = significanceFromReturns(barReturns(report.equityCurve))
+    const md = renderReportMd({
+      ts: Date.parse('2026-06-10T02:30:00Z'),
+      rows: [{ key: 'toy · NVDA', report, status: 'baselined', violations: [], sig }],
+      skipped: [],
+    })
+    const row = md.split('\n').find(l => l.startsWith('| toy · NVDA |'))
+    expect(row).toBeDefined()
+    const c = cells(row!)
+    expect(c[5]).toBe('n/a')                       // PSR
+    expect(c[6]).toBe('n/a')                       // DSR
+    expect(c[7]).toBe('🔬 noise-band')   // absence of evidence != evidence of edge
+    expect(md).not.toContain('NaN')
+  })
+
+  it('multi-row run: every row DSR <= PSR (multiple-testing deflation)', async () => {
+    // Two symbols on different tapes -> different per-obs Sharpes -> varSR > 0.
+    const deps = makeDeps({
+      getWatchlist: () => ['NVDA', 'AMD'],
+      getCandles: async (s) => (s === 'NVDA' ? tape(300) : tape(300, 50)),
+    })
+    const svc = new SelfEvalService(deps)
+    const res = await svc.runOnce()
+    expect(res!.evaluated).toBe(2)
+    const md = deps.reports.get(res!.reportFilename)!
+    expect(md).toContain('N=2 trials')
+    const dataRows = md.split('\n').filter(l => l.startsWith('| toy · '))
+    expect(dataRows).toHaveLength(2)
+    for (const line of dataRows) {
+      const c = cells(line)
+      const psr = Number.parseFloat(c[5]!)
+      const dsr = Number.parseFloat(c[6]!)
+      expect(Number.isFinite(psr)).toBe(true)
+      expect(Number.isFinite(dsr)).toBe(true)
+      expect(dsr).toBeLessThanOrEqual(psr)
+    }
   })
 })
 

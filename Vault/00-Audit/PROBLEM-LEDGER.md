@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-07-06
+updated: 2026-07-10
 ---
 
 # Problem Ledger
@@ -14,6 +14,275 @@ updated: 2026-07-06
 > SHIPPED → VERIFIED**. Nothing is ever deleted — solved entries sink to §Closed.
 
 ---
+
+### P-097 · `knip-wrapper.mjs` false-greens under Node 22 — exits 0 without analyzing, so any sandbox session that trusts it reports a fabricated dead-code gate — OPEN
+- **Problem:** The canonical `knip` binary crashes in the Cowork sandbox (Node 22.22.3) inside `oxc-parser`’s raw-transfer path (`ast-nodes.js` → `parseSyncRaw`, exit 1) — the known §2.9 scar. The tracked repo-root shim `apps/satex-terminal/knip-wrapper.mjs` (pins `process.version` to v20.19.0, then dynamic-imports `knip/dist/index.js`; predates the 2026-07-02 relocation, `034984f`) appears to fix this: it exits 0 in seconds. It does not. Canary experiment (2026-07-10, Fable 5): planted `src/shared/knip-canary.ts` containing one unused export — an unused FILE, which `knip.json` `"files": "error"` must fail — and the wrapper still exited 0 with zero output. The dynamic import resolves but the CLI’s analysis never completes (or dies async after the process has already exited 0). A gate that silently passes everything is worse than one that loudly crashes: it invites a Directive 0.1/0.4 violation — an agent honestly reporting a green that never ran.
+- **Solutions:** (a) delete the wrapper; keep CI (Node 20.19) as the sole knip arbiter and note it in the §2.9 environment scars — loud failure beats silent pass; (b) repair the wrapper to await the CLI and propagate its real exit code, self-tested against a planted canary before trust; (c) keep it with a warning comment — rejected: a booby-trapped gate that looks green is the worst option.
+- **Decision:** deferred to operator — (a) is the low-risk default; it is a tracked file, so deletion is a human-signed change (P-020/P-028 pattern: recorded, not freelanced). Until ruled: no session may cite `knip-wrapper.mjs` output as the knip gate.
+- **Status:** OPEN.
+
+### P-096 · Self-evaluation judges strategies by a naive Sharpe with no statistical-significance test (overstates edge; multiple-testing blind) — SHIPPED (wiring + tests + reporter parity + docs complete 2026-07-10; committed on feat/p096-significance-checkpoint, awaiting push + CI)
+- **Problem:** The nightly self-evaluation (`src/main/services/self-eval.ts`) ranks every
+  `(strategy × symbol)` candidate by a **naive annualized Sharpe** (`src/shared/backtest/metrics.ts:49`
+  — `mean(rets)/stdev(rets)·√periodsPerYear`, rf=0) rendered straight into the verdict table
+  (`self-eval.ts` `renderReportMd`, the `Sharpe` column) and drift-checked against a single locked
+  baseline (`compareReports`, `sharpeTolerance: 0.5`). Naive Sharpe is a biased skill estimator: it
+  ignores return non-normality (skew/kurtosis), track-record length, and — critically — multiple-testing
+  selection bias (evaluate K strategies, read off the best, and the max is inflated by luck alone). On a
+  live-capital terminal this is a P2 (model-fidelity) correctness gap: the operator can promote a baseline
+  or trust a strategy that is statistically indistinguishable from noise. No PSR/DSR/higher-moment stats
+  existed anywhere under `src/shared` (grep confirmed) before this entry.
+- **Solutions:** (a) add a pure, unit-pinned significance module (`src/shared/backtest/significance.ts`)
+  implementing the Bailey–López de Prado framework — Probabilistic Sharpe Ratio, Minimum Track Record
+  Length, Deflated Sharpe Ratio — plus normal CDF/inverse-CDF and standardized moments, then surface
+  PSR/DSR/a significance glyph as new **observational** columns in the nightly report; zero perimeter
+  contact (self-eval never sizes/gates/submits — file header invariant preserved). (b) defer to a
+  dedicated decision-path session — rejected: the gap is live every night and the fix is off-perimeter.
+  (c) flag OPEN without action — rejected (P-013/P-024-class backlog pileup).
+- **Decision:** **(a).** New module + tests only this session; `metrics.ts` `sharpe()` and every existing
+  `BacktestMetrics` field are byte-for-byte unchanged, so production decision math cannot regress from
+  this commit (same guarantee P-026/P-033 gave). The PSR/DSR outputs are print-only and MUST NOT feed a
+  risk gate, position size, calibration multiplier, or autonomous-trade decision (Constitution §3.6).
+- **Shipped this session (2026-07-10, dawn planner):** new `src/shared/backtest/significance.ts` (pure:
+  skewness, kurtosis, erf, normCdf, normInvCdf[Acklam+Halley], probabilisticSharpe, minTrackRecordLength,
+  expectedMaxSharpeNull, deflatedSharpe, significanceFromReturns, withDsr) + `significance.test.ts`
+  (23 tests: literature reference pins incl. PSR=0.8395 @ SR0.1/n100, minTRL→PSR round-trip @ 0.95,
+  DSR<PSR deflation, degenerate-input sentinels). Blueprint:
+  `apps/satex-terminal/docs/superpowers/specs/2026-07-10-probabilistic-deflated-sharpe-significance-ultraplan.md`.
+- **Gate verification (2026-07-10, in-mount node):** typecheck exit 0 | lint exit 0 (0 warnings) |
+  vitest (targeted `significance.test.ts`) 23/23 pass, exit 0 | knip not run (oxc-parser 2 GB sandbox
+  OOM, §2.9 — CI arbiter). New files 0 NUL / 0 CRCR.
+- **Was remaining (executed 2026-07-10 — see Shipped below):** wire
+  `significanceFromReturns(barReturns(report.equityCurve))` per row in `self-eval.ts` `runOnce`, add the
+  trial-aware `withDsr` second pass (N = rows this run), render `PSR | DSR | Signif.` columns + footer
+  note, add ≥4 `self-eval.test.ts` tests, CHANGELOG Unreleased `### Added`, then flip this entry SHIPPED.
+  EDIT HAZARD: `self-eval.ts` is an existing file — python-through-bash edit, assert anchor count==1,
+  NUL-scan after (rule §5).
+- **Shipped (2026-07-10, Fable 5 session):** T3a `types.ts` re-exports `SignificanceMetrics`; T3b/c `self-eval.ts` `runOnce()` computes per-row `significanceFromReturns(barReturns(report.equityCurve))` + the trial-aware `withDsr` second pass (N = rows this run, printed in the footer); T3d `renderReportMd` renders `PSR | DSR | Signif.` columns (glyphs: ✅ real / ⚠️ selection-risk / 🔬 noise-band), N-trials footer, `n/a` on degenerate rows; T4 `reporter.ts` headline gains PSR + minTRL rows (DSR deliberately absent — a standalone report has no trial set); T5 `self-eval.test.ts` 10→14, `reporter.test.ts` 12→14; T6 CHANGELOG Unreleased `### Added`. Bonus: fixed the `significance.ts` header typo (raw normal kurtosis 3.0, not 4.0).
+- **Gate verification (2026-07-10, Fable 5, in-mount Node 22.22.3):** typecheck `tsc -p tsconfig.node.json` exit 0 (7.7s) + `tsc -p tsconfig.web.json` exit 0 (7.4s) | lint `eslint src tests` exit 0, 0 warnings (18.8s) | vitest exact-cover segmented run 124/124 files, 1628 tests, 0 fail (12 invocations, all exit 0 — 45s sandbox call ceiling forbids one-shot) | knip NOT sandbox-runnable: binary crashes (oxc raw-transfer, Node 22) and `knip-wrapper.mjs` false-greens (→ P-097) — CI arbiter. All edited files byte-scanned 0 NUL / 0 CRCR.
+- **Status:** SHIPPED (committed on `feat/p096-significance-checkpoint` via the /tmp-clone→push-to-mount workflow; flip to VERIFIED after operator push + CI green incl. knip).
+
+### P-095 · CONSTITUTION §2.2 / Directive 0.7 “master has no server-side branch protection” is false — an active ruleset blocked PR #32 with unsatisfiable requirements — VERIFIED (settings fixed; docs corrected via PR #33)
+- **Problem:** PR #32 (chore/p076-p080-coverage-and-fixes → master) showed CI green
+  (“All checks have passed — 1 successful check”) yet “Merging is blocked.” Cause: a
+  GitHub **ruleset `main-protection`** (Active, targeting `master`, bypass list empty)
+  — direct contradiction of CONSTITUTION §2.2 / §0.7, which state the discipline is
+  manual because no server-side wall exists. Verified config (Settings → Rules,
+  2026-07-10): restrict deletions ✓, require linear history ✓, require signed
+  commits ✓, require PR before merging ✓, block force pushes ✓, require code
+  scanning results (CodeQL, all alerts) ✓, require code quality results (Errors) ✓,
+  auto-request Copilot review ✓. Two requirements were unsatisfiable (no CodeQL
+  workflow exists in `.github/workflows/`; no signing key configured — commits are
+  plain `git commit`), one more (code quality) was a latent third blocker — and the
+  one check that actually matters, CI/Gates, was NOT required (“Require status
+  checks to pass” was off). Net effect: permanent merge-block on impossible
+  conditions while the real gate stayed optional.
+- **Solutions:** (a) align the ruleset with reality — drop signed-commits,
+  code-scanning, and code-quality; enable “Require status checks to pass” with
+  `Gates (typecheck, lint, knip, tests)` (GitHub Actions) as the required check;
+  keep PR-required, linear history, force-push + deletion blocks; (b) minimal
+  unblock — uncheck only the two active blockers, leave code-quality + no required
+  checks; (c) add the admin role to the bypass list and merge past intact rules —
+  leaves latent friction on every future PR and normalizes bypassing.
+- **Decision:** **(a), operator-selected 2026-07-10.** The wall now enforces exactly
+  what AGENTS.md/CONSTITUTION §2.1 say is the floor (the four gates via CI) instead
+  of ceremonies the repo doesn’t practice. Applied via Settings UI; operator
+  personally completed the GitHub sudo-mode 2FA confirmation (“Ruleset updated”).
+  PR #32 then **rebase-merged** (linear history bans merge commits): master tip
+  `3cc93e8` (fix(knip): remove orphaned FeedSwitch.tsx) on `4afec50`
+  (chore(coverage): P-081…P-089), both preserved individually, 2026-07-10.
+- **Status:** SHIPPED (2026-07-10, cowork session w/ operator). Follow-ups: (1)
+  CONSTITUTION.md §2.2/§0.7 and AGENTS.md still claim no server-side protection and
+  prescribe `gh pr merge --merge` — both now wrong (protection exists; linear
+  history forbids merge commits — rebase/squash only). Text edit is a normal
+  branch→PR doc fix for the next repo session; per the honesty axiom the code/
+  settings are the truth and this entry records the contradiction. (2) P-086
+  (stale `fix/p083-png-export-ipc-transport` branch) remains the next loose thread;
+  its content is now merged via this PR — close/delete per its own entry. (3)
+  Local `mc4` master needs `git pull --ff-only`; checkpoint bundles
+  (`satex-checkpoint-p081-p089.bundle`, `satex-checkpoint-knip-fix.bundle`,
+  `satex-checkpoint-p081-p089-PR-BODY.md`) are now redundant and safe to delete. —
+  bundles DELETED same session. Follow-up (1) also EXECUTED same session:
+  `AGENTS.md`, `CONSTITUTION.md` (§0.7 / §1.1 / §2.2), `ARCHITECTURE.md` corrected in
+  the working tree (8 surgical edits: repo URL → `satex25/SATEX-terminal`, protection
+  reality, `--merge` → `--rebase`/`--squash`); `git diff` verified — awaiting commit on
+  a `docs/` branch (this ledger file itself stays uncommitted with the pending
+  work-layer checkpoint, since its P-090–P-094 entries describe code not yet committed).
+  **VERIFIED later same session (2026-07-10):** docs committed as `d1eb62c` on
+  `docs/p095-github-protection-reality` (operator ran the recipe; pre-commit
+  typecheck + lint green), PR #33 opened, required check
+  `CI / Gates (typecheck, lint, knip, tests)` green in 58s — the realigned ruleset
+  visibly enforcing, "Required" badge shown — then rebase-merged. Master tip
+  `62e7af7`, linear on `3cc93e8` → `4afec50`, confirmed on the commits page.
+
+### P-094 · Six main-process services carry zero test coverage; one (`live-mode.ts`) is the live-capital arming interlock itself — OPEN, mixed disposition
+- **Problem:** Work-layer code-audit sweep (rule 4) of `src/main/services/*.ts` for
+  files with no sibling `*.test.ts` found six: `alpaca-mode.ts` (65 LOC),
+  `depth-feed.ts` (141 LOC), `persistence.ts` (992 LOC, the 12-table SQLite layer),
+  `self-eval-store.ts` (34 LOC), `tactics.ts` (158 LOC), plus
+  `src/main/core/trading-engine.ts` (2,712 LOC, the orchestrator — already tracked as
+  the "god-object" under P-012, so not re-ledgered here). All six share the same
+  no-DI shape that made `auto-update.ts` (P-091) hard to test before this week: a
+  module-level singleton (or, for `trading-engine.ts`, a single large class)
+  constructed once against real `electron`/`better-sqlite3` imports, not injected —
+  the same reason `credential-store.ts` remains "manually integration-tested" rather
+  than unit-tested. **`live-mode.ts` is the more consequential finding: this file
+  literally implements the CONSTITUTION §2.4/§3.7 live-mode arming interlock**
+  (`setLiveMode()` checks `killArmed`, the daily-loss threshold, and the notional
+  cap before flipping `enabled: true`, `live-mode.ts:42-66`) — it is trading-safety
+  perimeter, not an ordinary coverage gap.
+- **Solutions:** (a) treat all six identically and write characterization suites for
+  each this session, mirroring the `auto-update.test.ts` `vi.mock('electron')`
+  harness — fastest path to "no gaps left," but freelances test-writing on the
+  literal arming-interlock file without the human perimeter review CONSTITUTION
+  §2.4/§2.7 requires for anything touching the live-capital path (even test-only,
+  per this morning's dawn-planner handoff explicitly making the same call for
+  `tactics.ts`); (b) split the six: implement coverage this session for the four
+  unambiguously off-perimeter, low-blast-radius ones (`alpaca-mode.ts`,
+  `depth-feed.ts`, `persistence.ts`, `self-eval-store.ts`) and leave `live-mode.ts` +
+  `tactics.ts` OPEN pending a human perimeter check — matches the standing
+  `tactics.ts` precedent exactly, extends the same caution to the newly-found
+  `live-mode.ts`; (c) leave all six as a documented survey only, no implementation
+  this session — under-uses the session's remaining off-perimeter budget for no
+  safety benefit, since (b)'s four picks are genuinely zero-risk.
+- **Decision:** **(b), documented only — implementation deferred to a future
+  session.** Given this session's budget was already spent on the ledger
+  reconciliation (P-081/P-083/P-084/P-087/P-088/P-089 → VERIFIED) and the
+  `ChartPanel.tsx` fix (P-093) found during this same sweep, writing four new
+  characterization suites tonight would exceed one session's usual single-target
+  scope (every prior coverage pick — P-076, P-077, P-079, P-088, P-091 — shipped
+  ONE target with its own blueprint, not four at once). Recorded here so the next
+  work-layer/dawn-planner session can pick any of `alpaca-mode.ts` / `depth-feed.ts`
+  / `persistence.ts` / `self-eval-store.ts` directly, cheapest-first
+  (`self-eval-store.ts` at 34 LOC is the smallest). **`live-mode.ts` and
+  `tactics.ts` are explicitly NOT autonomous picks** — perimeter review required
+  first, same class as the standing MAY-TACTICS caution.
+- **Status:** OPEN (2026-07-09, work-layer). No code changed by this entry — survey
+  only. `persistence.ts`, `depth-feed.ts`, `alpaca-mode.ts`, `self-eval-store.ts`:
+  safe future autonomous picks. `live-mode.ts`, `tactics.ts`: human sign-off required
+  before any session (even test-only) touches them. `trading-engine.ts`: tracked
+  under P-012, not duplicated here.
+
+### P-093 · `ChartPanel.tsx` high/low computation used `Math.max(...spread)`/`Math.min(...spread)` over up-to-30,000-element arrays — the one sibling spot three other panels explicitly avoid this pattern for — fixed
+- **Problem:** `ChartPanel.tsx:1235-1236` (pre-fix) computed the toolbar's H/L stats
+  as `Math.max(...view.map(c => c.high))` / `Math.min(...view.map(c => c.low))`.
+  `view` is `aggregate(candles, bucketSec)` (or `subBars` when `showSub`), and
+  `candles` is capped at `MAX_CANDLES = 30_000` (`marketStore.ts:36`) — so in the
+  unaggregated (`bucketSec` small / sub-second) case `view.length` can reach
+  30,000. Spreading an array that large as call-site arguments to `Math.max`/
+  `Math.min` is the exact unbounded-growth/spread class this ledger already
+  tracks (P-041) — and three OTHER files in this same renderer already avoid it
+  on this exact file's principle, each with an inline comment saying so:
+  `vol-heatmap.ts:188` ("Single-pass loop, never Math.max(...spread)"),
+  `PortfolioMiniPanel.tsx:52` ("never Math.min(...snapshots)"),
+  `QuadPaneChart.tsx:84` ("Reduce loop... to avoid stack overflow on big arrays").
+  `ChartPanel.tsx` — the flagship chart, previously the site of the P-075
+  "Maximum update depth exceeded" crash — was the one sibling spot still using
+  the spread form. 30,000 elements is very likely under V8's actual spread-argument
+  ceiling today (empirically much higher for `Math.max`/`.apply`-style calls than
+  the historically-cited ~65,536, per direct engine testing), so this was not
+  observed to throw in this session — LATENT, not reproduced as an active crash.
+  It was also directly two lines above `vol`, computed correctly via `.reduce()`
+  in the very same function — an internal inconsistency, not just a cross-file one.
+- **Solutions:** (a) single-pass `for` loop computing `hi`/`lo`/`vol` together,
+  mirroring the `vol` line already in the same function and the exact pattern
+  `vol-heatmap.ts`/`PortfolioMiniPanel.tsx`/`QuadPaneChart.tsx` already use —
+  zero behavior change (matches the `undefined`-when-empty / `0`-when-empty
+  semantics of the original ternary + reduce exactly), smallest diff, consistent
+  with established repo idiom; (b) leave as-is since 30,000 is empirically safe on
+  today's V8 — rejected, "safe today, on this engine" is exactly the kind of latent
+  hazard the constitution's defect classes exist to close before it becomes
+  version- or platform-dependent; (c) cap `MAX_CANDLES` lower instead of fixing the
+  computation — treats the symptom, still leaves the spread pattern live for
+  `subBars` (a separate, differently-capped buffer) and any future caller.
+- **Decision:** **(a)**. Replaced the two spread lines + the `vol` reduce with one
+  single-pass `for` loop (`ChartPanel.tsx:1235-1247`), same file, comment cites this
+  entry. No other line touched.
+- **Status:** SHIPPED (unstaged, 2026-07-09). Evidence: byte-scan 0 NUL / 0 CRCR
+  (LF) on the edited file; typecheck node exit 0 · typecheck web exit 0 · lint exit
+  0 (0 warnings). No companion test exists for `ChartPanel.tsx` today (pre-existing
+  gap across every panel component, not introduced by this fix — `panels/` has zero
+  `*.test.tsx` files repo-wide); this session's full segmented vitest run
+  (122 files / 1598 tests / 0 fail) covers everything that DOES have coverage and
+  shows no regression. Off-perimeter (renderer display stat only, no IPC/order/risk
+  contact) — no APPROVAL NODE.
+
+### P-091 · `auto-update.ts` (Electron release-delivery service) shipped untested — SHIPPED
+- **Problem:** `src/main/services/auto-update.ts` (139 LOC) carried zero test coverage
+  since it shipped (S1-9). It encodes a real SAFETY POLICY — `autoDownload=false`,
+  `autoInstallOnAppQuit=false`, `allowDowngrade=false` (`auto-update.ts:25,32-33`) — plus a
+  24h `setInterval` whose only cleanup is `shutdown()` (`auto-update.ts:97-102,132-138`),
+  i.e. the repo's most recidivist defect class (PR #6 / P-041 / P-043 / P-046 timer/leak).
+  A future edit could flip a consent flag or drop the interval clear with no failing gate.
+  Carried forward as a fallback coverage pick since 2026-07-04.
+- **Solutions:** (a) add a characterization suite that mocks `electron` + `electron-updater`
+  at the module boundary (the service uses the `autoUpdater` singleton, not DI) and asserts
+  the safety flags, feed URL, four lifecycle handlers, the destroyed-window guard, the
+  nullish-version coercion, `quitAndInstall(false,true)`, and — critically — that
+  `shutdown()` clears the interval; (b) leave uncovered as "manually integration-tested"
+  like `credential-store`'s Electron path — rejected, the safety flags + timer cleanup are
+  pure, deterministic, cheap to lock in, and the constitution names this leak class.
+- **Decision:** **(a) — SHIPPED.** New `src/main/services/auto-update.test.ts`, 14 tests,
+  the repo's first `vi.mock('electron'/'electron-updater')` harness (file-scoped, no
+  `setupFiles` change, sibling suites unaffected). Blueprint:
+  `apps/satex-terminal/docs/superpowers/specs/2026-07-09-auto-update-service-coverage-ultraplan.md`.
+  Gates: `npx vitest run auto-update.test.ts` → 14/14 pass exit 0; `npm run typecheck` exit 0;
+  `npm run lint` exit 0 / 0 warnings; new files 0 NUL / 0 CRCR. knip sandbox-blocked (oxc OOM
+  §2.9) — CI arbiter, test-only addition is knip-neutral. Off-perimeter (release delivery, no
+  trading path). Unstaged for operator review per §8.
+
+### P-092 · Ledger's formal "In progress / Shipped / Closed" sections have been dead convention since at least P-057 — OPEN, operator ruling needed
+- **Problem:** The file has three formal section headers (`## In progress` line ~1176,
+  `## Shipped — awaiting verification` ~1181, `## Closed — verified` ~2245) whose stated
+  purpose is a status-driven filing system ("entries move here when..."). But every entry
+  from at least P-057 through today's P-091 is instead prepended flat at the file's top,
+  newest-first, with status tracked only via each entry's own inline `**Status:**` field —
+  none of them are physically inside any of the three sections. The 2026-07-09 dawn-planner
+  handoff (this morning) explicitly recommended "migrate VERIFIED ones to `## Closed —
+  verified`" for P-081/P-083/P-084/P-087/P-088/P-089 now that their code is committed
+  (`f331013`/`b1cb7c6`) — but doing that would make those six entries the ONLY ones out of
+  35+ recent entries physically filed in the old section structure, which reads as more
+  inconsistent, not less.
+- **Solutions:** (a) do the six-entry move now, restoring the letter of the original
+  filing scheme — but this is a large multi-block relocation in a 2500+ line file (exactly
+  the anchor-collision risk class rule 5a warns about) for a structure the last ~35 entries
+  have already, evidently by consensus, stopped using; (b) update each entry's inline
+  Status field in place (what this session did — see reconciliation notes on P-081/P-083/
+  P-084/P-087/P-088/P-089 above) and flag the section-header convention itself as stale
+  documentation, recommending the operator either delete the three unused headers or
+  formally adopt "flat, newest-first, status-in-line" as the real convention; (c) leave
+  both the drift and the entries completely alone — rejected, an unrecorded documentation/
+  reality mismatch is exactly what 0.10 exists to prevent, and a future session could burn
+  time "fixing" the drift the wrong way (doing the risky mass-move) without this note.
+- **Decision:** **(b) — implemented this session** (the inline-status reconciliation on
+  the six named entries). The section-header question itself is a taste/process call
+  ("which filing convention is canonical going forward") per AGENTS.md's judgment-boundary
+  rule — **left OPEN, operator ruling needed**: keep the three headers and do the
+  one-time six-entry migration, or delete the unused headers and formalize the flat
+  convention already in de facto use.
+- **Status:** OPEN (2026-07-09, work-layer). No code changed. Byte-scan after this and
+  all sibling edits in this session: 0 NUL / 0 CRCR (LF-only), anchor count asserted ==1
+  before every replace.
+
+### P-090 · Two scheduled agents fired off-nominal and did byte-for-byte duplicate work, racing on the untracked ledger — DECIDED (defer to operator)
+- **Problem:** on 2026-07-06 the dawn-planner and work-layer scheduled agents both fired
+  ~9h45m off-nominal (real ~14:47 CDT vs nominal 05:00/06:00) and CONCURRENTLY executed the
+  identical live-decision-path sweep. The work-layer wrote P-089 VERIFIED at 14:55:19 while
+  the dawn-planner was mid-read; the dawn-planner's ledger insert correctly aborted on the
+  §5a uniqueness assert, so no duplicate/NUL corruption — but a full session's leverage was
+  burned and the untracked ledger (git can't restore it, P-014 lineage) was one unguarded
+  write from corruption. Evidence: `Vault/Daily/2026-07-06-agent-handoff.md` §HEADLINE
+  FINDING; `Vault/Daily/2026-07-06-work-layer.md`.
+- **Solutions:** (a) a lightweight `Vault/` lockfile / "session in progress" sentinel both
+  scheduled prompts check-and-claim on boot (idempotency beyond rule 1's per-blueprint
+  check); (b) stagger/dedup the scheduler so a late dawn-planner slot is skipped rather than
+  overlapping the work-layer; (c) accept as rare off-nominal noise — rejected, it silently
+  burned a session and nearly corrupted the ledger.
+- **Decision:** **DECIDED — defer to operator.** The fix lives in Cowork scheduled-task
+  config + a boot-time claim protocol — a process/perimeter-adjacent change, not an
+  autonomous 5 AM edit. Recorded now (the 2026-07-06 dawn-planner deliberately deferred the
+  write to avoid a third concurrent write while another session held the ledger). Recommend
+  the operator adopt (a)+(b). APPROVAL NODE — operator action.
 
 ### P-089 · Live-decision-path read-only audit sweep (brain/calibration/pattern-learner/regime) — no defects found — VERIFIED
 - **Problem:** the 2026-07-04 and 2026-07-05 work-layer sessions each deferred a full
@@ -64,6 +333,11 @@ updated: 2026-07-06
   shipped). Companion test files confirmed still green this session: targeted
   `vitest run` on `brain.test.ts` + `calibration.test.ts` + `pattern-learner.test.ts` +
   `regime.test.ts` → **37/37 passed** (10.71s). Evidence: `Vault/Daily/2026-07-06-work-layer.md`.
+- **Reconciliation (2026-07-09, work-layer):** This ledger entry itself is now
+  committed (`f331013`, part of the same commit that landed P-081/P-083/P-084/P-087/
+  P-088). Re-verified this session: `brain.test.ts`/`calibration.test.ts`/
+  `pattern-learner.test.ts`/`regime.test.ts` all still pass (part of the 122-file /
+  1598-test / 0-fail segmented run). No status change needed (already VERIFIED).
 
 ### P-088 · `edgar.ts` (SEC EDGAR catalysts poller) shipped untested — SHIPPED
 - **Problem:** `src/main/services/edgar.ts` (198 LOC) — the 5-minute poller that turns
@@ -114,6 +388,10 @@ updated: 2026-07-06
   handoff's own "recommended starting point" list (`edgar.ts` flagged there as "likely
   the cleanest next pure pick") under the fallback protocol, since no 2026-07-05
   dawn-planner handoff existed at 06:06 CDT boot time (see 2026-07-05-work-layer.md).
+- **Reconciliation (2026-07-09, work-layer):** Committed `f331013`. Re-verified:
+  typecheck exit 0 · lint exit 0 (0 warnings) · `edgar.test.ts` 25/25 (part of the
+  122-file / 1598-test / 0-fail segmented run). Status: SHIPPED →
+  **VERIFIED (committed)**. Filing-convention note: see P-092.
 
 ### P-087 · TopBar's Simulator/Live data-feed chip read as equally load-bearing as the real-capital toggle — relocated to Settings — SHIPPED (fixed)
 - **Problem:** Operator feedback (2026-07-04, live product review): the TopBar's
@@ -172,6 +450,13 @@ updated: 2026-07-06
   immediately by the mandatory post-edit byte-scan, recovered via
   `git show HEAD:<path>`, and redone correctly via python-through-mount. Evidence this
   hazard is real and current, not just historical.
+- **Reconciliation (2026-07-09, work-layer):** Committed `f331013`. The orphaned
+  `FeedSwitch.tsx` (this entry's operator follow-up) was subsequently deleted by
+  `b1cb7c6` ("fix(knip): remove orphaned FeedSwitch.tsx — CI's actual dead-code
+  failure") — that follow-up is now DONE, not outstanding. This session re-verified:
+  typecheck exit 0 · lint exit 0 (0 warnings) · `dataSourceStore.test.ts` 3/3 (part of
+  the 122-file / 1598-test / 0-fail segmented run). Status: SHIPPED →
+  **VERIFIED (committed)**. Filing-convention note: see P-092.
 
 ### P-083
 
@@ -212,6 +497,11 @@ updated: 2026-07-06
   + calibration) 49/49, no mock leakage. knip not run (sandbox oxc-parser 2 GB OOM, §2.9
   ceiling — new test exports nothing, knip-neutral; CI is arbiter). Blueprint:
   `apps/satex-terminal/docs/superpowers/specs/2026-07-04-market-observer-coverage-ultraplan.md`.
+- **Reconciliation (2026-07-09, work-layer):** Committed `f331013`. This session
+  re-verified: typecheck exit 0 · lint exit 0 (0 warnings) · segmented vitest 122
+  files / 1598 tests / 0 fail (incl. `market-observer.test.ts` 28/28) · knip not run
+  (sandbox OOM, §2.9). Status: SHIPPED → **VERIFIED (committed)**. Filing-convention
+  note: see P-092.
 
 ### P-084 · Stale `P-083` ledger cross-reference in PNG-export IPC hardening comments — SHIPPED (fixed)
 - **Problem:** Work-layer code audit (2026-07-04) found `src/shared/ipc-schemas.ts:361`
@@ -247,6 +537,10 @@ updated: 2026-07-06
   both patched files + this ledger + the CHANGELOG; typecheck node exit 0 · typecheck
   web exit 0 · lint exit 0 (0 warnings) · targeted vitest `ipc-schemas.test.ts` 11/11.
   Off-perimeter (comment/doc correction only, zero behavior change) — no APPROVAL NODE.
+- **Reconciliation (2026-07-09, work-layer):** Committed `f331013`. Re-verified:
+  typecheck exit 0 · lint exit 0 (0 warnings) · `ipc-schemas.test.ts` 11/11 (part of
+  this session's 122-file / 1598-test / 0-fail segmented run). Status: SHIPPED →
+  **VERIFIED (committed)**. Filing-convention note: see P-092.
 - **Correction (2026-07-04, later same day — do not re-edit the Problem line above; this
   is the audit trail):** A GitHub repo check (branches + commit history, `github.com/
   satex25/satex-trading`) found the Problem statement above is only half right. The
@@ -323,7 +617,7 @@ updated: 2026-07-06
   ledger: 0 NUL / 0 `\r\r` (LF-only). No app code touched — this entry is process/tooling
   hygiene, not a source change, so the four gates do not apply; nothing to re-run.
 
-### P-086 · Unmerged GitHub branch `fix/p083-png-export-ipc-transport` duplicates work already reconstructed locally — OPEN, operator reconciliation needed
+### P-086 · Unmerged GitHub branch `fix/p083-png-export-ipc-transport` duplicates work already reconstructed locally — RESOLVED (content on master; branch stale, operator to delete)
 - **Problem:** GitHub check (2026-07-04, prompted by an operator "how's the repo looking"
   question) found a branch, `fix/p083-png-export-ipc-transport` (2 commits: `f3ce1a5`
   P-081 LLM fix, `63b1e5a` P-083 PNG-export fix, both off `8ea8226`, pushed 2026-07-03),
@@ -358,7 +652,15 @@ updated: 2026-07-06
   access via browser only, no push/PR capability). Recommendation for the operator: decide
   whether `fix/p083-png-export-ipc-transport` should be opened as a PR and merged (getting
   its commits gate-verified via CI for the first time) *before* any more local session
-  reconstructs the same content a fourth time. Until decided, DO NOT commit the local
+  reconstructs the same content a fourth time.
+- **Resolution (2026-07-10, operator ruling in session + agent verification):** The branch's
+  content is now **redundant** — P-081 (LLM max_tokens) and the P-083 PNG-export fix both landed
+  on `master` via the coverage batch (`4afec50` "P-081/P-083/...") and `1621109` (PNG export crash
+  fix), confirmed by `git log origin/master`. The local unstaged reconstruction was likewise
+  committed in that batch. The operator ruled `fix/p083-png-export-ipc-transport` **stale — delete
+  it on GitHub** (restore remains available). No agent action possible on the remote (this sandbox
+  has no push credentials — `git push` → "could not read Username"; confirmed again 2026-07-10).
+  Operator one-click: GitHub → Branches → delete `fix/p083-png-export-ipc-transport`. Until decided, DO NOT commit the local
   unstaged `llm.ts`/`ipc-schemas.ts`/`export.ts` changes on any new branch without first
   checking whether they'd conflict with `fix/p083-png-export-ipc-transport` landing.
 - **Status:** OPEN (2026-07-04). No code changed by this entry — read-only GitHub
@@ -401,6 +703,13 @@ updated: 2026-07-06
   grounded in code + config (evidence above), not a live-provider-confirmed capture —
   if the advisor is still silent after this ships, the legacy Baidu key itself
   (expiry/rotation) is the next thing to check.
+- **Reconciliation (2026-07-09, work-layer):** Committed `f331013` (2026-07-08 20:23,
+  branch `chore/p076-p080-coverage-and-fixes`, HEAD now `b1cb7c6`). This session re-ran
+  all four gates directly against the committed tree: typecheck exit 0 · lint exit 0 (0
+  warnings) · segmented vitest 122 files / 1598 tests / 0 fail (incl. `llm.test.ts`
+  10/10) · knip not run (sandbox oxc-parser OOM, §2.9 — CI arbiter). No regression.
+  Status: SHIPPED → **VERIFIED (committed)**. Not physically relocated to
+  `## Closed — verified` — see P-092 (filing-convention note, operator ruling).
 
 ### P-082 · Dev-server validation session (2026-07-03, local machine) — two benign findings confirmed working-as-designed, logged so they aren't re-investigated
 - **Problem:** Same local validation session that surfaced P-081 also flagged: (1) "kill

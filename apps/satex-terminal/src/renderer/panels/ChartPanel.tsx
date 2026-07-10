@@ -1232,9 +1232,20 @@ export function ChartPanel() {
 
   const up = (quote?.changePct ?? 0) >= 0
 
-  const hi = view.length ? Math.max(...view.map(c => c.high)) : undefined
-  const lo = view.length ? Math.min(...view.map(c => c.low))  : undefined
-  const vol = view.reduce((a, c) => a + c.volume, 0)
+  // Single-pass loop, never Math.max(...spread)/Math.min(...spread) — `view`
+  // can hold up to MAX_CANDLES (30_000, marketStore.ts) 1-second bars when
+  // unaggregated, and a large-array spread as call-site arguments is exactly
+  // the unbounded-growth class (P-041) already avoided on this same principle
+  // by vol-heatmap.ts, PortfolioMiniPanel.tsx, and QuadPaneChart.tsx — this
+  // was the one sibling spot still using the spread form (P-093).
+  let hi: number | undefined
+  let lo: number | undefined
+  let vol = 0
+  for (const c of view) {
+    if (hi === undefined || c.high > hi) hi = c.high
+    if (lo === undefined || c.low  < lo) lo = c.low
+    vol += c.volume
+  }
 
   return (
     <div className="chart-shell">
