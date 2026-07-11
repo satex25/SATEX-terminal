@@ -6,6 +6,8 @@
  */
 import { writeFile } from 'node:fs/promises'
 import type { BacktestReport } from '@shared/backtest/types'
+import { barReturns } from '@shared/backtest/metrics'
+import { significanceFromReturns } from '@shared/backtest/significance'
 
 const dollar = (n: number): string => {
   const sign = n < 0 ? '-' : ''
@@ -37,6 +39,14 @@ export function formatReportConsole(report: BacktestReport): string {
 /** Markdown table report for human review or PR-comment paste-in. */
 export function formatReportMd(report: BacktestReport): string {
   const m = report.metrics
+  // P-096: observational significance (print-only). A standalone report has no
+  // trial set, so DSR is intentionally absent — see self-eval.ts for the
+  // trial-aware deflation across a nightly run.
+  const sig = significanceFromReturns(barReturns(report.equityCurve))
+  const psrCell = sig.psr == null ? 'n/a' : pct(sig.psr)
+  const trlCell = sig.minTRL == null ? 'n/a'
+    : sig.minTRL === Infinity ? '∞'
+    : `${Math.ceil(sig.minTRL)} obs`
   const first = report.equityCurve[0]?.ts ?? 0
   const last = report.equityCurve[report.equityCurve.length - 1]?.ts ?? 0
   const period = first && last
@@ -60,6 +70,8 @@ export function formatReportMd(report: BacktestReport): string {
 | Total return | ${pct(m.totalReturn)} |
 | Annualized return | ${pct(m.annualizedReturn)} |
 | **Sharpe** (annualized) | **${m.sharpe.toFixed(2)}** |
+| PSR — P(true Sharpe > 0), per-obs | ${psrCell} |
+| Min track record @ 95% | ${trlCell} |
 | Sortino (annualized) | ${m.sortino.toFixed(2)} |
 | Calmar | ${m.calmar.toFixed(2)} |
 | Max drawdown | ${pct(m.maxDrawdown)} (${dollar(m.maxDrawdownDollar)}) |

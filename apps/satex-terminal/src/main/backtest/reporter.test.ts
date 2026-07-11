@@ -96,6 +96,22 @@ describe('formatReportMd', () => {
     r.metrics.profitFactor = Infinity
     expect(formatReportMd(r)).toContain('| Profit factor | ∞ |')
   })
+  it('renders honest n/a significance rows for a degenerate (2-point) curve — never NaN (P-096)', () => {
+    const md = formatReportMd(sampleReport())   // 2 points -> 1 return -> n < 2
+    expect(md).toContain('| PSR — P(true Sharpe > 0), per-obs | n/a |')
+    expect(md).toContain('| Min track record @ 95% | n/a |')
+    expect(md).not.toContain('NaN')
+  })
+  it('renders %-PSR and a finite minTRL for a real rising curve (P-096)', () => {
+    const t0 = 1_700_000_000_000
+    const equityCurve = Array.from({ length: 40 }, (_, i) => ({
+      ts: t0 + i * 60_000,
+      equity: 100_000 + i * 40 + (i % 3) * 25,   // rising with wiggle -> SR > 0
+    }))
+    const md = formatReportMd(sampleReport({ equityCurve }))
+    expect(md).toMatch(/\| PSR — P\(true Sharpe > 0\), per-obs \| \d+\.\d{2}% \|/u)
+    expect(md).toMatch(/\| Min track record @ 95% \| \d+ obs \|/)
+  })
 })
 
 describe('persistReportJson', () => {

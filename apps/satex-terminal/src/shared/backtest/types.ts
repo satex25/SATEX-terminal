@@ -70,3 +70,10 @@ export interface BacktestReport {
   trades: ClosedTrade[]
   metrics: BacktestMetrics
 }
+
+/**
+ * P-096: statistical-significance record (PSR / minTRL / DSR) computed from a
+ * report's own return series by `@shared/backtest/significance`. Re-exported
+ * here so report consumers can type rows without importing the math module.
+ */
+export type { SignificanceMetrics } from './significance'
