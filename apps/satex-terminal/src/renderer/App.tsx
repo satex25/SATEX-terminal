@@ -57,6 +57,7 @@ import { ChartPanel } from './panels/ChartPanel'
 import { ReplayPanel } from './panels/ReplayPanel'
 import { MarketsOverviewPanel } from './panels/MarketsOverviewPanel'
 import { AIInsightsPanel } from './panels/AIInsightsPanel'
+import { DisciplinePanel } from './panels/DisciplinePanel'
 import { TimeSalesPanel } from './panels/TimeSalesPanel'
 import { JournalPanel } from './panels/JournalPanel'
 
@@ -115,6 +116,7 @@ export default function App() {
     { id: 'portfolio', expandedSize: '224px', flex: false },
     { id: 'news',      expandedSize: 'minmax(0, 1fr)', flex: true },
     { id: 'risk',      expandedSize: 'minmax(0, 1fr)', flex: true },
+    { id: 'discipline', expandedSize: 'minmax(0, 1fr)', flex: true },
     { id: 'logs',      expandedSize: '340px', flex: false },
     { id: 'health',    expandedSize: '320px', flex: false },
   ]
@@ -417,6 +419,12 @@ export default function App() {
         <div className="bb-sec-risk">
           <RailSlot title="Risk" orientation="col" collapsed={isRailCollapsed('risk')} onToggle={() => toggleRail('risk')}>
             <RiskGatePanel />
+          </RailSlot>
+        </div>
+        <span className="bb-divider-v" />
+        <div className="bb-sec-discipline">
+          <RailSlot title="Discipline" orientation="col" collapsed={isRailCollapsed('discipline')} onToggle={() => toggleRail('discipline')}>
+            <DisciplinePanel />
           </RailSlot>
         </div>
         <span className="bb-divider-v" />
