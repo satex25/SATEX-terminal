@@ -589,6 +589,37 @@ export interface SelfEvalStatus {
   } | null
 }
 
+// ── Track B — nightly self-eval EDGE surface (P-096 PSR/DSR) ───────────────
+
+/** Statistical-edge verdict for one (strategy × symbol) trial. The thresholds
+ *  live in ONE place — `@shared/backtest/edge-verdict.ts` `classifyEdge` —
+ *  consumed by both the nightly markdown report and the DISCIPLINE panel. */
+export type EdgeVerdict = 'real' | 'selection-risk' | 'noise'
+
+/** One renderer-facing row of the nightly self-eval report. STRICTLY
+ *  OBSERVATIONAL (§3.6 invariant 3): crosses a read-only IPC channel to a
+ *  display surface only — never a sizing, gating, or autonomy input. */
+export interface SelfEvalReportRow {
+  strategy: string
+  symbol: string
+  tradeCount: number
+  hitRate: number
+  sharpe: number
+  maxDrawdown: number
+  psr: number | null
+  dsr: number | null
+  minTRL: number | null
+  verdict: EdgeVerdict
+}
+
+/** Last nightly (or on-demand) self-eval run, retained in-memory by
+ *  `SelfEvalService`. Null until the first run completes. */
+export interface SelfEvalReport {
+  generatedAt: number
+  trials: number
+  rows: SelfEvalReportRow[]
+}
+
 // ── THE WIRE — toggleable live world-news desk (2026-06-10) ────────────────
 export interface WireItem {
   /** `sourceId:guid-or-link` — globally unique, dedupe key. */

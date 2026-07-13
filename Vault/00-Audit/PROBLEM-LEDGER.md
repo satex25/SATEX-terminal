@@ -15,6 +15,17 @@ updated: 2026-07-13
 
 ---
 
+### P-101 · Track B (B1): P-096 PSR/DSR expectancy is computed nightly but invisible in the cockpit — surfaced as the DISCIPLINE panel EDGE block — SHIPPED (branch `feat/discipline-edge`, gates green, awaiting operator sign-off + live-render check)
+- **Problem:** `self-eval.ts` computes PSR/DSR significance per (strategy × symbol) every night (P-096) and prints it to a vault markdown file only — the operator cannot see which of the system's own strategies carry a statistically real edge without opening Obsidian. Worse, the `real/selection-risk/noise` verdict thresholds lived inline in `renderReportMd` (`self-eval.ts:116-119`), so any second consumer would have duplicated and drifted them. Blueprint: `apps/satex-terminal/docs/superpowers/specs/2026-07-13-track-b-significance-expectancy-surface-ultraplan.md` (reviewed; §6 wording corrected pre-execution: CONSTITUTION §3.6 *does* contain the loss/win-classification language verbatim as narrative model-update hygiene — the accurate statement is that no code implements it and nothing mandates `pattern-learner.ts` as its home, not that the constitution's text is wrong).
+- **Solutions:** (a) retain the last run's rows in `SelfEvalService`, expose one read-only IPC channel, render a top-3-by-DSR mini-table on the DISCIPLINE panel, extracting the verdict into ONE shared function; (b) parse the vault markdown file from the renderer — rejected: file-format coupling, breaks on packaged installs with `SATEX_VAULT_ROOT`, and adds a filesystem read for data already in memory; (c) widen `SelfEvalStatus` with the rows — rejected: churns an existing contract consumed by Settings + AIInsightsPanel when a parallel getter is additive and zero-risk.
+- **Decision:** (a), per the operator-approved ultraplan (D1=B1 only, D2=mini-table top-3 by DSR, D3=retain+read-only IPC). The B2 Market-Wizards trade-retrospective classifier stays deferred to its own LEARN-domain ultraplan.
+- **Files:** `shared/types.ts` (+`EdgeVerdict`/`SelfEvalReportRow`/`SelfEvalReport` DTO) · `shared/backtest/edge-verdict.ts` **new** (`classifyEdge`, the ONE threshold source; DSR≥0.95→real, else PSR≥0.95→selection-risk, else noise — byte-identical markdown pinned by a characterization test) + `edge-verdict.test.ts` **new** (5) · `main/services/self-eval.ts` (rows carry `strategy`/`symbol` split, `lastReport` retained post-`withDsr`, `getLastReport()`, `renderReportMd` now calls `classifyEdge` via `SIGNIF_MD`) · `main/core/trading-engine.ts` (`getSelfEvalReport()`, null-safe in sim/replay) · `shared/ipc-channels.ts` (+`SELF_EVAL_REPORT_GET`) · `main/index.ts` (invoke-only register beside `CALIBRATION_GET`; **no** `_SET` sibling — recorded guardrail) · `preload/index.ts` (+`getSelfEvalReport`; `window.satex` type surface flows automatically via `SatexAPI = typeof satexApi`) · `renderer/lib/self-eval-edge.ts` **new** (pure: `rankTopByDsr` nulls-last DSR→PSR→Sharpe, `verdictCounts`, `fmtDsr` — `n/a` for null, never a fabricated 0%) + `self-eval-edge.test.ts` **new** (13) · `panels/DisciplinePanel.tsx` (EDGE block, 60s poll, `clearInterval`+`cancelled` on unmount — PR #6 lesson; explicit cold-boot copy) · `globals.css` (+`.bb-disc-edge-*`, single-class selectors, bounded `overflow-y: auto` rows region per the §6 overflow concern).
+- **Observational wall (§3.6 invariant 3), enforced as planned:** the channel is invoke-only returning data; no setter exists; significance numbers reach a display surface only — no path to an order, a size, or an autonomy multiplier. Zero broker-facet, risk, execution, or interlock contact.
+- **Gates (2026-07-13, in-sandbox Node 22.22.3, branch `feat/discipline-edge` off `master` @ 32ceccd):** typecheck (node+web) exit 0 · `eslint src tests` exit 0 · vitest segmented exact-cover **127 files / 1,686 tests / 0 fail** (9 invocations under the 45s sandbox call ceiling; baseline 1,668 + 18 new: 5 `edge-verdict`, 13 `self-eval-edge`, +3 in `self-eval.test.ts` net of reuse) · knip not sandbox-runnable (P-097 oxc-parser ArrayBuffer crash under Node 22 reproduced this session) — CI (Node 20.19) is the arbiter; static pre-audit clean: every new export has a named consumer (`classifyEdge` ← self-eval + tests; DTO types ← engine/preload/panel; selector fns ← panel + tests), internal helpers (`numDesc`, `cmpEdge`, `CONFIDENCE_BAR`, `SIGNIF_MD`) unexported. All touched files byte-verified post-write (NUL sweep + tail check, P-099 hazard) — clean; all writes via bash-mount per the P-099 ruling.
+- **Status:** SHIPPED to branch, gates green. Held for operator sign-off per AGENTS.md (engine + IPC surface = trading-engine-adjacent). Remaining T9 half: the **live-render check** (launch app → Settings → Run Self-Eval Now → confirm EDGE rows render and fit the panel height) needs the operator's real hardware — sandbox has no display; ledger this VERIFIED only after that check + CI green.
+
+---
+
 ### P-100 · Calibration + self-eval intelligence is computed and thrown away — no cockpit surface shows the operator their own earned psychological state — SHIPPED (branch `feat/discipline-panel`, gates green, awaiting operator sign-off)
 - **Problem:** `calibration.ts` computes a Brier score, a reliability curve, and a downgrade-only confidence multiplier (Mark Douglas's probabilistic mindset — conviction can only be scaled down, never up); `self-eval.ts` (P-096, SHIPPED 2026-07-10) grades every strategy by statistically-significant expectancy rather than raw Sharpe (Van Tharp's edge-over-win-rate doctrine); CONSTITUTION §3.6 prescribes the loss/win classification every Market Wizard describes. All three are real, already computed, and already IPC-exposed to the renderer (`getCalibration`, `getSelfEvalStatus` both live in `preload/index.ts` and consumed today by `AIInsightsPanel`) — but no cockpit surface renders them as a trader's psychological state. Verified against the operator's direction decision (`2026-07-13-flagship-direction-decision.md`, "The Conviction Layer") before building: confirmed both data bridges cross the perimeter already, so a read-only panel needs zero new IPC.
 - **Solutions:** (a) new **DISCIPLINE** panel — pure rendering of calibration/self-eval/risk into an earned-conviction readout, zero perimeter contact, safe to build same-session as a live open; (b) extend `pattern-learner.ts` to implement §3.6 classification first, then build the panel on top — rejected for *this* slice: touches the learning core, requires a plan + human sign-off per §2.7, and would have delayed a zero-risk win behind a risk-bearing one for no reason; (c) surface the raw per-strategy PSR/DSR expectancy (the report-file numbers, not just run status) in v1 — rejected: those figures live only in the nightly report *file*, not in `SelfEvalStatus`: doing so needs a new read-only IPC to parse the report, which is perimeter-contact work that belongs on the after-bell branch, not the pre-open window.
@@ -2738,62 +2749,4 @@ updated: 2026-07-13
   rest operator-gated). → PSD rule 2(d): audited the pure chart-indicator layer vs master.
 - **Audit verdict:** ema/rsi/fibonacci/pivot-points/swing-points are defensively written (guards on
   empty/period/range). One real **live** off-perimeter defect found and fixed: **P-034** — the
-  double-top/bottom symmetry denominator divided by a signed anchor price, bypassing the tolerance
-  gate for negative-priced instruments. Verified empirically before coding (`/tmp/satex-agent-repro.mjs`).
-- **Shipped (autonomous, off-perimeter):** P-034 (fix + 4 regression tests). 96/1210 → 96/1214.
-- **Gates (working tree @ e158e48 + edits):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest
-  96 files / 1214 tests / 0 fail (sharded 8x: 181+127+197+196+151+110+114+138) | knip exit 0 (Node-20
-  shim; 29 pre-existing unused-type warnings, none from this change). Handoff:
-  `Vault/Daily/2026-06-27-agent-handoff.md`.
-- **Approval nodes flagged for operator:** none new. Standing: P-028 (payout zero-target ruling),
-  P-022 (`git rm` 81 stale flat services), P-018b (.git hygiene — config repaired this session, but the
-  stale `index.lock` litter persists), P-007/009/014/020, and the uncommitted P-024→P-034 + L1.F backlog
-  awaiting commit / human sign-off.
-- **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git add / commit).
-
-### Session: 2026-06-26 work-layer (finisher / execution layer)
-- **Boot:** feat/d10-funded-account @ e158e48; read AGENTS / ARCHITECTURE / ledger + the 2026-06-26
-  daily handoff and its blueprint
-  (`docs/superpowers/specs/2026-06-26-vol-heatmap-maxspread-crash-ultraplan.md`). Daily had shipped
-  P-027 and left two specced coverage pins (REMAINING-1/2) + one deferred dead-code note
-  (REMAINING-3). Independently verified the P-027 fix (loop == `max(1e-10, max(arr))`, in-bounds,
-  NUL-clean) - correct.
-- **Baseline (own run):** typecheck exit 0 | lint exit 0 (0 warnings).
-- **Blueprint execution:** P-031 `computeVolSurfaceHistory` (+4) and P-032 `emaCrossPipeline` (+3)
-  pinned, test-append only; specs re-verified against source before asserting.
-- **Code audit (rule 4):** (1) confirmed the `Math.max(...spread)` defect class is fully contained -
-  a repo-wide sweep returns only P-029's bounded-safe sites + my own P-027 comment. (2) Actioned
-  REMAINING-3 as **P-030** - removed the dead `intervals` array from `tickVelocitySeries`
-  (gate-invisible O(n) waste on the hot path; behavior-identical, test-pinned). (3) `regime.ts`
-  (live-decision HMM classifier) had zero coverage; service is defensively written (no logic bug), so
-  pinned it as **P-033** (new `regime.test.ts`, +8), new-file only.
-- **Shipped (autonomous, all off the execution perimeter):** P-030 (fix), P-031 / P-032 / P-033
-  (coverage). +1 test file, +15 tests (95/1195 -> 96/1210).
-- **Gates (working tree @ e158e48 + edits):** typecheck exit 0 | lint exit 0 (0 warnings) | vitest
-  96 files / 1210 tests / 0 fail (sharded 8x: 181+127+197+196+147+110+114+138) | knip exit 0 (Node-20
-  shim; 29 pre-existing unused-type warnings, none from this change).
-- **Approval nodes flagged for operator:** P-028 (payout-metrics zero-target contradiction - product
-  ruling); standing items unchanged (P-022 git rm, P-018b hygiene, P-007/009/014/020, and the
-  uncommitted P-024/025/026 + L1.F backlog awaiting commit / sign-off).
-- **Status:** Session complete - all changes UNSTAGED per AGENTS.md (no git add / commit).
-
-### Session: 2026-06-26 daily PSD (planner / first executor)
-- **Boot:** feat/d10-funded-account @ e158e48 (not master); no `Vault/Daily/*-agent-handoff.md`
-  existed; the 2026-06-25 work-layer HELD (planner concurrency) and shipped nothing. Read
-  AGENTS/ARCHITECTURE/ledger + the 2026-06-25 work-layer run. Off-perimeter DECIDED queue empty
-  (all entries operator-gated or self-deferred) -> PSD rule 2(d): audited the branch vs master
-  (merge-base 461f4b0; +124 files / +15,223 lines).
-- **Audit verdict:** the new CHART/D.10 modules (`webgl/`, `chart-indicators/`, `funded/`) are
-  high-quality and well-tested. One real off-perimeter defect found and fixed (P-027). Two notes:
-  - **P-028** (payout-metrics zero-target contradiction) -> OPEN, operator ruling.
-  - **P-029 (audit note, no action):** the other `Math.max(...spread)` sites — `Sparkline.tsx:18`,
-    `ChartPanel.tsx:1233-1234` (visible view), `FundedAccountPanel.tsx:69-70`,
-    `PortfolioMiniPanel.tsx:54,77-78`, `chart-types.ts:128-129` (line-break window <= N),
-    `main/index.ts:578` — all operate on **bounded** arrays and are safe. Documented so they are not
-    re-flagged; only the unbounded per-candle vol-heatmap case was a real risk.
-- **Shipped (autonomous, off-perimeter):** P-027 (see Shipped section). Blueprint:
-  `docs/superpowers/specs/2026-06-26-vol-heatmap-maxspread-crash-ultraplan.md`.
-- **Gates (working tree @ e158e48 + P-027 edits):** typecheck exit 0 | lint exit 0 (0 warn) | vitest
-  95 files / 1195 tests / 0 fail | knip exit 0 (Node-20 shim). Handoff:
-  `Vault/Daily/2026-06-26-agent-handoff.md`.
-- **Status:** Session complete — all changes UNSTAGED per AGENTS.md (no git 
+  double-top/bottom symmetry denominator divided by a

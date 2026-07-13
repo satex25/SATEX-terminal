@@ -55,6 +55,7 @@ export const IPC = {
   SELF_EVAL_GET:      'satex:selfeval:get',
   SELF_EVAL_SET:      'satex:selfeval:set',
   SELF_EVAL_RUN:      'satex:selfeval:run',
+  SELF_EVAL_REPORT_GET: 'satex:selfeval:report:get',
 
   // THE WIRE — live world-news desk (main-side RSS poller)
   WIRE_GET:           'satex:wire:get',
