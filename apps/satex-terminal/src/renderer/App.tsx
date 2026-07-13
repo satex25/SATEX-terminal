@@ -37,7 +37,7 @@ import { TacticsModal } from './components/modals/TacticsModal'
 import { IndicatorsModal } from './components/modals/IndicatorsModal'
 import { ExitReflectionModal } from './components/modals/ExitReflectionModal'
 import { UpdateToast } from './components/UpdateToast'
-import { SplashIntro } from './components/SplashIntro'
+import { BootIntroSequence } from './components/intro/BootIntroSequence'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useIndicatorStore } from './stores/indicatorStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
@@ -279,7 +279,17 @@ export default function App() {
 
   return (
     <div className="bb-app">
-      {!splashDone && <SplashIntro onComplete={() => setSplashDone(true)} />}
+      {/* Cold-boot intro — standby gate → 8.2s boot ceremony (design:
+          `SATEX Intro.dc.html`). Renderer-only overlay: the terminal keeps
+          rendering/warming underneath and mounts when the ceremony's
+          integrated dissolve completes. OPTIONS on the gate opens Settings. */}
+      {!splashDone && (
+        <BootIntroSequence
+          onComplete={() => setSplashDone(true)}
+          onOptions={() => setModal('settings')}
+          holdKeys={modal !== null || cmdOpen || tweaksOpen}
+        />
+      )}
       <TopBar
         onCmd={() => setCmdOpen(true)}
         onOpenModal={setModal}
