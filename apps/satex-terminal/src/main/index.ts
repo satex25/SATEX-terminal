@@ -801,6 +801,7 @@ function registerIpcHandlers(): void {
   register(IPC.SELF_EVAL_GET, () => engine.getSelfEvalStatus())
   register(IPC.SELF_EVAL_SET, validated(SelfEvalSetReq, (req) => engine.setSelfEvalEnabled(req.enabled)))
   register(IPC.SELF_EVAL_RUN, () => engine.runSelfEvalNow())
+  register(IPC.SELF_EVAL_REPORT_GET, () => engine.getSelfEvalReport())
   register(IPC.WIRE_GET, () => wire.snapshot())
   register(IPC.WIRE_SET, validated(WireSetReq, (req) => wire.setEnabled(req.enabled)))
 

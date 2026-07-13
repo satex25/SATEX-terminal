@@ -4,7 +4,8 @@ import type { Strategy, StrategySnapshot } from '../backtest/strategy'
 import type { BacktestReport } from '@shared/backtest/types'
 import type { Candle, StrategySignal } from '@shared/types'
 import { barReturns } from '@shared/backtest/metrics'
-import { significanceFromReturns } from '@shared/backtest/significance'
+import { significanceFromReturns, type SignificanceMetrics } from '@shared/backtest/significance'
+import { classifyEdge } from '@shared/backtest/edge-verdict'
 
 /** Deterministic up-trending tape: a long entry + bracket resolution is
  *  guaranteed for the always-long strategy below. */
@@ -222,6 +223,26 @@ describe('significance columns (P-096)', () => {
     expect(md).not.toContain('NaN')
   })
 
+  it('Signif. labels are pinned to classifyEdge verdicts (extraction characterization)', () => {
+    const report = fakeReport()
+    const mk = (psr: number | null, dsr: number | null): SignificanceMetrics => ({
+      n: 500, perObsSharpe: 0.1, skew: 0, kurtosis: 3, psr, dsr, minTRL: 100, nTrials: 3,
+    })
+    const md = renderReportMd({
+      ts: Date.parse('2026-06-10T02:30:00Z'),
+      rows: [
+        { key: 'a · X', report, status: 'ok', violations: [], sig: mk(0.99, 0.99) },
+        { key: 'b · X', report, status: 'ok', violations: [], sig: mk(0.99, 0.5) },
+        { key: 'c · X', report, status: 'ok', violations: [], sig: mk(0.5, null) },
+      ],
+      skipped: [],
+    })
+    const lines = md.split('\n')
+    expect(cells(lines.find(l => l.startsWith('| a · X'))!)[7]).toBe('✅ real')
+    expect(cells(lines.find(l => l.startsWith('| b · X'))!)[7]).toBe('⚠️ selection-risk')
+    expect(cells(lines.find(l => l.startsWith('| c · X'))!)[7]).toBe('🔬 noise-band')
+  })
+
   it('multi-row run: every row DSR <= PSR (multiple-testing deflation)', async () => {
     // Two symbols on different tapes -> different per-obs Sharpes -> varSR > 0.
     const deps = makeDeps({
@@ -243,6 +264,37 @@ describe('significance columns (P-096)', () => {
       expect(Number.isFinite(dsr)).toBe(true)
       expect(dsr).toBeLessThanOrEqual(psr)
     }
+  })
+})
+
+describe('getLastReport (Track B — EDGE surface)', () => {
+  it('is null before any run and populated with split strategy/symbol after', async () => {
+    const deps = makeDeps()
+    const svc = new SelfEvalService(deps)
+    expect(svc.getLastReport()).toBeNull()
+    const res = await svc.runOnce()
+    const rep = svc.getLastReport()
+    expect(rep).not.toBeNull()
+    expect(rep!.generatedAt).toBe(res!.startedAt)
+    expect(rep!.trials).toBe(1)
+    expect(rep!.rows).toHaveLength(1)
+    const r = rep!.rows[0]!
+    expect(r.strategy).toBe('toy')
+    expect(r.symbol).toBe('NVDA')
+    expect(r.tradeCount).toBeGreaterThan(0)
+    expect(r.psr).not.toBeNull()
+  })
+
+  it('row verdicts match the ONE shared classifyEdge on every row', async () => {
+    const deps = makeDeps({
+      getWatchlist: () => ['NVDA', 'AMD'],
+      getCandles: async (s) => (s === 'NVDA' ? tape(300) : tape(300, 50)),
+    })
+    const svc = new SelfEvalService(deps)
+    await svc.runOnce()
+    const rep = svc.getLastReport()
+    expect(rep!.rows).toHaveLength(2)
+    for (const r of rep!.rows) expect(r.verdict).toBe(classifyEdge(r))
   })
 })
 

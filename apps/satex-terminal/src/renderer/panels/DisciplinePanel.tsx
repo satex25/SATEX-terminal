@@ -12,22 +12,29 @@
  * headless, unit-tested `lib/discipline.ts`; this file is the thin shell.
  */
 import { useEffect, useState } from 'react'
-import type { CalibrationSnapshot, SelfEvalStatus } from '@shared/types'
+import type { CalibrationSnapshot, EdgeVerdict, SelfEvalReport, SelfEvalStatus } from '@shared/types'
 import { useRiskGatesStore } from '../stores/riskGatesStore'
 import { PanelHead } from '../components/PanelHead'
 import {
   readConviction, readSelfAudit, composeDiscipline,
-  fmtMultiplier, fmtBrier,
+  fmtMultiplier, fmtBrier, fmtRelTime,
   type DisciplineTone, type RiskPosture,
 } from '../lib/discipline'
+import { rankTopByDsr, verdictCounts, fmtDsr } from '../lib/self-eval-edge'
 
 const toneVar: Record<DisciplineTone, string> = {
   pos: 'var(--bb-pos)', warn: 'var(--bb-warn)', neg: 'var(--bb-neg)', mute: 'var(--bb-txt-dim)',
 }
 
+/** EDGE verdict → dot tone (real=earned, selection-risk=caution, noise=dim). */
+const edgeToneVar: Record<EdgeVerdict, string> = {
+  'real': 'var(--bb-pos)', 'selection-risk': 'var(--bb-warn)', 'noise': 'var(--bb-txt-dim)',
+}
+
 export function DisciplinePanel() {
   const [calib, setCalib] = useState<CalibrationSnapshot | null>(null)
   const [selfEval, setSelfEval] = useState<SelfEvalStatus | null>(null)
+  const [edgeReport, setEdgeReport] = useState<SelfEvalReport | null>(null)
   const riskSnap = useRiskGatesStore(s => s.snapshot)
 
   // Calibration health — global, light 30s cadence (mirrors AIInsightsPanel).
@@ -50,6 +57,17 @@ export function DisciplinePanel() {
     return () => { cancelled = true; clearInterval(id) }
   }, [])
 
+  // EDGE report — same daily-change cadence as the audit status. Read-only
+  // channel; cleanup on unmount is mandatory (PR #6 leak lesson).
+  useEffect(() => {
+    if (!window.satex?.getSelfEvalReport) return
+    let cancelled = false
+    const pull = () => { window.satex.getSelfEvalReport().then(r => { if (!cancelled) setEdgeReport(r) }).catch(() => {}) }
+    pull()
+    const id = setInterval(pull, 60000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
   const now = Date.now()
   const conviction = readConviction(calib)
   const audit = readSelfAudit(selfEval, now)
@@ -57,6 +75,11 @@ export function DisciplinePanel() {
     ? { breaching: riskSnap.breachingCount, watching: riskSnap.watchingCount, passing: riskSnap.passingCount }
     : null
   const composite = composeDiscipline(conviction, audit, posture)
+
+  // EDGE block — which of our own strategies carry a statistically real edge.
+  const edgeTop = rankTopByDsr(edgeReport)
+  const edgeCounts = verdictCounts(edgeReport)
+  const edgeAge = edgeReport ? fmtRelTime(now - edgeReport.generatedAt) : null
 
   // The signature meter: solid = earned conviction, hatch = confidence handed
   // back to humility. Dormant (dashed, no fill) until the sample is real.
@@ -119,6 +142,39 @@ export function DisciplinePanel() {
               <span className="bb-disc-row-dot" style={{ background: toneVar[risk.tone] }} />
               <span className="bb-disc-row-label">RISK</span>
               <span className="bb-disc-row-detail">{risk.detail}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="bb-disc-edge">
+          <div className="bb-disc-edge-head">
+            <span className="bb-disc-row-label">EDGE</span>
+            {edgeReport && (
+              <span
+                className="bb-disc-edge-counts"
+                title={`Nightly self-eval verdicts across ${edgeReport.trials} trials — report ${edgeAge}`}
+              >
+                {edgeCounts.real} real · {edgeCounts.selectionRisk} selection-risk · {edgeCounts.noise} noise · {edgeAge}
+              </span>
+            )}
+          </div>
+          {edgeTop.length > 0 ? (
+            <div className="bb-disc-edge-rows">
+              {edgeTop.map(r => (
+                <div className="bb-disc-edge-row" key={`${r.strategy} · ${r.symbol}`}>
+                  <span className="bb-disc-row-dot" style={{ background: edgeToneVar[r.verdict] }} />
+                  <span className="bb-disc-edge-name" title={`${r.strategy} · ${r.symbol} — ${r.verdict}`}>
+                    {r.strategy} · {r.symbol}
+                  </span>
+                  <span className="bb-disc-edge-dsr">{fmtDsr(r.dsr)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="bb-disc-edge-empty">
+              {edgeReport
+                ? 'No qualifying runs — all symbols skipped.'
+                : 'No self-eval yet — runs nightly 02:30, or trigger in Settings.'}
             </div>
           )}
         </div>

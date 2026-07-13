@@ -46,7 +46,7 @@ import type {
   VaultCheckpointRequest,
   ReplayStatus, ReplayStartRequest, ReplayBookmark, ReplayableSession,
   HistoricalImportRequest, HistoricalImportResult, HistoricalBarsRequest, HistoricalBarsResult,
-  ClosedTrade, JournalTag, Trade, CalibrationSnapshot, SelfEvalStatus, BrainParameter,
+  ClosedTrade, JournalTag, Trade, CalibrationSnapshot, SelfEvalStatus, SelfEvalReport, BrainParameter,
 } from '@shared/types'
 import { shortId } from '../services/id-generator'
 import { createLogger, configureLogger } from '../services/logger'
@@ -1574,6 +1574,11 @@ export class TradingEngine {
       } : null,
     }
   }
+
+  /** Last self-eval report rows (P-096 PSR/DSR) for the DISCIPLINE panel
+   *  EDGE block. Read-only; null until the first run (or in sim/replay
+   *  boots where self-eval is not constructed). */
+  getSelfEvalReport(): SelfEvalReport | null { return this.selfEval?.getLastReport() ?? null }
 
   setSelfEvalEnabled(enabled: boolean): SelfEvalStatus {
     storeSetSelfEvalEnabled(enabled)
