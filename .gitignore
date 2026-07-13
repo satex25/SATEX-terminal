@@ -165,3 +165,18 @@ electron.vite.config.*.mjs
 # Playwright / perf-canary output
 playwright-results/
 test-results/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P-098 boot-intro design handoff — the operator's design-canvas exports and
+# working artifacts, kept on disk as design provenance (ledger P-098 references
+# them at repo root) but never committed. The implementation shipped in PR #36;
+# these are the source mockups/recordings it was built from.
+# ─────────────────────────────────────────────────────────────────────────────
+/*.dc.html
+/SATEX Intro (standalone).html
+/FABLE5-IMPLEMENTATION-BRIEF.md
+/support.js
+/.thumbnail
+/*.bundle.lock
+/Terminal intro screen rework.zip
+/uploads/
