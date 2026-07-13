@@ -51,7 +51,7 @@ export type Workspace = (typeof WORKSPACE_TABS)[number]
  *  wrapping an existing read-only panel in `App.tsx`'s Quad/global shell —
  *  collapsing one yields its grid track back to its flexible sibling (never a
  *  dead gutter). View state only; routes no order. */
-export const RAIL_IDS = ['watchlist', 'depth', 'regime', 'exec', 'news', 'risk', 'logs', 'health'] as const
+export const RAIL_IDS = ['watchlist', 'depth', 'regime', 'exec', 'news', 'risk', 'discipline', 'logs', 'health'] as const
 export type RailId = (typeof RAIL_IDS)[number]
 
 export interface WorkspaceState {
