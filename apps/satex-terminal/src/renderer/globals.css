@@ -2886,6 +2886,20 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .bb-disc-row-label { font-size: var(--text-xs); letter-spacing: 0.14em; color: var(--bb-txt-mute); width: 46px; flex: none; }
 .bb-disc-row-detail { font-size: var(--text-sm); color: var(--bb-txt-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---- Discipline · EDGE (P-096 significance surface, Track B) --------- */
+.bb-disc-edge { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.bb-disc-edge-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.bb-disc-edge-counts {
+  font-size: var(--text-xs); letter-spacing: 0.03em; color: var(--bb-txt-dim);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.bb-disc-edge-rows { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; min-height: 0; }
+.bb-disc-edge-row { display: flex; align-items: center; gap: 8px; }
+.bb-disc-edge-name { font-size: var(--text-sm); color: var(--bb-txt-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.bb-disc-edge-dsr { font-size: var(--text-sm); color: var(--bb-txt-dim); font-variant-numeric: tabular-nums; white-space: nowrap; flex: none; }
+.bb-disc-edge-empty { font-size: var(--text-xs); line-height: 1.4; color: var(--bb-txt-mute); }
+
 @media (prefers-reduced-motion: reduce) {
   .bb-disc-meter-fill, .bb-disc-meter-ghost, .bb-disc-meter-tick { transition: none; }
 }

@@ -23,11 +23,12 @@
  * All effects are injected (candles, clock, file IO) so the scheduling and
  * report logic are fully unit-testable without Electron, Alpaca, or a disk.
  */
-import type { Candle } from '@shared/types'
+import type { Candle, EdgeVerdict, SelfEvalReport } from '@shared/types'
 import type { BacktestReport, SignificanceMetrics } from '@shared/backtest/types'
 import { barReturns } from '@shared/backtest/metrics'
 import { compareReports, DEFAULT_TOLERANCES } from '@shared/backtest/regression'
 import { significanceFromReturns, withDsr } from '@shared/backtest/significance'
+import { classifyEdge } from '@shared/backtest/edge-verdict'
 import type { Strategy } from '../backtest/strategy'
 import { BacktestRunner } from '../backtest/runner'
 import { SpreadHalfPlusImpactModel } from '../backtest/slippage-model'
@@ -80,6 +81,14 @@ export function msUntilNext(hour: number, minute: number, now: Date): number {
 
 function fmtPct(x: number): string { return `${(x * 100).toFixed(1)}%` }
 
+/** Markdown labels per verdict. The verdict itself comes from the ONE shared
+ *  `classifyEdge`, so this table can never drift from the panel's rendering. */
+const SIGNIF_MD: Record<EdgeVerdict, string> = {
+  'real': '✅ real',
+  'selection-risk': '⚠️ selection-risk',
+  'noise': '🔬 noise-band',
+}
+
 /** Render the nightly verdict as vault-ready markdown. Exported for tests. */
 export function renderReportMd(args: {
   ts: number
@@ -114,9 +123,7 @@ export function renderReportMd(args: {
                   : `🔴 ${r.violations.join('; ')}`
     const pnl = r.report.endingEquity - r.report.startingEquity
     const { psr, dsr } = r.sig
-    const signif = dsr != null && dsr >= 0.95 ? '✅ real'
-                 : psr != null && psr >= 0.95 ? '⚠️ selection-risk'
-                 : '🔬 noise-band'
+    const signif = SIGNIF_MD[classifyEdge(r.sig)]
     const psrCell = psr == null ? 'n/a' : fmtPct(psr)
     const dsrCell = dsr == null ? 'n/a' : fmtPct(dsr)
     lines.push(`| ${r.key} | ${m.tradeCount} | ${fmtPct(m.hitRate)} | ${m.sharpe.toFixed(2)} | ${psrCell} | ${dsrCell} | ${signif} | ${fmtPct(m.maxDrawdown)} | $${pnl.toFixed(0)} | ${verdict} |`)
@@ -141,6 +148,7 @@ export class SelfEvalService {
   private timer: NodeJS.Timeout | null = null
   private running = false
   private lastResult: SelfEvalRunResult | null = null
+  private lastReport: SelfEvalReport | null = null
 
   constructor(
     private readonly deps: SelfEvalDeps,
@@ -161,6 +169,9 @@ export class SelfEvalService {
   isScheduled(): boolean { return this.timer !== null }
   isRunning(): boolean { return this.running }
   getLastResult(): SelfEvalRunResult | null { return this.lastResult }
+  /** Renderer-facing rows of the last completed run (Track B EDGE surface).
+   *  Read-only; bounded by watchlist × roster, so retaining one run is safe. */
+  getLastReport(): SelfEvalReport | null { return this.lastReport }
 
   private armNext(): void {
     const delay = msUntilNext(this.schedule.hour, this.schedule.minute, new Date(this.deps.now?.() ?? Date.now()))
@@ -180,7 +191,7 @@ export class SelfEvalService {
     this.running = true
     const startedAt = this.deps.now?.() ?? Date.now()
     try {
-      const rows: Array<{ key: string; report: BacktestReport; status: 'baselined' | 'ok' | 'regression'; violations: string[]; sig: SignificanceMetrics }> = []
+      const rows: Array<{ key: string; strategy: string; symbol: string; report: BacktestReport; status: 'baselined' | 'ok' | 'regression'; violations: string[]; sig: SignificanceMetrics }> = []
       const skipped: Array<{ symbol: string; reason: string }> = []
       let baselined = 0
       const regressions: Array<{ key: string; violations: string[] }> = []
@@ -213,13 +224,13 @@ export class SelfEvalService {
           if (!baseline) {
             this.deps.writeBaseline(key, report)
             baselined++
-            rows.push({ key, report, status: 'baselined', violations: [], sig })
+            rows.push({ key, strategy: strategy.name, symbol, report, status: 'baselined', violations: [], sig })
           } else {
             const cmp = compareReports(baseline, report, DEFAULT_TOLERANCES)
             if (cmp.ok) {
-              rows.push({ key, report, status: 'ok', violations: [], sig })
+              rows.push({ key, strategy: strategy.name, symbol, report, status: 'ok', violations: [], sig })
             } else {
-              rows.push({ key, report, status: 'regression', violations: cmp.violations, sig })
+              rows.push({ key, strategy: strategy.name, symbol, report, status: 'regression', violations: cmp.violations, sig })
               regressions.push({ key, violations: cmp.violations })
             }
           }
@@ -230,6 +241,25 @@ export class SelfEvalService {
       // expected max-Sharpe under the null for THIS run's trial set (N = rows).
       const trialSRs = rows.map(r => r.sig.perObsSharpe).filter((x): x is number => x != null && Number.isFinite(x))
       rows.forEach(r => { r.sig = withDsr(r.sig, trialSRs) })
+
+      // Track B: retain the renderer-facing report (same rows, same verdicts
+      // as the markdown — classifyEdge is the single source of truth).
+      this.lastReport = {
+        generatedAt: startedAt,
+        trials: rows.length,
+        rows: rows.map(r => ({
+          strategy: r.strategy,
+          symbol: r.symbol,
+          tradeCount: r.report.metrics.tradeCount,
+          hitRate: r.report.metrics.hitRate,
+          sharpe: r.report.metrics.sharpe,
+          maxDrawdown: r.report.metrics.maxDrawdown,
+          psr: r.sig.psr,
+          dsr: r.sig.dsr,
+          minTRL: r.sig.minTRL,
+          verdict: classifyEdge(r.sig),
+        })),
+      }
 
       const finishedAt = this.deps.now?.() ?? Date.now()
       const stamp = new Date(startedAt)
