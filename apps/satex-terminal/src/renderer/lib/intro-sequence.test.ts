@@ -1,22 +1,24 @@
 /**
- * intro-sequence.ts — unit tests for the 4-frame boot intro state machine.
+ * intro-sequence.ts — unit tests for the standby-gate → boot-ceremony intro.
  *
- * Covers the full transition table (boot → enter → exit → next frame →
- * done), the no-skip rule for 1b–1d boots, the hold-on-enter rule (no
- * auto-replay), key filtering (bare modifiers and chords fall through so
- * the kill chord is never raced), and the tc/pct/clock formatters with
- * their degenerate-input guards.
+ * Covers the transition table (standby holds → key arms → 0.5s → 8.2s
+ * ceremony → done), the no-skip rule for arming/boot, key filtering (bare
+ * modifiers and chords fall through so the kill chord is never raced), the
+ * breathing-prompt cadence curve, and the UTC/session formatters with
+ * degenerate-input guards.
  */
 import { describe, expect, it } from 'vitest'
 import {
+  BREATH_INITIAL_DELAY_MS,
+  BREATH_SETTLE_MS,
+  BREATH_STEADY_CYCLE_MS,
   INITIAL_INTRO_STATE,
+  INTRO_ARM_MS,
   INTRO_BOOT_MS,
-  INTRO_EXIT_MS,
-  INTRO_FRAMES,
+  INTRO_BOOT_REDUCED_MS,
   advanceOnKey,
   advanceOnTimer,
-  fmtProgressPct,
-  fmtTimecode,
+  breathCycleMs,
   fmtUtcClock,
   fmtUtcDate,
   introAcceptsKey,
@@ -25,94 +27,63 @@ import {
   type IntroState,
 } from './intro-sequence'
 
-const s = (frame: IntroState['frame'], phase: IntroState['phase']): IntroState => ({ frame, phase })
+const s = (phase: IntroState['phase']): IntroState => ({ phase })
 
 describe('intro-sequence · transition table', () => {
-  it('starts on the splash frame in boot', () => {
-    expect(INITIAL_INTRO_STATE).toEqual(s('splash', 'boot'))
-    expect(INTRO_FRAMES).toEqual(['splash', 'masthead', 'tape', 'plate'])
+  it('starts on the standby gate', () => {
+    expect(INITIAL_INTRO_STATE).toEqual(s('standby'))
   })
 
-  it('splash completion (SplashIntro onComplete) advances to masthead boot', () => {
-    expect(advanceOnTimer(s('splash', 'boot'))).toEqual(s('masthead', 'boot'))
+  it('standby holds indefinitely — not timer-driven', () => {
+    expect(introTimerMs(s('standby'))).toBeNull()
+    expect(advanceOnTimer(s('standby'))).toBeNull()
   })
 
-  it('7s boot timers land on the enter hold for 1b–1d', () => {
-    expect(advanceOnTimer(s('masthead', 'boot'))).toEqual(s('masthead', 'enter'))
-    expect(advanceOnTimer(s('tape', 'boot'))).toEqual(s('tape', 'enter'))
-    expect(advanceOnTimer(s('plate', 'boot'))).toEqual(s('plate', 'enter'))
+  it('a key arms the gate; keys do nothing during arming/boot (no skip)', () => {
+    expect(advanceOnKey(s('standby'))).toEqual(s('arming'))
+    expect(advanceOnKey(s('arming'))).toBeNull()
+    expect(advanceOnKey(s('boot'))).toBeNull()
   })
 
-  it('exit timers chain to the next frame boot; the final exit finishes', () => {
-    expect(advanceOnTimer(s('masthead', 'exit'))).toEqual(s('tape', 'boot'))
-    expect(advanceOnTimer(s('tape', 'exit'))).toEqual(s('plate', 'boot'))
-    expect(advanceOnTimer(s('plate', 'exit'))).toBe('done')
+  it('arming runs 0.5s then boots; the ceremony runs 8.2s then finishes', () => {
+    expect(introTimerMs(s('arming'))).toBe(500)
+    expect(advanceOnTimer(s('arming'))).toEqual(s('boot'))
+    expect(introTimerMs(s('boot'))).toBe(8200)
+    expect(advanceOnTimer(s('boot'))).toBe('done')
   })
 
-  it('enter is not timer-driven (defensive no-op)', () => {
-    expect(advanceOnTimer(s('masthead', 'enter'))).toBeNull()
-    expect(advanceOnTimer(s('plate', 'enter'))).toBeNull()
+  it('reduced motion shortens only the ceremony', () => {
+    expect(introTimerMs(s('boot'), true)).toBe(INTRO_BOOT_REDUCED_MS)
+    expect(introTimerMs(s('arming'), true)).toBe(INTRO_ARM_MS)
+    expect(introTimerMs(s('standby'), true)).toBeNull()
   })
 
-  it('keypress advances only from the enter hold — boots always play fully (no skip)', () => {
-    expect(advanceOnKey(s('masthead', 'enter'))).toEqual(s('masthead', 'exit'))
-    expect(advanceOnKey(s('tape', 'enter'))).toEqual(s('tape', 'exit'))
-    expect(advanceOnKey(s('plate', 'enter'))).toEqual(s('plate', 'exit'))
-    expect(advanceOnKey(s('masthead', 'boot'))).toBeNull()
-    expect(advanceOnKey(s('tape', 'boot'))).toBeNull()
-    expect(advanceOnKey(s('plate', 'boot'))).toBeNull()
-    expect(advanceOnKey(s('masthead', 'exit'))).toBeNull()
-    // splash owns its own skip inside SplashIntro — never routed here
-    expect(advanceOnKey(s('splash', 'boot'))).toBeNull()
+  it('constants stay in lockstep with the design (ARM 500 / BOOT 8200)', () => {
+    expect(INTRO_ARM_MS).toBe(500)
+    expect(INTRO_BOOT_MS).toBe(8200)
   })
 
-  it('the enter hold has no timeout — no auto-replay (mockup: "hold on the enter screen")', () => {
-    expect(introTimerMs(s('masthead', 'enter'))).toBeNull()
-    expect(introTimerMs(s('tape', 'enter'))).toBeNull()
-    expect(introTimerMs(s('plate', 'enter'))).toBeNull()
-  })
-
-  it('timer durations match the design spec (7.0s boots; 0.9/0.7/0.8s exits)', () => {
-    expect(introTimerMs(s('masthead', 'boot'))).toBe(7000)
-    expect(introTimerMs(s('tape', 'boot'))).toBe(7000)
-    expect(introTimerMs(s('plate', 'boot'))).toBe(7000)
-    expect(introTimerMs(s('masthead', 'exit'))).toBe(900)
-    expect(introTimerMs(s('tape', 'exit'))).toBe(700)
-    expect(introTimerMs(s('plate', 'exit'))).toBe(800)
-    // splash is self-timed by SplashIntro — the orchestrator sets no timer
-    expect(introTimerMs(s('splash', 'boot'))).toBeNull()
-  })
-
-  it('walks the whole scripted sequence: 3 keypresses, 23.4s of timers after the splash', () => {
-    let st: IntroState | 'done' | null = s('splash', 'boot')
-    let timered = 0
+  it('walks the whole flow: exactly one keypress, 8.7s of timers', () => {
+    let st: IntroState | 'done' | null = INITIAL_INTRO_STATE
     let keys = 0
+    let timered = 0
     const seen: string[] = []
-    for (let hops = 0; hops < 32 && st !== 'done'; hops++) {
+    for (let hops = 0; hops < 8 && st !== 'done'; hops++) {
       const cur = st as IntroState
-      seen.push(`${cur.frame}:${cur.phase}`)
-      if (cur.phase === 'enter') {
+      seen.push(cur.phase)
+      const ms = introTimerMs(cur)
+      if (ms === null) {
         st = advanceOnKey(cur)
         keys++
       } else {
-        timered += introTimerMs(cur) ?? 0
+        timered += ms
         st = advanceOnTimer(cur)
       }
     }
     expect(st).toBe('done')
-    expect(keys).toBe(3)
-    expect(timered).toBe(3 * 7000 + 900 + 700 + 800) // 23_400ms
-    expect(seen).toEqual([
-      'splash:boot',
-      'masthead:boot', 'masthead:enter', 'masthead:exit',
-      'tape:boot', 'tape:enter', 'tape:exit',
-      'plate:boot', 'plate:enter', 'plate:exit',
-    ])
-  })
-
-  it('constants stay in lockstep with the mockup', () => {
-    expect(INTRO_BOOT_MS).toEqual({ splash: 3200, masthead: 7000, tape: 7000, plate: 7000 })
-    expect(INTRO_EXIT_MS).toEqual({ splash: 0, masthead: 900, tape: 700, plate: 800 })
+    expect(keys).toBe(1)
+    expect(timered).toBe(500 + 8200)
+    expect(seen).toEqual(['standby', 'arming', 'boot'])
   })
 })
 
@@ -133,7 +104,7 @@ describe('intro-sequence · key filtering (kill-chord safety)', () => {
     expect(introAcceptsKey(ev('5'))).toBe(true)
   })
 
-  it('rejects bare modifiers (Shift held while reaching for the chord must not advance)', () => {
+  it('rejects bare modifiers', () => {
     for (const k of ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'AltGraph']) {
       expect(introAcceptsKey(ev(k))).toBe(false)
     }
@@ -144,43 +115,38 @@ describe('intro-sequence · key filtering (kill-chord safety)', () => {
     expect(introAcceptsKey(ev('k', { ctrlKey: true }))).toBe(false)
     expect(introAcceptsKey(ev('K', { ctrlKey: true }))).toBe(false)
     expect(introAcceptsKey(ev('1', { metaKey: true }))).toBe(false)
-    expect(introAcceptsKey(ev('d', { metaKey: true }))).toBe(false)
     expect(introAcceptsKey(ev('a', { altKey: true }))).toBe(false)
   })
 })
 
+describe('intro-sequence · breathing cadence', () => {
+  it('holds a steady 2.6s cycle for the first ~6s on the gate', () => {
+    expect(breathCycleMs(0, 0.5)).toBe(BREATH_STEADY_CYCLE_MS)
+    expect(breathCycleMs(2600, 0)).toBe(2600)
+    expect(breathCycleMs(BREATH_SETTLE_MS, 1)).toBe(2600)
+  })
+
+  it('drifts to a 3.2–5.4s randomized cycle after settling', () => {
+    expect(breathCycleMs(6001, 0)).toBe(3200)
+    expect(breathCycleMs(6001, 1)).toBe(5400)
+    expect(breathCycleMs(60_000, 0.5)).toBe(4300)
+  })
+
+  it('clamps degenerate rand inputs instead of exploding (P-040 class)', () => {
+    expect(breathCycleMs(10_000, -5)).toBe(3200)
+    expect(breathCycleMs(10_000, 99)).toBe(5400)
+  })
+
+  it('initial delay matches the design (prompt dark until the copy fades in)', () => {
+    expect(BREATH_INITIAL_DELAY_MS).toBe(1500)
+  })
+})
+
 describe('intro-sequence · formatters', () => {
-  it('fmtTimecode renders 25fps VHS timecode', () => {
-    expect(fmtTimecode(0)).toBe('00:00:00:00')
-    expect(fmtTimecode(39)).toBe('00:00:00:00')
-    expect(fmtTimecode(40)).toBe('00:00:00:01')
-    expect(fmtTimecode(999)).toBe('00:00:00:24')
-    expect(fmtTimecode(1000)).toBe('00:00:01:00')
-    expect(fmtTimecode(6960)).toBe('00:00:06:24')
-  })
-
-  it('fmtTimecode clamps to the boot window (default 7s) and to zero', () => {
-    expect(fmtTimecode(7000)).toBe('00:00:07:00')
-    expect(fmtTimecode(999_999)).toBe('00:00:07:00')
-    expect(fmtTimecode(-50)).toBe('00:00:00:00')
-    // explicit clamp: minutes roll over correctly
-    expect(fmtTimecode(61_000, 120_000)).toBe('00:01:01:00')
-  })
-
-  it('fmtProgressPct clamps 0–100 and guards degenerate totals (P-040 class)', () => {
-    expect(fmtProgressPct(0)).toBe('0%')
-    expect(fmtProgressPct(3500)).toBe('50%')
-    expect(fmtProgressPct(7000)).toBe('100%')
-    expect(fmtProgressPct(9999)).toBe('100%')
-    expect(fmtProgressPct(-100)).toBe('0%')
-    expect(fmtProgressPct(1000, 0)).toBe('100%')
-    expect(fmtProgressPct(1000, -5)).toBe('100%')
-  })
-
   it('fmtUtcClock / fmtUtcDate render zero-padded UTC', () => {
-    const d = new Date(Date.UTC(2026, 6, 12, 4, 7, 9)) // 2026-07-12 04:07:09Z
-    expect(fmtUtcClock(d)).toBe('04:07:09')
-    expect(fmtUtcDate(d)).toBe('2026-07-12')
+    const d = new Date(Date.UTC(2026, 6, 13, 6, 8, 41)) // matches the operator recording
+    expect(fmtUtcClock(d)).toBe('06:08:41')
+    expect(fmtUtcDate(d)).toBe('2026-07-13')
     const nye = new Date(Date.UTC(2025, 11, 31, 23, 59, 59))
     expect(fmtUtcClock(nye)).toBe('23:59:59')
     expect(fmtUtcDate(nye)).toBe('2025-12-31')
@@ -194,8 +160,6 @@ describe('intro-sequence · formatters', () => {
     expect(sessionLabel(13)).toBe('NEW YORK')
     expect(sessionLabel(21)).toBe('NEW YORK')
     expect(sessionLabel(22)).toBe('TOKYO')
-    expect(sessionLabel(23)).toBe('TOKYO')
-    // degenerate inputs normalize instead of exploding
     expect(sessionLabel(24)).toBe('TOKYO')
     expect(sessionLabel(-1)).toBe('TOKYO')
     expect(sessionLabel(13.9)).toBe('NEW YORK')

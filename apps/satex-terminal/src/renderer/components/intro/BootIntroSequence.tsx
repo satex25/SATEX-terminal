@@ -1,43 +1,41 @@
 /**
- * SATEX — Cold-boot intro rework: 4-frame branded boot sequence.
+ * SATEX — Cold-boot intro: STANDBY GATE → BOOT CEREMONY.
  *
- *   1a SplashIntro (existing component, ~3.2s, skippable)
- *   1b Masthead    (7.0s film title  → hold on PRESS ANY KEY → dissolve)
- *   1c Tape Head   (7.0s VHS plate   → hold → CRT collapse)
- *   1d System Plate(7.0s Swiss plate → hold → hairline wipe)
+ *   standby — framed gate plate, breathing PRESS ANY KEY (holds forever)
+ *   arming  — 0.5s fade to black on keypress/click
+ *   boot    — 8.2s ceremonial reveal with integrated dissolve
+ *   done    — overlay unmounts; the already-warm terminal is revealed
  *
  * Pure renderer overlay — the terminal renders and warms up underneath the
- * whole time (same mount strategy as the old single-frame splash), so
- * completion is just `onComplete()` up to App; no IPC, no main-process
- * coupling. All transition logic lives headless in lib/intro-sequence.ts.
+ * whole time; completion is just `onComplete()` up to App. No IPC, no
+ * main-process coupling. Transition logic lives headless in
+ * lib/intro-sequence.ts; the design stage is a fixed 1920×1080 plate scaled
+ * to fit the window (design behavior, works at any size).
  *
  * Constraints honored:
- *   - CSP `script-src 'self'` — all motion is CSS keyframes.
+ *   - CSP `script-src 'self'` — motion is CSS keyframes; the breathing
+ *     prompt is a JS-driven opacity/transition pair (style attr only).
  *   - Kill chord stays reachable (P-044 lineage): the keydown listener
- *     ignores bare modifiers and chorded presses, and never calls
- *     preventDefault/stopPropagation, so App's global shortcuts (⌘⇧K arm,
- *     ⌘K palette, …) receive every event untouched.
- *   - `prefers-reduced-motion` → only frame 1a's fast fade plays; 1b–1d
- *     are skipped entirely (no 21s of mandatory plates for reduced-motion
- *     users).
- *   - Every timer/interval/listener is cleaned in its own effect scope
- *     (the repo's recidivist leak class — PR #6, P-041/P-043/P-046).
+ *     ignores bare modifiers and chords, and never calls preventDefault /
+ *     stopPropagation — App's global shortcuts receive every event.
+ *   - `prefers-reduced-motion` → the gate renders at end-state (CSS) and
+ *     the ceremony collapses to a 0.9s fade (INTRO_BOOT_REDUCED_MS).
+ *   - Every timer/interval/listener cleans up in its own effect scope
+ *     (PR #6 / P-041/P-043/P-046 leak class).
  *   - Fires `onComplete` exactly once.
  *
- * Design source of truth: `Intro Rework.dc.html` (repo root).
+ * Design source of truth: `SATEX Intro.dc.html` + the operator's
+ * 2026-07-13 recording (frame-verified).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SplashIntro } from '../SplashIntro'
-import { MastheadFrame } from './MastheadFrame'
-import { TapeHeadFrame } from './TapeHeadFrame'
-import { SystemPlateFrame } from './SystemPlateFrame'
+import { StandbyGateFrame } from './StandbyGateFrame'
+import { BootCeremonyFrame } from './BootCeremonyFrame'
 import {
+  BREATH_INITIAL_DELAY_MS,
   INITIAL_INTRO_STATE,
-  INTRO_BOOT_MS,
   advanceOnKey,
   advanceOnTimer,
-  fmtProgressPct,
-  fmtTimecode,
+  breathCycleMs,
   fmtUtcClock,
   fmtUtcDate,
   introAcceptsKey,
@@ -46,129 +44,142 @@ import {
   type IntroState,
 } from '../../lib/intro-sequence'
 
-/** Text-update cadence for the live UTC clock / timecode / percent readouts. */
-const TICK_MS = 200
+/** Live clock cadence (design ticks utc/date every 500ms). */
+const CLOCK_TICK_MS = 500
+const STAGE_W = 1920
+const STAGE_H = 1080
 
 interface BootIntroSequenceProps {
   onComplete: () => void
-  /** Scanline texture on frames 1b–1d. Defaults on (future Settings toggle). */
-  scanlines?: boolean
-  /** Version stamp on the plates. Source of truth: package.json `version`. */
+  /** Opens Settings from the gate's OPTIONS button (button hidden if absent). */
+  onOptions?: () => void
+  /**
+   * True while an App overlay (Settings via OPTIONS, palette, tweaks) is
+   * open above the gate — suspends PRESS-ANY-KEY so typing into that
+   * overlay can never arm the boot.
+   */
+  holdKeys?: boolean
+  /** Version stamp on the ceremony credits. Source: package.json `version`. */
   version?: string
 }
 
-export function BootIntroSequence({
-  onComplete,
-  scanlines = true,
-  version = '0.5.0',
-}: BootIntroSequenceProps) {
+export function BootIntroSequence({ onComplete, onOptions, holdKeys = false, version = '0.5.0' }: BootIntroSequenceProps) {
   const [state, setState] = useState<IntroState>(INITIAL_INTRO_STATE)
   const [utc, setUtc] = useState(() => fmtUtcClock(new Date()))
-  const [date, setDate] = useState(() => fmtUtcDate(new Date()))
+  const [dateStr, setDateStr] = useState(() => fmtUtcDate(new Date()))
   const [session, setSession] = useState(() => sessionLabel(new Date().getUTCHours()))
-  const [tc, setTc] = useState('00:00:00:00')
-  const [pct, setPct] = useState('0%')
+  const [scale, setScale] = useState(() =>
+    Math.min(window.innerWidth / STAGE_W, window.innerHeight / STAGE_H)
+  )
+  const [breath, setBreath] = useState({ opacity: 0, fadeMs: 1300 })
 
   const doneRef = useRef(false)
-  const frameStartRef = useRef(Date.now())
   const reduceRef = useRef<boolean>(
     window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
   )
 
-  const apply = useCallback(
-    (next: IntroState | 'done' | null): void => {
-      if (next === null) return
-      if (next === 'done') {
-        if (doneRef.current) return
-        doneRef.current = true
-        onComplete()
-        return
-      }
-      setState(next)
-    },
-    [onComplete]
-  )
-
-  // Frame stopwatch — restarts whenever a new frame mounts. Drives the 1c
-  // timecode and 1d percent readouts.
+  // App passes `onComplete` as an inline arrow, so its identity changes on
+  // every App re-render. Route it through a ref so `apply` stays stable —
+  // otherwise the phase-timer effect below would tear down and RESTART the
+  // 8.2s ceremony timer on every App render (in Electron the engine
+  // re-renders App constantly, so the intro would never finish).
+  const onCompleteRef = useRef(onComplete)
   useEffect(() => {
-    frameStartRef.current = Date.now()
-  }, [state.frame])
+    onCompleteRef.current = onComplete
+  }, [onComplete])
 
-  // Timer-driven transitions: boot → enter, exit → next frame. `enter`
-  // returns null (holds indefinitely for a key); the splash frame is driven
-  // by SplashIntro's own onComplete instead.
+  const apply = useCallback((next: IntroState | 'done' | null): void => {
+    if (next === null) return
+    if (next === 'done') {
+      if (doneRef.current) return
+      doneRef.current = true
+      onCompleteRef.current()
+      return
+    }
+    setState(next)
+  }, [])
+
+  // Phase timers: arming 0.5s → boot; boot 8.2s → done. Standby holds.
   useEffect(() => {
-    const ms = introTimerMs(state)
+    const ms = introTimerMs(state, reduceRef.current)
     if (ms === null) return
     const t = window.setTimeout(() => apply(advanceOnTimer(state)), ms)
     return () => window.clearTimeout(t)
   }, [state, apply])
 
-  // Live text readouts (200ms cadence, mockup parity). tc/pct only advance
-  // during their frame's boot phase — the timecode freezes on READY.
+  // Live UTC clock / date / session line.
   useEffect(() => {
-    if (state.frame === 'splash') return
     const tick = (): void => {
       const now = new Date()
       setUtc(fmtUtcClock(now))
-      setDate(fmtUtcDate(now))
+      setDateStr(fmtUtcDate(now))
       setSession(sessionLabel(now.getUTCHours()))
-      if (state.phase === 'boot') {
-        const elapsed = Date.now() - frameStartRef.current
-        if (state.frame === 'tape') setTc(fmtTimecode(elapsed))
-        if (state.frame === 'plate') setPct(fmtProgressPct(elapsed))
-      }
     }
     tick()
-    const id = window.setInterval(tick, TICK_MS)
+    const id = window.setInterval(tick, CLOCK_TICK_MS)
     return () => window.clearInterval(id)
-  }, [state])
+  }, [])
 
-  // Snap readouts to their terminal values when a boot completes, so the
-  // hold screen never shows a 99% / one-tick-short timecode.
+  // Scale the fixed 1920×1080 design stage to fit the window.
   useEffect(() => {
-    if (state.phase === 'boot') return
-    if (state.frame === 'tape') setTc(fmtTimecode(INTRO_BOOT_MS.tape))
-    if (state.frame === 'plate') setPct('100%')
-  }, [state])
+    const onResize = (): void =>
+      setScale(Math.min(window.innerWidth / STAGE_W, window.innerHeight / STAGE_H))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
-  // PRESS ANY KEY — plain keys only, and only on the enter hold ("no skip"
-  // during boot is the operator's design call). Deliberately no
-  // preventDefault/stopPropagation: App's global handlers (kill chord ⌘⇧K
-  // included) must keep receiving every event.
+  // PRESS ANY KEY — arms the gate. Plain keys only; chords and bare
+  // modifiers fall through untouched (kill chord ⌘⇧K included), and we
+  // never preventDefault/stopPropagation.
   useEffect(() => {
-    if (state.frame === 'splash') return // SplashIntro owns its own skip key
+    if (state.phase !== 'standby' || holdKeys) return
     const onKey = (e: KeyboardEvent): void => {
       if (!introAcceptsKey(e)) return
       apply(advanceOnKey(state))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [state, apply])
+  }, [state, apply, holdKeys])
 
-  const onSplashComplete = useCallback((): void => {
-    // Reduced motion: SplashIntro already played its fast, glitch-free fade
-    // (its own contract) — skip the three 7s plates and hand over now.
-    if (reduceRef.current) {
-      apply('done')
-      return
+  // Breathing prompt: dark for 1.5s, steady 2.6s cycles for ~6s, then an
+  // unhurried randomized 3.2–5.4s drift (design: "unhurried, alive").
+  useEffect(() => {
+    if (state.phase !== 'standby') return
+    const start = Date.now()
+    let high = false
+    let t: number | undefined
+    const step = (): void => {
+      const half = breathCycleMs(Date.now() - start, Math.random()) / 2
+      high = !high
+      setBreath({ opacity: high ? 1 : 0.35, fadeMs: half })
+      t = window.setTimeout(step, half)
     }
-    apply(advanceOnTimer(INITIAL_INTRO_STATE))
-  }, [apply])
+    t = window.setTimeout(step, BREATH_INITIAL_DELAY_MS)
+    return () => window.clearTimeout(t)
+  }, [state.phase])
 
   return (
-    <div className="sxi" role="presentation" aria-hidden="true">
-      {state.frame === 'splash' && <SplashIntro onComplete={onSplashComplete} />}
-      {state.frame === 'masthead' && (
-        <MastheadFrame phase={state.phase} scanlines={scanlines} utc={utc} session={session} version={version} />
-      )}
-      {state.frame === 'tape' && (
-        <TapeHeadFrame phase={state.phase} scanlines={scanlines} tc={tc} date={date} session={session} version={version} />
-      )}
-      {state.frame === 'plate' && (
-        <SystemPlateFrame phase={state.phase} scanlines={scanlines} utc={utc} pct={pct} session={session} version={version} />
-      )}
+    <div className="sxg" role="presentation">
+      <div
+        className="sxg-stage"
+        style={{ transform: `translate(-50%, -50%) scale(${scale})` }}
+      >
+        {state.phase !== 'boot' && (
+          <StandbyGateFrame
+            arming={state.phase === 'arming'}
+            utc={utc}
+            dateStr={dateStr}
+            session={session}
+            breathOpacity={breath.opacity}
+            breathFadeMs={breath.fadeMs}
+            onArm={() => apply(advanceOnKey(state))}
+            onOptions={onOptions}
+          />
+        )}
+        {state.phase === 'boot' && (
+          <BootCeremonyFrame utc={utc} session={session} version={version} />
+        )}
+      </div>
     </div>
   )
 }

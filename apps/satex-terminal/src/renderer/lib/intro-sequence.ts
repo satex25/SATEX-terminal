@@ -1,106 +1,61 @@
 /**
- * SATEX — Cold-boot intro sequence state machine (headless).
+ * SATEX — Cold-boot intro state machine (headless).
  *
- * Pure logic for the 4-frame branded boot intro:
+ * The operator-approved boot flow (design source of truth:
+ * `SATEX Intro.dc.html` / `SATEX Intro (standalone).html`, verified
+ * frame-by-frame against the operator's 2026-07-13 recording):
  *
- *   splash (1a — the existing SplashIntro, self-timed ~3.2s, skippable)
- *   → masthead (1b — 7.0s film-title boot → hold on PRESS ANY KEY → 0.9s dissolve)
- *   → tape     (1c — 7.0s VHS boot → hold → 0.7s CRT collapse)
- *   → plate    (1d — 7.0s Swiss-plate boot → hold → 0.8s hairline wipe)
- *   → done (the terminal has been rendering underneath the whole time —
- *           the overlay simply unmounts).
+ *   standby — the STANDBY GATE: framed plate, live UTC/date, breathing
+ *             "PRESS ANY KEY TO CONTINUE". Holds indefinitely.
+ *   arming  — 0.5s fade to black after the keypress/click.
+ *   boot    — 8.2s ceremonial reveal (letters resolve → sweep → rule →
+ *             subtitle → credits) ending in an integrated dissolve (the
+ *             design's gvBootOut holds 0%→90.2%, then fades/scales out).
+ *   done    — the overlay unmounts; the already-warm terminal is revealed.
  *
- * Design source of truth: `Intro Rework.dc.html` (repo root). Frames 1b–1d
- * play their full 7.0s boot with no skip, then hold on the enter screen
- * until a plain keypress. There is deliberately no auto-replay: the
- * mockup's `autoReplay` prop is demo-canvas scaffolding ("run the full
- * 7.0s boot — no skip — then hold on the enter screen"), not product
- * behavior.
- *
- * Kept headless (no DOM, no React) so the transition table and formatters
- * are unit-testable under the node vitest environment — the same pattern
- * as `lib/rail-layout.ts`.
+ * One keypress total; the ceremony has no skip. Kept headless (no DOM, no
+ * React) so the transition table and formatters are unit-testable under the
+ * node vitest environment — the `rail-layout.ts` pattern.
  */
 
-type IntroFrame = 'splash' | 'masthead' | 'tape' | 'plate'
-export type IntroPhase = 'boot' | 'enter' | 'exit'
+export type IntroPhase = 'standby' | 'arming' | 'boot'
 
 export interface IntroState {
-  frame: IntroFrame
   phase: IntroPhase
 }
 
-/** Frame order of the boot sequence. */
-export const INTRO_FRAMES: readonly IntroFrame[] = ['splash', 'masthead', 'tape', 'plate'] as const
+/** Gate → black fade duration (design ARM_MS). */
+export const INTRO_ARM_MS = 500
+/** Ceremony duration incl. its integrated ~0.8s dissolve (design BOOT_MS). */
+export const INTRO_BOOT_MS = 8200
+/** Reduced-motion ceremony: a short fade instead of the 8.2s reveal. */
+export const INTRO_BOOT_REDUCED_MS = 900
+
+export const INITIAL_INTRO_STATE: IntroState = { phase: 'standby' }
 
 /**
- * Boot-phase duration per frame (ms). `splash` is informational only —
- * SplashIntro manages its own clock (3.2s full / 0.9s reduced-motion) and
- * reports completion via callback.
+ * How long the orchestrator waits in `state` before `advanceOnTimer`, or
+ * null when the state is not timer-driven (standby holds for a key/click).
  */
-export const INTRO_BOOT_MS: Readonly<Record<IntroFrame, number>> = {
-  splash: 3200,
-  masthead: 7000,
-  tape: 7000,
-  plate: 7000,
+export function introTimerMs(state: IntroState, reducedMotion = false): number | null {
+  if (state.phase === 'arming') return INTRO_ARM_MS
+  if (state.phase === 'boot') return reducedMotion ? INTRO_BOOT_REDUCED_MS : INTRO_BOOT_MS
+  return null
 }
 
-/** Exit-animation duration per frame (ms). `splash` exits inside SplashIntro. */
-export const INTRO_EXIT_MS: Readonly<Record<IntroFrame, number>> = {
-  splash: 0,
-  masthead: 900, // dissolve to black
-  tape: 700,     // CRT collapse (bars 0.34s, slit 0.7s)
-  plate: 800,    // hairline wipe
-}
-
-export const INITIAL_INTRO_STATE: IntroState = { frame: 'splash', phase: 'boot' }
-
-function nextFrame(frame: IntroFrame): IntroFrame | null {
-  const i = INTRO_FRAMES.indexOf(frame)
-  return i >= 0 && i + 1 < INTRO_FRAMES.length ? INTRO_FRAMES[i + 1]! : null
-}
-
-/**
- * How long the orchestrator should wait in `state` before calling
- * `advanceOnTimer`, or null when the state is not timer-driven:
- *   - splash boot/exit: SplashIntro's own `onComplete` drives the advance
- *   - enter: holds indefinitely for a keypress
- */
-export function introTimerMs(state: IntroState): number | null {
-  if (state.frame === 'splash') return null
-  if (state.phase === 'boot') return INTRO_BOOT_MS[state.frame]
-  if (state.phase === 'exit') return INTRO_EXIT_MS[state.frame]
-  return null // 'enter' holds for a key
-}
-
-/**
- * Timer elapsed (or, for the splash frame, SplashIntro completed): advance.
- * Returns the next state, `'done'` when the sequence has finished, or null
- * when the state is not timer-driven (defensive no-op).
- */
+/** Timer elapsed: arming → boot; boot → done. Standby is not timer-driven. */
 export function advanceOnTimer(state: IntroState): IntroState | 'done' | null {
-  if (state.phase === 'boot') {
-    if (state.frame === 'splash') {
-      const nf = nextFrame('splash')
-      return nf ? { frame: nf, phase: 'boot' } : 'done'
-    }
-    return { frame: state.frame, phase: 'enter' }
-  }
-  if (state.phase === 'exit') {
-    const nf = nextFrame(state.frame)
-    return nf ? { frame: nf, phase: 'boot' } : 'done'
-  }
+  if (state.phase === 'arming') return { phase: 'boot' }
+  if (state.phase === 'boot') return 'done'
   return null
 }
 
 /**
- * Keypress: only meaningful on the enter hold. The boot phase always plays
- * fully — "no skip" for 1b–1d is the operator's design call. The splash
- * frame handles its own skip internally, so it never routes through here.
+ * A plain key (or click) arms the gate. Nothing else: the arming fade and
+ * the ceremony deliberately cannot be skipped or re-triggered.
  */
 export function advanceOnKey(state: IntroState): IntroState | null {
-  if (state.frame === 'splash') return null
-  if (state.phase === 'enter') return { frame: state.frame, phase: 'exit' }
+  if (state.phase === 'standby') return { phase: 'arming' }
   return null
 }
 
@@ -124,29 +79,38 @@ export function introAcceptsKey(
   return !MODIFIER_KEYS.has(ev.key.toLowerCase())
 }
 
-/** 25fps VHS timecode for frame 1c: `00:MM:SS:FF`, clamped to the boot window. */
-export function fmtTimecode(elapsedMs: number, clampMs: number = INTRO_BOOT_MS.tape): string {
-  const ms = Math.max(0, Math.min(elapsedMs, clampMs))
-  const p = (n: number): string => String(n).padStart(2, '0')
-  const s = Math.floor(ms / 1000)
-  const f = Math.floor((ms % 1000) / 40) // 25 fps → 40ms per tape frame
-  return `00:${p(Math.floor(s / 60))}:${p(s % 60)}:${p(f)}`
+/* ── breathing prompt cadence (design: startBreath) ─────────────────────────
+   Steady 2.6s cycles for the first ~6s, then a gently randomized, slower
+   rhythm (3.2–5.4s cycles) — "unhurried, alive". The randomness is injected
+   so the curve is unit-testable. */
+
+/** Prompt stays dark until the standby copy has faded in. */
+export const BREATH_INITIAL_DELAY_MS = 1500
+/** After this much time on the gate, the cadence drifts slower. */
+export const BREATH_SETTLE_MS = 6000
+/** Steady early cadence. */
+export const BREATH_STEADY_CYCLE_MS = 2600
+
+/**
+ * Full breath cycle length for a given time-on-gate. `rand` ∈ [0,1] (pass
+ * Math.random() at the call-site; clamped here so degenerate inputs can't
+ * produce a negative or runaway cycle — P-040 class).
+ */
+export function breathCycleMs(elapsedOnGateMs: number, rand: number): number {
+  if (elapsedOnGateMs <= BREATH_SETTLE_MS) return BREATH_STEADY_CYCLE_MS
+  const r = Math.min(1, Math.max(0, rand))
+  return 3200 + r * 2200
 }
 
-/** Mount progress for frame 1d: `0%` … `100%`, clamped both ways. */
-export function fmtProgressPct(elapsedMs: number, totalMs: number = INTRO_BOOT_MS.plate): string {
-  if (totalMs <= 0) return '100%' // degenerate-input guard (P-040 class)
-  const pct = Math.min(100, Math.max(0, Math.round((elapsedMs / totalMs) * 100)))
-  return `${pct}%`
-}
+/* ── formatters ───────────────────────────────────────────────────────────── */
 
-/** `HH:MM:SS` UTC wall clock for the masthead/plate metadata lines. */
+/** `HH:MM:SS` UTC wall clock for the gate/ceremony metadata lines. */
 export function fmtUtcClock(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`
 }
 
-/** `YYYY-MM-DD` UTC date for the tape footer. */
+/** `YYYY-MM-DD` UTC date for the gate's top-right corner. */
 export function fmtUtcDate(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`
@@ -155,7 +119,7 @@ export function fmtUtcDate(d: Date): string {
 /**
  * Session label derived from the UTC hour — honest about which major cash
  * session the clock actually sits in rather than hardcoding the mockup's
- * "LONDON" (Directive 0.1: never present invented state as real).
+ * "NEW YORK" (Directive 0.1: never present invented state as real).
  *
  *   22:00–07:00 UTC → TOKYO · 07:00–13:00 → LONDON · 13:00–22:00 → NEW YORK
  */

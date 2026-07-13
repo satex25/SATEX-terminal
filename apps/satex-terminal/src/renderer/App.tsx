@@ -279,11 +279,17 @@ export default function App() {
 
   return (
     <div className="bb-app">
-      {/* Cold-boot intro rework — 4-frame branded boot (1a splash → 1b
-          masthead → 1c tape head → 1d system plate). Renderer-only overlay:
-          the terminal keeps rendering/warming underneath and mounts the
-          instant the final wipe completes. */}
-      {!splashDone && <BootIntroSequence onComplete={() => setSplashDone(true)} />}
+      {/* Cold-boot intro — standby gate → 8.2s boot ceremony (design:
+          `SATEX Intro.dc.html`). Renderer-only overlay: the terminal keeps
+          rendering/warming underneath and mounts when the ceremony's
+          integrated dissolve completes. OPTIONS on the gate opens Settings. */}
+      {!splashDone && (
+        <BootIntroSequence
+          onComplete={() => setSplashDone(true)}
+          onOptions={() => setModal('settings')}
+          holdKeys={modal !== null || cmdOpen || tweaksOpen}
+        />
+      )}
       <TopBar
         onCmd={() => setCmdOpen(true)}
         onOpenModal={setModal}
