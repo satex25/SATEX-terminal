@@ -37,7 +37,7 @@ import { TacticsModal } from './components/modals/TacticsModal'
 import { IndicatorsModal } from './components/modals/IndicatorsModal'
 import { ExitReflectionModal } from './components/modals/ExitReflectionModal'
 import { UpdateToast } from './components/UpdateToast'
-import { SplashIntro } from './components/SplashIntro'
+import { BootIntroSequence } from './components/intro/BootIntroSequence'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useIndicatorStore } from './stores/indicatorStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
@@ -279,7 +279,11 @@ export default function App() {
 
   return (
     <div className="bb-app">
-      {!splashDone && <SplashIntro onComplete={() => setSplashDone(true)} />}
+      {/* Cold-boot intro rework — 4-frame branded boot (1a splash → 1b
+          masthead → 1c tape head → 1d system plate). Renderer-only overlay:
+          the terminal keeps rendering/warming underneath and mounts the
+          instant the final wipe completes. */}
+      {!splashDone && <BootIntroSequence onComplete={() => setSplashDone(true)} />}
       <TopBar
         onCmd={() => setCmdOpen(true)}
         onOpenModal={setModal}

@@ -4199,3 +4199,281 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .bb-intel-scn-arrow[data-dir="neutral"] { color: var(--bb-txt-mute, rgba(232,230,224,0.45)); }
 .bb-intel-scn-layer-label { font-size: 11px; color: var(--bb-txt-dim, rgba(232,230,224,0.72)); }
 .bb-intel-scn-layer-conf { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px; text-align: right; color: var(--bb-txt-mute, rgba(232,230,224,0.55)); }
+
+/* ── Cold-boot intro rework · BootIntroSequence (frames 1b–1d) ─────────────
+   4-frame branded boot: SplashIntro (1a) → Masthead (1b) → Tape Head (1c)
+   → System Plate (1d). Design source: `Intro Rework.dc.html` (repo root).
+   The plates are deliberately fixed mono/B&W — theme-independent film
+   frames; scoping the --bb-* vars on .sxi also re-skins the embedded
+   SplashIntro (frame 1a) to match. All motion is CSS keyframes (CSP-safe).
+   Reduced motion is handled upstream: the orchestrator skips 1b–1d, so
+   these animations never mount for reduced-motion users. */
+
+.sxi {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  overflow: hidden;
+  background: #050506;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  /* mono re-skin for the embedded SplashIntro (frame 1a) */
+  --bb-accent: #cfcfd4;
+  --bb-bg: #0a0a0c;
+  --bb-bg-deep: #030304;
+}
+.sxi-frame { position: absolute; inset: 0; overflow: hidden; }
+
+/* shared enter-hold chrome */
+.sxi-enter { position: absolute; inset: 0; pointer-events: none; }
+.sxi-enter-prompt { color: #f0f0f2; animation: sxi-pulse-key 2.4s ease-in-out infinite; }
+.sxi-enter-legal { color: #4a4a52; opacity: 0; animation: sxi-fade-in 1.2s ease-out 0.4s forwards; }
+
+/* shared scanline texture (per-frame density/strength, mockup parity) */
+.sxi-scanlines { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: screen; }
+.sxi-scanlines--mh { background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(207, 207, 212, 0.03) 3px 4px); }
+.sxi-scanlines--tp { background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(207, 207, 212, 0.04) 2px 3px); }
+.sxi-scanlines--pl { background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(207, 207, 212, 0.025) 3px 4px); }
+
+/* ── 1b · Masthead — film title ──────────────────────────────────────────── */
+.sxi-mh { background: #050506; }
+.sxi-mh-dot {
+  position: absolute; left: 50%; top: 22%;
+  width: 10px; height: 10px; margin-left: -5px;
+  border-radius: 50%; background: #f0f0f2;
+  opacity: 0; animation: sxi-fade-in 0.6s ease-out 0.15s forwards;
+}
+.sxi-mh-shaft {
+  position: absolute; left: 50%; top: 24%;
+  width: 2px; height: 52%; margin-left: -1px;
+  background: #f0f0f2; transform-origin: top;
+  animation: sxi-mh-shaft 1.4s cubic-bezier(0.7, 0, 0.2, 1) 0.2s both;
+}
+.sxi-mh-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.sxi-mh-word {
+  font-weight: 300; font-size: 128px; line-height: 1; color: #f0f0f2;
+  padding-left: 0.5em; letter-spacing: 0.5em;
+  animation: sxi-mh-track 2.3s cubic-bezier(0.16, 0.84, 0.28, 1) 1s both;
+}
+.sxi-mh-sub {
+  margin-top: 44px; font-size: 21px; font-weight: 400;
+  letter-spacing: 0.42em; padding-left: 0.42em; color: #7a7a83;
+  opacity: 0; animation: sxi-rise-in 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) 3.1s forwards;
+}
+.sxi-mh-rule {
+  margin-top: 40px; width: 560px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(240, 240, 242, 0.8), transparent);
+  transform: scaleX(0);
+  animation: sxi-mh-rule 1.2s cubic-bezier(0.7, 0, 0.2, 1) 3.7s both;
+}
+.sxi-mh-credits {
+  position: absolute; left: 0; right: 0; bottom: 25%;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.sxi-mh-credit-1 { font-size: 18px; letter-spacing: 0.26em; padding-left: 0.26em; color: #7a7a83; opacity: 0; animation: sxi-rise-in 1s ease-out 4.7s forwards; }
+.sxi-mh-credit-2 { font-size: 16px; letter-spacing: 0.22em; padding-left: 0.22em; color: #4a4a52; opacity: 0; animation: sxi-rise-in 1s ease-out 5.2s forwards; }
+.sxi-mh-prompt {
+  position: absolute; left: 0; right: 0; bottom: 150px;
+  text-align: center; font-size: 24px; letter-spacing: 0.52em; padding-left: 0.52em;
+}
+.sxi-mh-legal {
+  position: absolute; left: 0; right: 0; bottom: 66px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  text-align: center;
+}
+.sxi-mh-legal > div:first-child { font-size: 14px; letter-spacing: 0.08em; }
+.sxi-mh-legal > div:last-child { font-size: 13px; letter-spacing: 0.12em; }
+.sxi-mh-exit { position: absolute; inset: 0; background: #000; opacity: 0; animation: sxi-fade-in 0.9s ease-in forwards; }
+
+/* ── 1c · Tape Head — VHS institutional ──────────────────────────────────── */
+.sxi-tp { background: #030304; }
+.sxi-tp-noise {
+  position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 3px);
+  animation: sxi-tp-noise 0.18s steps(3) infinite alternate;
+}
+.sxi-tp-band {
+  position: absolute; left: -20px; right: -20px; bottom: 44px; height: 12px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 30%, rgba(255, 255, 255, 0.13) 68%, rgba(255, 255, 255, 0.03));
+  filter: blur(1px);
+  animation: sxi-tp-band 1.1s steps(2) infinite;
+}
+.sxi-tp-tc,
+.sxi-tp-status {
+  position: absolute; top: 64px; font-size: 24px; letter-spacing: 0.18em;
+  color: #d6d6d8; opacity: 0; animation: sxi-fade-in 0.5s ease-out 0.4s forwards;
+}
+.sxi-tp-tc { left: 84px; font-variant-numeric: tabular-nums; }
+.sxi-tp-status { right: 84px; }
+.sxi-tp-dot { display: inline-block; animation: sxi-blink-dot 1s steps(1) infinite; }
+.sxi-tp-ready { color: #f0f0f2; }
+.sxi-tp-meta {
+  position: absolute; bottom: 84px; font-size: 20px; letter-spacing: 0.16em;
+  color: #7a7a83; opacity: 0; animation: sxi-fade-in 0.5s ease-out 0.7s forwards;
+}
+.sxi-tp-meta--l { left: 84px; }
+.sxi-tp-meta--r { right: 84px; }
+.sxi-tp-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  animation: sxi-tp-wobble 0.4s linear 4.2s 1;
+}
+.sxi-tp-scan {
+  position: absolute; left: 0; right: 0; top: 50%; height: 2px;
+  background: linear-gradient(90deg, transparent, #f0f0f2, transparent);
+  box-shadow: 0 0 16px 2px rgba(240, 240, 242, 0.8);
+  opacity: 0;
+  animation: satex-splash-scan 1.7s cubic-bezier(0.7, 0, 0.3, 1) 0.9s both;
+}
+.sxi-tp-word {
+  position: relative; display: flex; gap: 0.05em; padding-left: 0.22em;
+  font-weight: 600; font-size: 158px; letter-spacing: 0.22em; line-height: 1;
+  color: #f0f0f2; text-shadow: 0 0 0.4em rgba(240, 240, 242, 0.5);
+}
+.sxi-tp-ch {
+  display: inline-block; opacity: 0;
+  animation: satex-splash-letter 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.sxi-tp-typeline { margin-top: 52px; height: 26px; overflow: hidden; }
+.sxi-tp-type {
+  width: 0; overflow: hidden; white-space: nowrap;
+  font-size: 21px; letter-spacing: 0.3em; color: #7a7a83;
+  animation: sxi-tp-type 1.6s steps(28, end) 3.4s forwards;
+}
+.sxi-tp-prompt {
+  position: absolute; left: 0; right: 0; bottom: 210px;
+  text-align: center; font-size: 24px; letter-spacing: 0.52em; padding-left: 0.52em;
+}
+.sxi-tp-legal {
+  position: absolute; left: 0; right: 0; bottom: 140px;
+  text-align: center; font-size: 14px; letter-spacing: 0.08em;
+}
+.sxi-tp-crt { position: absolute; inset: 0; }
+.sxi-tp-crt-bar {
+  position: absolute; left: 0; right: 0; height: 50%; background: #000;
+  animation: sxi-crt-bar 0.34s ease-in forwards;
+}
+.sxi-tp-crt-bar--top { top: 0; transform-origin: top; transform: scaleY(0); }
+.sxi-tp-crt-bar--bottom { bottom: 0; transform-origin: bottom; transform: scaleY(0); }
+.sxi-tp-crt-slit {
+  position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1px;
+  background: #fff; box-shadow: 0 0 24px 4px rgba(255, 255, 255, 0.9);
+  opacity: 0; animation: sxi-crt-slit 0.7s linear forwards;
+}
+
+/* ── 1d · System Plate — Swiss technical ─────────────────────────────────── */
+.sxi-pl { background: #060607; }
+.sxi-pl-reg { position: absolute; font-size: 30px; font-weight: 300; color: #4a4a52; opacity: 0; }
+.sxi-pl-reg--tl { top: 44px; left: 52px; animation: sxi-fade-in 0.7s ease-out 0.2s forwards; }
+.sxi-pl-reg--tr { top: 44px; right: 52px; animation: sxi-fade-in 0.7s ease-out 0.35s forwards; }
+.sxi-pl-reg--bl { bottom: 36px; left: 52px; animation: sxi-fade-in 0.7s ease-out 0.5s forwards; }
+.sxi-pl-reg--br { bottom: 36px; right: 52px; animation: sxi-fade-in 0.7s ease-out 0.65s forwards; }
+.sxi-pl-header {
+  position: absolute; top: 128px; left: 120px;
+  font-size: 18px; letter-spacing: 0.3em; color: #7a7a83;
+  opacity: 0; animation: sxi-fade-in 0.9s ease-out 1s forwards;
+}
+.sxi-pl-rule-x {
+  position: absolute; top: 28%; left: 120px; right: 120px; height: 1px;
+  background: rgba(255, 255, 255, 0.22); transform-origin: left; transform: scaleX(0);
+  animation: sxi-pl-rule-x 1.1s cubic-bezier(0.7, 0, 0.2, 1) 1.3s both;
+}
+.sxi-pl-rule-y {
+  position: absolute; top: 28%; right: 520px; width: 1px; height: 42%;
+  background: rgba(255, 255, 255, 0.14); transform-origin: top; transform: scaleY(0);
+  animation: sxi-pl-rule-y 1s cubic-bezier(0.7, 0, 0.2, 1) 1.7s both;
+}
+.sxi-pl-word {
+  position: absolute; left: 120px; bottom: 28%;
+  display: flex; line-height: 0.94; font-weight: 700; font-size: 252px;
+  letter-spacing: -0.02em; color: #f0f0f2;
+}
+.sxi-pl-mask { display: inline-block; overflow: hidden; }
+.sxi-pl-ch {
+  display: inline-block; transform: translateY(112%);
+  animation: sxi-pl-rise 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sxi-pl-sub {
+  position: absolute; left: 126px; bottom: calc(28% - 64px);
+  font-size: 22px; letter-spacing: 0.3em; color: #7a7a83;
+  opacity: 0; animation: sxi-rise-in 1s ease-out 3.2s forwards;
+}
+.sxi-pl-meta {
+  position: absolute; top: 128px; right: 120px;
+  display: flex; flex-direction: column; gap: 12px;
+  text-align: right; font-size: 20px; letter-spacing: 0.1em;
+}
+.sxi-pl-meta-row { opacity: 0; animation: sxi-rise-in 0.8s ease-out forwards; }
+.sxi-pl-meta-k { color: #4a4a52; }
+.sxi-pl-meta-v { color: #f0f0f2; }
+.sxi-pl-meta-v--num { font-variant-numeric: tabular-nums; }
+.sxi-pl-progress { position: absolute; left: 120px; right: 120px; bottom: 150px; }
+.sxi-pl-progress-labels {
+  display: flex; justify-content: space-between; margin-bottom: 10px;
+  font-size: 17px; letter-spacing: 0.2em; color: #4a4a52;
+}
+.sxi-pl-progress-pct { font-variant-numeric: tabular-nums; color: #7a7a83; }
+.sxi-pl-progress-track { position: relative; height: 1px; background: rgba(255, 255, 255, 0.12); }
+.sxi-pl-progress-fill {
+  position: absolute; left: 0; top: -1px; height: 3px; background: #f0f0f2;
+  width: 0%; animation: sxi-pl-bar 7s linear both;
+}
+.sxi-pl-prompt { position: absolute; left: 120px; bottom: 84px; font-size: 22px; letter-spacing: 0.42em; }
+.sxi-pl-legal { position: absolute; right: 120px; bottom: 84px; font-size: 13px; letter-spacing: 0.08em; }
+.sxi-pl-wipe {
+  position: absolute; inset: 0; background: #000;
+  border-right: 2px solid rgba(255, 255, 255, 0.6);
+  transform: translateX(-101%);
+  animation: sxi-pl-wipe 0.8s cubic-bezier(0.7, 0, 0.2, 1) forwards;
+}
+
+/* ── intro rework keyframes ──────────────────────────────────────────────── */
+@keyframes sxi-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sxi-rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes sxi-pulse-key { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+@keyframes sxi-blink-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes sxi-mh-shaft {
+  from { transform: scaleY(0); opacity: 0; }
+  30%  { opacity: 0.35; }
+  to   { transform: scaleY(1); opacity: 0.35; }
+}
+@keyframes sxi-mh-track {
+  from { opacity: 0; letter-spacing: 0.04em; filter: blur(14px); }
+  55%  { opacity: 1; }
+  to   { opacity: 1; letter-spacing: 0.5em; filter: blur(0); }
+}
+@keyframes sxi-mh-rule {
+  from { transform: scaleX(0); opacity: 0; }
+  40%  { opacity: 1; }
+  to   { transform: scaleX(1); opacity: 1; }
+}
+@keyframes sxi-tp-noise { from { transform: translateY(0); } to { transform: translateY(4px); } }
+@keyframes sxi-tp-band {
+  0%   { transform: translateX(0); opacity: 0.55; }
+  50%  { transform: translateX(-7px); opacity: 0.9; }
+  100% { transform: translateX(5px); opacity: 0.55; }
+}
+@keyframes sxi-tp-type { from { width: 0; } to { width: 640px; } }
+@keyframes sxi-tp-wobble {
+  0%, 100% { transform: none; }
+  20% { transform: translateY(3px) skewX(0.5deg); }
+  45% { transform: translateY(-2px) skewX(-0.3deg); }
+  70% { transform: translateY(1px); }
+}
+@keyframes sxi-crt-bar { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes sxi-crt-slit {
+  0%   { opacity: 0; }
+  40%  { opacity: 0; }
+  55%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes sxi-pl-rise { from { transform: translateY(112%); } to { transform: translateY(0); } }
+@keyframes sxi-pl-rule-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes sxi-pl-rule-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes sxi-pl-bar { from { width: 0%; } to { width: 100%; } }
+@keyframes sxi-pl-wipe { from { transform: translateX(-101%); } to { transform: translateX(0); } }
