@@ -280,7 +280,7 @@ export default function App() {
   }, [account.killSwitchArmed, setWorkspace])
 
   return (
-    <div className="bb-app">
+    <div className={splashDone ? 'bb-app bb-shell-reveal' : 'bb-app'}>
       {/* Cold-boot intro — standby gate → 8.2s boot ceremony (design:
           `SATEX Intro.dc.html`). Renderer-only overlay: the terminal keeps
           rendering/warming underneath and mounts when the ceremony's
