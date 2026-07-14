@@ -79,7 +79,7 @@ export const DEFAULT_WORKSPACE_STATE: WorkspaceState = {
   workspace: 'Quad',
   quadSymbols: ['NVDA', 'SPY', 'ES', 'BTC'],
   chartSymbol: 'NVDA',
-  landingWorkspace: 'Trade',
+  landingWorkspace: 'Quad',
   collapsedRails: [],
 }
 
