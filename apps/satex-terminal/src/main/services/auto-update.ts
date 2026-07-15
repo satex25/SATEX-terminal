@@ -31,11 +31,13 @@ export class AutoUpdateService {
     // trigger the download attempt only to fail signature verification.
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = false
-    // Point to GitHub Releases for satex25/satex-trading
+    // Point to GitHub Releases for satex25/SATEX-terminal (canonical name
+    // since the 2026-07 rename). The update feed is supply-chain-critical:
+    // never rely on GitHub's old-name redirect here.
     autoUpdater.setFeedURL({
       provider: 'github',
       owner: 'satex25',
-      repo: 'satex-trading',
+      repo: 'SATEX-terminal',
     })
   }
 

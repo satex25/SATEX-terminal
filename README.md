@@ -1,6 +1,6 @@
 # SATEX — Smart Autonomous Trading EXperience
 
-[![CI](https://github.com/satex25/satex-trading/actions/workflows/ci.yml/badge.svg)](https://github.com/satex25/satex-trading/actions/workflows/ci.yml)
+[![CI](https://github.com/satex25/SATEX-terminal/actions/workflows/ci.yml/badge.svg)](https://github.com/satex25/SATEX-terminal/actions/workflows/ci.yml)
 
 A **Windows-only** Electron + React 18 + TypeScript trading terminal — TradingView
 Lightweight Charts v5, Zustand, better-sqlite3, Zod-validated IPC — with a
@@ -49,11 +49,11 @@ npm run knip         # dead-code / unused deps
 - **[AGENTS.md](AGENTS.md)** — how agents and humans work this repo: the gate bar,
   branch → PR → merge flow, trading-safety guardrails, and the grounded-review routine.
 - **[CONSTITUTION.md](CONSTITUTION.md)** — the persistent behavior constitution.
-- **[Getting started](GETTING-STARTED.md)** · **[Contributing](apps/satex-terminal/docs%201/CONTRIBUTING.md)**
-  · **[Security policy](apps/satex-terminal/docs%201/SECURITY.md)** · **[FAQ](FAQ.md)**
+- **[Getting started](docs/GETTING-STARTED.md)** · **[Contributing](docs/CONTRIBUTING.md)**
+  · **[Security policy](docs/SECURITY.md)** · **[FAQ](docs/FAQ.md)**
 - **[CHANGELOG](apps/satex-terminal/CHANGELOG.md)** — release history.
 - **[App notes](apps/satex-terminal/CLAUDE.md)** — app architecture facts & invariants.
-- **[Releases](https://github.com/satex25/satex-trading/releases)** — tagged builds.
+- **[Releases](https://github.com/satex25/SATEX-terminal/releases)** — tagged builds.
 
 ## ⚠️ Trading-safety
 

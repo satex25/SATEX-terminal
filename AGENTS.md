@@ -19,7 +19,7 @@ trading path** via Alpaca. Treat it as production financial software, not a toy.
 - **Vault (Obsidian, runtime data — untracked by design):** `Vault/` — incl.
   `Backtests/` (nightly self-eval + baselines) and `Learnings/` (capped session notes)
 - **Reference dumps (gitignored):** `90-REFERENCE/`
-- **Default branch:** `master` · **Remote:** github.com/satex25/SATEX-terminal (renamed from `satex-trading`, 2026-07)
+- **Default branch:** `master` · **Remote:** github.com/satex25/SATEX-terminal
 
 ## The gate bar — all four must be green
 
