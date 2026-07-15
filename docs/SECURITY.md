@@ -8,7 +8,7 @@ are supported.
 ## Reporting a vulnerability
 
 Open a **private** GitHub security advisory on
-[satex25/satex-trading](https://github.com/satex25/satex-trading/security/advisories),
+[satex25/SATEX-terminal](https://github.com/satex25/SATEX-terminal/security/advisories),
 or contact the repository owner directly. Please do not open public issues for
 security problems in a trading terminal with a live-capital path.
 

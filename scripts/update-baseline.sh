@@ -12,7 +12,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARCH="$ROOT/ARCHITECTURE.md"
-APP="$ROOT/00-PROJECT-ROOT/01-SATEX-CORE/satex-app"
+APP="$ROOT/apps/satex-terminal"
 
 FILES="${1:-}"; TESTS="${2:-}"
 

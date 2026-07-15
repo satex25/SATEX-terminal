@@ -89,7 +89,7 @@ A **Windows-only** desktop trading terminal:
 | Broker | Alpaca (REST v2 + WebSocket) behind a broker-agnostic abstraction (`@shared/broker/`); Rithmic/Tradovate planned at L1.G |
 | Tests | Vitest — on the order of **100 files / ~1,287 tests** (2026-06 series; never quote a count you didn't just measure) |
 | Dependencies | **10 runtime deps** — dependency minimalism is a policy, enforced by knip |
-| Repo | `github.com/satex25/SATEX-terminal` (renamed from `satex-trading`, 2026-07), default branch `master`; canonical working copy is `mc4/` (`C:\SATEX` is a stale May-10 duplicate — do not work there) |
+| Repo | `github.com/satex25/SATEX-terminal`, default branch `master`; canonical working copy is `mc4/` (`C:\SATEX` is a stale May-10 duplicate — do not work there) |
 
 **It has a live-capital trading path.** Treat every line as production financial
 software. This is the single most important fact v2 got wrong: SATEX is not paper-locked.

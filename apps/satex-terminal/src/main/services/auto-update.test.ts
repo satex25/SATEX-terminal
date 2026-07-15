@@ -78,12 +78,12 @@ describe('AutoUpdateService — constructor safety policy', () => {
     expect(mockAutoUpdater.autoInstallOnAppQuit).toBe(false)
   })
 
-  it('points the feed at the satex25/satex-trading GitHub releases', () => {
+  it('points the feed at the satex25/SATEX-terminal GitHub releases', () => {
     new AutoUpdateService()
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
       provider: 'github',
       owner: 'satex25',
-      repo: 'satex-trading',
+      repo: 'SATEX-terminal',
     })
   })
 
