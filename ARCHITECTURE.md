@@ -75,7 +75,7 @@ Trading-safety-perimeter files ⚠️ (AGENTS guardrails apply): `order-manager.
 ┌────────────────────────── RENDERER (sandboxed) ────────────────────────┐
 │ Black Box shell: TopBar · TickerTape · collapsible rail dock (9 rails) │
 │ Workspaces ⌘1–6: Trade / Focus / Markets / Replay / Quad / Intel       │
-│ 21 panels · 7 modals · 22 Zustand stores · lightweight-charts v5       │
+│ 21 panels · 7 modals · 24 Zustand stores · lightweight-charts v5       │
 │  + custom WebGL layer (footprint · vol-heatmap · volume-profile · LOD) │
 │ Design system: --bb-* tokens · 3 themes · 9-step --text-* type scale   │
 └────────────────────────────────────────────────────────────────────────┘
