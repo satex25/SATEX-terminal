@@ -1409,8 +1409,17 @@ export class TradingEngine {
 
   /** Rebuild AlpacaClient + LiveMarket using freshly stored credentials for
    *  the currently-active mode. */
-  async reconnectAlpaca(): Promise<{ ok: boolean; reason?: string }> {
+  async reconnectAlpaca(opts?: { internal?: boolean }): Promise<{ ok: boolean; reason?: string }> {
     if (this.replay) return { ok: false, reason: 'stop replay before reconnecting' }
+    // 2026-07-16 — the manual "Reconnect Alpaca stream" action is a no-op in
+    // simulator data mode: reconnecting would tear down the working simulator
+    // and spin up a live equity WS that can't stay up (no live feed selected),
+    // which then retries on the 30s backoff forever — the reconnect loop the
+    // operator hit. The internal endpoint-flip caller passes { internal: true }
+    // and is exempt (flipping the endpoint legitimately (re)builds the client).
+    if (!opts?.internal && this.dataSource !== 'live') {
+      return { ok: false, reason: 'Simulator feed is active — there is no live Alpaca stream to reconnect. Switch to the Live data feed first (Settings → Market Data Feed).' }
+    }
     const mode = getAlpacaMode()
     const stored = getAlpacaCreds(mode)
     if (!stored) return { ok: false, reason: `No stored credentials for ${mode} mode` }
@@ -1500,8 +1509,9 @@ export class TradingEngine {
     }
     const result = storeSetAlpacaMode(req.mode)
     log.warn('alpaca endpoint mode flipped', { mode: req.mode, baseUrl: result.baseUrl })
-    // Reconnect with new endpoint
-    const rec = await this.reconnectAlpaca()
+    // Reconnect with new endpoint (internal — exempt from the simulator no-op
+    // guard: an endpoint flip legitimately (re)builds the Alpaca client).
+    const rec = await this.reconnectAlpaca({ internal: true })
     if (!rec.ok) return { ok: false, reason: `Mode saved but reconnect failed: ${rec.reason}`, baseUrl: result.baseUrl }
     return { ok: true, baseUrl: result.baseUrl }
   }
@@ -1900,6 +1910,13 @@ export class TradingEngine {
    *  anyway. The first real tick replaces the seed in marketStore.quotes
    *  so the chart, watchlist, and PnL all see live BTC/ETH. */
   private onCryptoTick(tick: AlpacaTick): void {
+    // 2026-07-16 — in SIMULATOR data mode the synthetic feed is the sole source
+    // of BTC/ETH (it emits crypto 24/7), so ignore the real crypto WS here: it
+    // would otherwise interleave stale/real prices over the simulated walk and
+    // pin the crypto panes. The WS stays connected (engine-owned, reused the
+    // instant the LIVE feed is selected); we simply don't consume its ticks
+    // until dataSource === 'live'.
+    if (this.dataSource !== 'live') return
     const entry = findUniverseEntry(tick.symbol)
     if (!entry || entry.assetClass !== 'crypto') return
     // A1 (v0.4.4) — feed the sub-second aggregator before the quote build so a

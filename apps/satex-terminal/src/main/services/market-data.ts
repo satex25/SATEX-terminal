@@ -7,21 +7,19 @@ import {
   SIMULATOR_CANDLE_INTERVAL_SEC, SPARKLINE_LENGTH, TICK_HZ, UNIVERSE, type UniverseEntry
 } from '@shared/constants'
 import type { Candle, HistoricalTimeframe, NewsItem, Quote, Trade, TradeSide } from '@shared/types'
-import { isUsEquityMarketOpen } from '@shared/market-hours'
 import { shortId } from './id-generator'
 import { mulberry32, randomSeed, type Rng } from './rng'
 import { createLogger } from './logger'
 import type { MarketClockSnapshot, MarketDataSource, Unsub } from '@shared/broker/market-data-source'
 
-/** Power-user escape hatch: set SATEX_SIMULATOR_24_7=true to keep the
- *  simulator emitting fake ticks around the clock for off-hours testing.
- *  Default behaviour pauses the simulator outside US equity RTH so the
- *  chart doesn't display fictitious movement when real markets are closed
- *  (2026-05-17 user request: "charts are still showing moving data, this
- *  is impossible, markets are closed"). */
-function simulatorBypassMarketHours(): boolean {
-  return (process.env['SATEX_SIMULATOR_24_7'] ?? 'false').toLowerCase() === 'true'
-}
+// 2026-07-16 (operator decision): the simulator is a synthetic feed and now
+// emits continuously, 24/7, for EVERY asset class — no market-hours gate. It
+// only ever runs as the *simulator* data source, so "moving data while markets
+// are closed" is expected and correct here. Real-market-hours freezing is the
+// LIVE feed's job: when the Live Alpaca feed is selected, LiveMarket delivers
+// real data and naturally goes still off-hours (no synthetic movement is ever
+// painted over real data). This reverses the 2026-05-17 off-hours freeze, which
+// applied to the simulator specifically.
 
 const log = createLogger('simulator')
 
@@ -115,46 +113,13 @@ export class MarketSimulator implements MarketDataSource {
     })
   }
 
-  /** Cached market-open state so we only log on transition, not on every
-   *  20Hz tick. Initialized to the current state at start() time. */
-  private lastMarketOpenSeen: boolean | null = null
-
-  /** Returns true when the simulator should emit ticks/candles/news right
-   *  now. Bypass via SATEX_SIMULATOR_24_7=true. Logs transitions. */
-  private shouldEmit(): boolean {
-    if (simulatorBypassMarketHours()) return true
-    const open = isUsEquityMarketOpen()
-    if (open !== this.lastMarketOpenSeen) {
-      log.info(open
-        ? 'simulator emitting — US equity RTH'
-        : 'simulator paused — US equity market closed (chart will freeze at last quote)')
-      this.lastMarketOpenSeen = open
-    }
-    return open
-  }
-
-  /** Per-asset-class emission gate (2026-05-26). Crypto and futures trade
-   *  ~around the clock, so they keep emitting off-hours — the Quad/crypto panes
-   *  never go blank. Equities/indices stay frozen outside US RTH (no fictitious
-   *  movement, per the 2026-05-17 request); the chart shows their real last
-   *  session via the off-hours backfill instead. The SATEX_SIMULATOR_24_7
-   *  escape hatch (inside shouldEmit) still forces everything on. */
-  private shouldEmitFor(assetClass: string): boolean {
-    if (assetClass === 'crypto' || assetClass === 'future') return true
-    return this.shouldEmit()
-  }
-
   start(): void {
     if (this.tickTimer) return
     const tickMs = Math.floor(1000 / TICK_HZ)
     this.tickTimer   = setInterval(() => this.tick(), tickMs)
     this.candleTimer = setInterval(() => this.rollCandle(), 1000)
     this.newsTimer   = setInterval(() => this.maybeEmitNews(), 4_000)
-    log.info('simulator started', {
-      tickHz: TICK_HZ,
-      marketHoursBypass: simulatorBypassMarketHours(),
-      currentlyEmitting: this.shouldEmit(),
-    })
+    log.info('simulator started', { tickHz: TICK_HZ, emits: '24/7 (synthetic feed, all classes)' })
   }
 
   stop(): void {
@@ -204,15 +169,13 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private tick(): void {
-    // 2026-05-17 — freeze EQUITY ticks outside US RTH (no fictitious 20Hz
-    // movement while real markets are closed). 2026-05-26 — crypto + futures
-    // trade ~around the clock, so they keep emitting off-hours (per-symbol gate
-    // below); equities show their real last session via the chart's backfill.
+    // 2026-07-16 — the synthetic feed emits every asset class 24/7 (no
+    // market-hours gate; see the header note). Real-hours freezing lives on the
+    // LIVE feed, not here.
     const batch: Quote[] = []
     const trades: Trade[] = []
     const now = Date.now()
     for (const s of this.states.values()) {
-      if (!this.shouldEmitFor(s.entry.assetClass)) continue
       const z = this.rng.nextGaussian()
       const dt = 1 / (TICK_HZ * 60)
       const lr = s.drift * dt + s.sigma * z * Math.sqrt(dt)
@@ -253,14 +216,12 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private rollCandle(): void {
-    // Per-asset-class gate (see tick): crypto/futures roll new candles 24/7;
-    // equities/indices only during US RTH so off-hours history isn't padded
-    // with fake bars. Equities' real last session comes from the chart backfill.
+    // 24/7 for every class (see header note) — the synthetic feed rolls bars
+    // continuously; the LIVE feed is what goes still off-hours.
     const nowSec = Math.floor(Date.now() / 1000)
     const bucket = Math.floor(nowSec / SIMULATOR_CANDLE_INTERVAL_SEC) * SIMULATOR_CANDLE_INTERVAL_SEC
     if (bucket === this.currentCandleStart) return
     for (const [sym, s] of this.states) {
-      if (!this.shouldEmitFor(s.entry.assetClass)) continue
       const closed = { ...s.currentCandle }
       s.candles.push(closed)
       if (s.candles.length > 2000) s.candles.shift()
@@ -273,12 +234,8 @@ export class MarketSimulator implements MarketDataSource {
   }
 
   private maybeEmitNews(): void {
-    // Skip fake news while markets are closed too — half the headlines
-    // reference live flow / price action that wouldn't make sense without
-    // active tick emission. The trade-off is acceptable: news is a
-    // simulator-only stub anyway, real sessions get news from the news/EDGAR
-    // pipelines independent of this code path.
-    if (!this.shouldEmit()) return
+    // Synthetic news stub — emits 24/7 like the rest of the feed. Real sessions
+    // get news from the news/EDGAR pipelines, independent of this code path.
     if (this.rng.next() > 0.4) return
     const tpl = HEADLINES[this.rng.nextInt(HEADLINES.length)]!
     const syms = Array.from(this.states.keys())

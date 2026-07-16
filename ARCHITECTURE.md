@@ -3,7 +3,7 @@
 > The one-page map of everything in this workspace. *How to work the repo* →
 > [`AGENTS.md`](AGENTS.md). *App invariants* → [`apps/satex-terminal/CLAUDE.md`](apps/satex-terminal/CLAUDE.md).
 > *What changed when* → [`CHANGELOG.md`](apps/satex-terminal/CHANGELOG.md).
-> Last structural update: **2026-07-15**.
+> Last structural update: **2026-07-16**.
 
 ---
 
@@ -67,7 +67,7 @@ Trading-safety-perimeter files ⚠️ (AGENTS guardrails apply): `order-manager.
 │                           account-syncer ·       13 tables, WAL)       │
 │                           symbol-resolver       VaultWriter · Logger   │
 │                                                 CredentialStore        │
-└────────────── Zod-validated IPC (123 channels, .strict()) ─────────────┘
+└────────────── Zod-validated IPC (124 channels, .strict()) ─────────────┘
                                    ▼
 ┌──────────────── PRELOAD (contextBridge, typed window.satex) ───────────┐
 └────────────────────────────────────────────────────────────────────────┘
@@ -102,7 +102,7 @@ observational; risk limits are read-only to every learning component.
 
 All four must be green before any commit/merge (CI enforces on every push/PR):
 `npm run typecheck` · `npm run lint` · `npm test` · `npm run knip`.
-Baseline 2026-07-13: **1668 tests / 126 files**, all four gates green at the P-100 gate record (content on `master` @ 32ceccd; operator hardware, Node 24.15; jsdom — see P-019). <!-- refresh: scripts/update-baseline.sh -->
+Baseline 2026-07-16: **1753 tests / 134 files**, all four gates green (typecheck node+web · eslint `src tests` · vitest · knip all exit 0) measured this session on the P-111 branch (operator hardware, Node 24.15; jsdom — see P-019). <!-- refresh: scripts/update-baseline.sh -->
 
 Program ladder (spec: `apps/satex-terminal/docs/superpowers/specs/2026-06-02-topstep-eval-capable-program-design.md`):
 **L1.A ✅ → L1.B ✅ → L1.C ✅ → L1.D (funded compliance) → L1.E (payouts) →
