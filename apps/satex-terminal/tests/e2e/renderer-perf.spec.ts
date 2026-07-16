@@ -61,9 +61,10 @@ test.describe('renderer frame budget (A1 perf canary)', () => {
     try {
       app = await electron.launch({
         args: [MAIN_ENTRY, `--user-data-dir=${tmpDir}`],
-        // SATEX_SIMULATOR_24_7: the simulator pauses outside US RTH by default
-        // (market-data.ts), so off-hours / weekend runs would feed the chart no
-        // candles and the instrumented setData/update paths would never fire.
+        // SATEX_SIMULATOR_24_7 is inert since P-111 (2026-07-16): the simulator
+        // now emits 24/7 for every asset class by default (market-data.ts), so
+        // off-hours / weekend runs stream candles without it. Kept here as a
+        // harmless no-op so this env stays valid if the flag is ever reintroduced.
         env: { ...process.env, USE_SIMULATOR: 'true', NODE_ENV: 'production', SATEX_VAULT_ROOT: vaultDir, SATEX_SIMULATOR_24_7: 'true' },
         timeout: 30_000,
       })

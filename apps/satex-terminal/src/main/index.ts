@@ -1020,6 +1020,23 @@ function registerIpcHandlers(): void {
   register(IPC.WINDOW_TOGGLE_DEVTOOLS, () => {
     mainWindow?.webContents.toggleDevTools()
   })
+  register(IPC.APP_RESTART, () => {
+    // LIVE→PAPER clean-slate restart (operator decision 2026-07-16). Packaged:
+    // a true process relaunch — app.quit() runs the graceful before-quit
+    // teardown (engine.shutdown → session.disconnect), then the scheduled
+    // relaunch spawns a fresh instance, wiping all in-memory session state
+    // (tokens, learned weights not yet persisted) and replaying the boot intro.
+    // Dev: electron-vite's renderer dev-server dies with the electron process,
+    // so a real relaunch would have nothing to load — reload the renderer
+    // instead, which still replays the intro and clears renderer session state.
+    log.warn('APP_RESTART requested — LIVE→PAPER clean-slate restart', { packaged: app.isPackaged })
+    if (!app.isPackaged) {
+      mainWindow?.webContents.reload()
+      return
+    }
+    app.relaunch()
+    app.quit()
+  })
   register(IPC.WINDOW_SET_ZOOM, validated(WindowZoomReq, (factor) => {
     mainWindow?.webContents.setZoomFactor(Math.max(0.5, Math.min(2.0, factor)))
   }))

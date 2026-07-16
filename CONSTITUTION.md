@@ -455,8 +455,9 @@ Hard-won operational facts. Ignore them and you will repeat documented disasters
   mounts 22. Version-specific tool failures (knip above) are environment facts, not code
   defects — ledger them as such.
 - Env vars: `SATEX_VAULT_ROOT` (vault override for packaged installs),
-  `SATEX_HW_ACCEL=1` (opt-in GPU), `SATEX_SIMULATOR_24_7=true` (off-hours candle
-  streaming for tests/canary).
+  `SATEX_HW_ACCEL=1` (opt-in GPU), `SATEX_SIMULATOR_24_7` (**inert since P-111,
+  2026-07-16** — the simulator now emits 24/7 for every asset class unconditionally,
+  so setting it is a harmless no-op; real-hours freezing is the LIVE feed's job).
 - Perf canary (opt-in, not CI): `npm run build` then `SATEX_E2E_PERF=1` Playwright run of
   `tests/e2e/renderer-perf.spec.ts` — asserts p50 ≤ 16 ms frame budget under
   symbol-rotation + tick load. Run before renderer-heavy releases.

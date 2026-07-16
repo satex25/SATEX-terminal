@@ -104,6 +104,9 @@ export const IPC = {
   // Window
   WINDOW_TOGGLE_FULLSCREEN: 'satex:window:toggleFullscreen',
   WINDOW_TOGGLE_DEVTOOLS:   'satex:window:toggleDevTools',
+  // App lifecycle — full shutdown + relaunch (used on a LIVE→PAPER switch to
+  // guarantee a clean-slate session: wipes in-memory creds/tokens + learning).
+  APP_RESTART:              'satex:app:restart',
   WINDOW_SET_ZOOM:    'satex:window:setZoom',
   WINDOW_GET_ZOOM:    'satex:window:getZoom',
 

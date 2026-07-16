@@ -31,7 +31,10 @@ A strict `.husky/pre-commit` runs typecheck + lint and blocks the commit on fail
   read the live session-start equity, not a constant.
 - **SIM / SUB badges render only from the canonical gates** (`isSyntheticFeed`, `showSub`) —
   never from inline logic duplicated at a call-site.
-- The **sub-second aggregator is fed only from `alpaca.onTick`** — no other path.
+- The **sub-second aggregator is fed only from `alpaca.onTick`, and only while the live
+  feed is selected** (`onCryptoTick` early-returns unless `dataSource === 'live'`, P-111) —
+  no other path. In simulator mode it is intentionally fed nothing (the sim emits 20 Hz
+  quote batches, not `'t'` trade ticks, so it cannot coherently populate the SUB view).
 - **Broker equity + account WS lifecycle goes through `AlpacaBrokerSession.connect()` /
   `.disconnect()`** at the three engine construction call-sites (cold boot, data-feed switch,
   reconnect) — not bare `market.start()` / per-stream disconnects. Crypto WS is still
@@ -114,7 +117,8 @@ $env:SATEX_E2E_PERF='1'; npx playwright test tests/e2e/renderer-perf.spec.ts
 ```
 
 Boots isolated + offscreen (throwaway `--user-data-dir` / `SATEX_VAULT_ROOT`,
-`SATEX_SIMULATOR_24_7=true` so candles stream off-hours), drives the Trade `ChartPanel`, and
+`SATEX_SIMULATOR_24_7=true` — inert since P-111 but harmless; the simulator now streams
+24/7 by default), drives the Trade `ChartPanel`, and
 asserts a p50 ≤ 16 ms frame budget under symbol-rotation + tick-stream load (full p50/p95
 thresholds in the design doc). The percentile math + profiler lifecycle are unit-tested in
 `src/renderer/lib/perf.test.ts` (runs in CI).

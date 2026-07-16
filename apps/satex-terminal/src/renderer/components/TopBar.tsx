@@ -142,10 +142,26 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
     }
   }
 
-  // Behavior preserved verbatim from MenuBar.tsx:125-157.
+  // Behavior preserved from MenuBar.tsx:125-157, plus the 2026-07-16
+  // LIVE→PAPER clean-slate restart.
   async function flipMode(target: 'paper' | 'live') {
     if (!window.satex?.setAlpacaMode || flipBusy) return
     if (!alpacaMode || target === alpacaMode.mode) return
+    const wasLive = alpacaMode.mode === 'live'
+    if (target === 'paper' && wasLive) {
+      // Operator decision: switching down to PAPER is a full shutdown + restart
+      // — the session is wiped (tokens, in-memory learning) and SATEX reboots
+      // through the intro on a clean paper slate. Confirm before doing something
+      // this disruptive.
+      const ok = window.confirm(
+        'Switch to PAPER?\n\n' +
+        'This fully restarts SATEX: the current session is wiped (live tokens and\n' +
+        'in-session learning) and the app reboots through the intro on a clean\n' +
+        'paper slate.\n\n' +
+        'Continue?'
+      )
+      if (!ok) return
+    }
     if (target === 'live') {
       if (!alpacaMode.liveConfigured) {
         window.alert(
@@ -167,7 +183,13 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
     setFlipBusy(true)
     try {
       const res = await window.satex.setAlpacaMode({ mode: target })
-      if (!res.ok) window.alert(`Failed to switch mode: ${res.reason ?? 'unknown'}`)
+      if (!res.ok) { window.alert(`Failed to switch mode: ${res.reason ?? 'unknown'}`); return }
+      // PAPER is now persisted; on a LIVE→PAPER switch, hard-restart into a
+      // clean paper session (main relaunches when packaged, reloads in dev).
+      if (target === 'paper' && wasLive) {
+        await window.satex.restartApp?.()
+        return // app is going down / reloading — nothing more to do here
+      }
       const s = await window.satex.getAlpacaMode()
       if (s) setAlpacaMode(s)
     } catch (e) {

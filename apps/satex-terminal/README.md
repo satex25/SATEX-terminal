@@ -131,7 +131,7 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
 
 # Optional: custom paths
 SATEX_VAULT_ROOT=C:\Users\YourName\Vault
-SATEX_SIMULATOR_24_7=true
+# SATEX_SIMULATOR_24_7 is now a no-op — the simulator streams 24/7 by default (inert since 2026-07-16)
 ```
 
 See `.env.local.example` for the full template.

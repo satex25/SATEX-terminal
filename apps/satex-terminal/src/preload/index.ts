@@ -136,6 +136,8 @@ const satexApi = {
   // ── Window controls ────────────────────────────────────────────────────────
   toggleFullscreen: () => ipcRenderer.invoke(IPC.WINDOW_TOGGLE_FULLSCREEN),
   toggleDevTools:   () => ipcRenderer.invoke(IPC.WINDOW_TOGGLE_DEVTOOLS),
+  /** Full shutdown + relaunch (LIVE→PAPER clean-slate restart). */
+  restartApp:       () => ipcRenderer.invoke(IPC.APP_RESTART),
   setZoom:  (factor: number) => ipcRenderer.invoke(IPC.WINDOW_SET_ZOOM, factor),
   getZoom:  ()               => ipcRenderer.invoke(IPC.WINDOW_GET_ZOOM) as Promise<number>,
 
