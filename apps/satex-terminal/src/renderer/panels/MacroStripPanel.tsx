@@ -21,7 +21,7 @@ function fmtTime(iso: string): string {
 
 export function MacroStripPanel() {
   const snap = useMacroStore(s => s.snapshot)
-  const { cst } = useClocks()
+  const { local, localCode } = useClocks()
   const events = snap?.events ?? []
 
   return (
@@ -30,7 +30,7 @@ export function MacroStripPanel() {
         <span className="bb-macro-title">MACRO · NEXT {snap?.horizonHours ?? 12}H</span>
         <span className="bb-macro-utc">UTC</span>
         <span style={{ flex: 1 }} />
-        <span className="bb-macro-now">● NOW · CST {cst}</span>
+        <span className="bb-macro-now">● NOW · {localCode} {local}</span>
       </div>
       <div className="bb-macro-cells">
         {events.length === 0 && (

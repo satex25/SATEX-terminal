@@ -1408,6 +1408,25 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
   background: var(--bg-3);
   box-shadow: 0 0 0 1px var(--accent-soft);
 }
+.dialog-select {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  color: var(--ink-0);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  padding: 7px 10px;
+  outline: none;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.dialog-select:focus {
+  border-color: var(--accent);
+  background: var(--bg-3);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+.dialog-select option { background: var(--bg-1); color: var(--ink-0); }
 .form-hint {
   font-size: var(--text-sm);
   color: var(--ink-3);
@@ -2267,10 +2286,17 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 .bb-topbar > * { -webkit-app-region: no-drag; }
 .bb-vrule { width: 1px; align-self: stretch; background: var(--bb-line); margin: 8px 0; }
 
-.bb-brand { display: flex; align-items: center; gap: 8px; }
-.bb-brand-text { display: flex; flex-direction: column; line-height: 1; }
-.bb-brand-name    { font-weight: 700; letter-spacing: 0.18em; font-size: var(--text-base); color: var(--bb-txt-strong); }
-.bb-brand-version { color: var(--bb-txt-mute); font-size: var(--text-2xs); letter-spacing: 0.18em; margin-top: 2px; }
+/* Wordmark carried over from the boot gate (.sxg-gate-word) — no logo mark.
+   Same 600 weight + wide tracking + near-white, scaled into the 40px bar. */
+.bb-brand { display: flex; align-items: baseline; gap: 9px; }
+.bb-brand-word {
+  font-weight: 600; letter-spacing: 0.30em; padding-left: 0.30em;
+  font-size: 16px; line-height: 1; color: #f0f0f2;
+}
+.bb-brand-tag {
+  color: var(--bb-txt-mute); font-size: var(--text-xs); letter-spacing: 0.14em;
+  align-self: center;
+}
 
 .bb-menubar { display: flex; align-items: center; gap: 14px; }
 
@@ -2361,7 +2387,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px v
 
 .bb-clocks { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.05; min-width: 96px; }
 .bb-clock-row { display: flex; align-items: baseline; gap: 4px; }
-.bb-clock-cst .bb-clock-time { color: var(--bb-txt); font-size: var(--text-base); font-weight: 600; letter-spacing: 0.04em; }
+.bb-clock-local .bb-clock-time { color: var(--bb-txt); font-size: var(--text-base); font-weight: 600; letter-spacing: 0.04em; }
 .bb-clock-utc { margin-top: 1px; }
 .bb-clock-utc .bb-clock-time { color: var(--bb-txt-dim); font-size: var(--text-sm); }
 .bb-clock-zone { color: var(--bb-txt-mute); font-size: var(--text-xs); letter-spacing: 0.16em; }
