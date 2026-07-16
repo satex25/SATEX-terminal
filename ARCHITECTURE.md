@@ -67,7 +67,7 @@ Trading-safety-perimeter files ⚠️ (AGENTS guardrails apply): `order-manager.
 │                           account-syncer ·       13 tables, WAL)       │
 │                           symbol-resolver       VaultWriter · Logger   │
 │                                                 CredentialStore        │
-└────────────── Zod-validated IPC (122 channels, .strict()) ─────────────┘
+└────────────── Zod-validated IPC (123 channels, .strict()) ─────────────┘
                                    ▼
 ┌──────────────── PRELOAD (contextBridge, typed window.satex) ───────────┐
 └────────────────────────────────────────────────────────────────────────┘

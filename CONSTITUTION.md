@@ -95,7 +95,7 @@ A **Windows-only** desktop trading terminal:
 | UI | React 18.3 · TradingView Lightweight Charts v5 + custom WebGL layer (footprint · vol-heatmap · volume-profile · LOD) · Tailwind (dev) · "Black Box" design system (`--bb-*` tokens, 3 themes: classic / mono / bluyel, 9-step `--text-*` type scale) |
 | State | **Zustand 5** (24 stores; never Redux, never Jotai) |
 | Language | TypeScript 5.6, strict; ESLint 10 flat config |
-| IPC | Electron IPC, **122 channels** (`ipc-channels.ts`, measured P-103), all Zod v4 `.strict()` validated |
+| IPC | Electron IPC, **123 channels** (`ipc-channels.ts`, measured P-103), all Zod v4 `.strict()` validated |
 | Persistence | better-sqlite3 (**13 tables**, WAL) + Obsidian Vault (runtime data untracked; ledger, audits, READMEs tracked) |
 | Broker | Alpaca (REST v2 + WebSocket) behind broker-agnostic facets (`@shared/broker/`, concretes in `services/alpaca/`); Rithmic/Tradovate planned at L1.G |
 | Tests | Vitest — baseline **1,668 tests / 126 files** (P-100 gate record, 2026-07-13, `master` @ `32ceccd`; never quote a count you didn't just measure — refresh via `scripts/update-baseline.sh`, live number owned by `ARCHITECTURE.md` §4) |
@@ -515,7 +515,7 @@ plus extracted pure logic: `data-source-guard` · `order-event-router` ·
 │                                                 CredentialStore        │
 │                                                 Self-Diagnostic Core   │
 │                                                  (shared/health/)      │
-└────────────── Zod-validated IPC (122 channels, .strict()) ─────────────┘
+└────────────── Zod-validated IPC (123 channels, .strict()) ─────────────┘
                                    ▼
 ┌──────────────── PRELOAD (contextBridge, typed window.satex) ───────────┐
 └────────────────────────────────────────────────────────────────────────┘
