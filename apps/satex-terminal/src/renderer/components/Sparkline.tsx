@@ -1,6 +1,8 @@
 /**
  * SATEX — Inline SVG sparkline with optional filled area.
  */
+import { seriesExtent } from '../lib/extent'
+
 interface Props {
   data: number[]
   width?: number
@@ -15,7 +17,7 @@ export function Sparkline({ data, width = 60, height = 22, positive, area = true
   // and renders the entire sparkline as a flat line at the chart top.
   const clean = data.filter(Number.isFinite)
   if (clean.length < 2) return <svg width={width} height={height} />
-  const min = Math.min(...clean), max = Math.max(...clean)
+  const { min, max } = seriesExtent(clean)
   const span = (max - min) || 1
   const step = width / (clean.length - 1)
   const pts = clean.map((v, i) =>

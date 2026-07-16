@@ -7,9 +7,10 @@ import { resolve } from 'path'
 // Electron app it can't reach.
 export default defineConfig({
   test: {
-    include: ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.{test,spec}.ts'],
     exclude: ['node_modules/**', 'out/**', 'tests/e2e/**'],
   },
+  esbuild: { jsx: 'automatic' },
   resolve: {
     alias: {
       '@shared': resolve(__dirname, 'src/shared'),
