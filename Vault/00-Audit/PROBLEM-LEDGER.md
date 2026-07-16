@@ -34,7 +34,7 @@ updated: 2026-07-16
 
 ---
 
-### P-110 · Beta-readiness extreme bug/error sweep of `master` + the unstaged depth-feed pile — gate floor GREEN · perimeter INTACT · defect classes CLEAN — verdict CONDITIONAL-GO — SHIPPED (record)
+### P-110 · Beta-readiness extreme bug/error sweep of `master` + the unstaged depth-feed pile — gate floor GREEN · perimeter INTACT · defect classes CLEAN — verdict CONDITIONAL-GO — VERIFIED (record)
 - **Mandate:** Operator directed a full validation of master + local before beta ("extreme bug/error sweep … every moving part works together"). Scope: run the gate bar, hunt the repo's known defect classes, verify the trading-safety perimeter, triage the 7-file unstaged pile.
 - **Findings (measured 2026-07-16, master @ `b51405c`, with the pile in tree):**
   - **Gate floor GREEN:** typecheck node+web exit 0; eslint `src`+`tests` exit 0 (every dir); vitest **1,749 tests / 132 files, 0 failures** (segmented per sandbox recipe); knip CI-arbitrated (P-097, not sandbox-runnable). Baseline advanced from 1,668/126.
@@ -48,7 +48,7 @@ updated: 2026-07-16
   - **O4 — env hazard reconfirmed:** stale `.git/index.lock` EPERM on the mount mid-session (P-099 signature); all writes done via /tmp clone + bundle. Operator runs `scripts/git-unlock.ps1` before local git ops.
 - **Verdict: CONDITIONAL GO for beta** — code is green and the walls hold. Gating items before a beta build: (1) operator sign-off + commit of the depth-feed pile (O1); (2) knip green on CI (sandbox can't run it); (3) signed Windows installer — Authenticode cert remains the standing release blocker (§1.4).
 - **Gates:** sweep = measurement + docs; only code changes are P-108/P-109 (gates in those entries). Full report: `Vault/00-Audit/2026-07-16-BETA-READINESS-SWEEP.md`.
-- **Status:** SHIPPED (record; rides the `fix/p108-sparkline-extent` bundle). O1–O4 remain OPEN for operator.
+- **Status:** VERIFIED (2026-07-16). All sweep fixes landed on `master` with CI green: P-108/P-109 via PR #46, the sweep record itself via PR #48. Both gating observations closed — **O1** (depth-feed pile sign-off + commit) and **O2** (coupled doc-drift) landed via P-111 (PR #47, operator-armed). Remaining **O3** (WebGLRenderer paint-loop telemetry) and **O4** (stale `.git/index.lock` env hazard) stay OPEN as non-gating operator observations, not beta blockers.
 
 ### P-109 · Vitest could not run component render-tests — no React plugin (classic JSX transform ⇒ `React is not defined`) + a `.ts`-only include glob silently skipped `*.test.tsx` — FIXED with P-108 — SHIPPED (bundle)
 - **Problem:** Evidence (2026-07-16 sweep, `vitest.config.ts`): `include: ['src/**/*.{test,spec}.ts', …]` matches `.ts` only — a `*.test.tsx` is collected by nothing and trips no gate (proven: a fresh `Sparkline.test.tsx` ran zero tests, "No test files found", exit 1). Separately vitest registers no `@vitejs/plugin-react`, so esbuild transforms component JSX with the *classic* runtime (`React.createElement`) while components never `import React` (the app build uses the automatic runtime via electron-vite). Any test that renders/invokes a component throws `ReferenceError: React is not defined` — which is exactly why all 132 existing tests avoid rendering and assert only static/pure logic (`ErrorBoundary.test.ts` tests `getDerivedStateFromError`, never a render). Net: the infra could pin no render-level regression at all.
