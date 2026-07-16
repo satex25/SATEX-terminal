@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\": \"PSD loop: update Vault/00-Audit/PROBLEM-LEDGER.md if any problems surfaced this turn.\"}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
