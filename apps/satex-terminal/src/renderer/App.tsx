@@ -248,7 +248,7 @@ export default function App() {
         }
       }
       if (mod && e.key === 'Enter')           { e.preventDefault(); window.satex?.toggleFullscreen(); return }
-      // Workspace digits ⌘1..⌘5 — won't fire if focus is in an input, since
+      // Workspace digits ⌘1..⌘6 — won't fire if focus is in an input, since
       // typing a number into the qty field shouldn't switch workspaces.
       if (mod && !e.shiftKey && WS_DIGITS[e.key]) {
         const tag = (e.target as HTMLElement | null)?.tagName
