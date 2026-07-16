@@ -24,7 +24,6 @@
 import { useEffect, useState } from 'react'
 import { useAccountStore } from '../stores/accountStore'
 import { Dropdown, type DropdownItem } from './Dropdown'
-import { Dragonfly } from './Dragonfly'
 import { SessionPill } from './SessionPill'
 import { StatPill } from './StatPill'
 import { useClocks } from '../hooks/useClocks'
@@ -63,7 +62,7 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
   const status = useAccountStore(s => s.status)
   const account = useAccountStore(s => s.account)
   const autonomous = useAccountStore(s => s.autonomous)
-  const { utc, cst, session } = useClocks()
+  const { utc, local, localCode, session } = useClocks()
 
   const [tactics, setTactics] = useState<TacticsStatus | null>(null)
   const [observer, setObserver] = useState<ObserverStats | null>(null)
@@ -243,13 +242,10 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
 
   return (
     <div className="bb-topbar">
-      {/* Brand */}
-      <div className="bb-brand">
-        <Dragonfly size={28} title="SATEX" />
-        <div className="bb-brand-text">
-          <span className="bb-brand-name">SATEX</span>
-          <span className="bb-brand-version">v0.5.0 · 取引端末</span>
-        </div>
+      {/* Brand — wordmark carried over from the boot gate (no logo mark). */}
+      <div className="bb-brand" title="SATEX — Smart Autonomous Trading Experience">
+        <span className="bb-brand-word">SATEX</span>
+        <span className="bb-brand-tag">取引端末</span>
       </div>
 
       <span className="bb-vrule" />
@@ -372,11 +368,12 @@ export function TopBar({ onCmd, onOpenModal, liveModeEnabled, onTweaks, workspac
         />
       </div>
 
-      {/* Dual clocks */}
+      {/* Dual clocks — selectable local zone (Settings → Display) over the
+          fixed UTC trading anchor. */}
       <div className="bb-clocks">
-        <div className="bb-clock-row bb-clock-cst">
-          <span className="bb-clock-time">{cst}</span>
-          <span className="bb-clock-zone">CST</span>
+        <div className="bb-clock-row bb-clock-local">
+          <span className="bb-clock-time">{local}</span>
+          <span className="bb-clock-zone">{localCode}</span>
         </div>
         <div className="bb-clock-row bb-clock-utc">
           <span className="bb-clock-time">{utc}</span>

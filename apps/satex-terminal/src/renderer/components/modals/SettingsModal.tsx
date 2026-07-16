@@ -13,6 +13,7 @@ import { UNIVERSE, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL } from '@shared/const
 import { WORKSPACE_TABS, type Workspace, type SelfEvalStatus } from '@shared/types'
 import { useSubsecondStore, type PreferredBucketMs } from '../../stores/subsecondStore'
 import { useThemeStore, THEMES, type ThemeId } from '../../stores/themeStore'
+import { useTimezoneStore, TRADING_TIMEZONES, type TimezoneId } from '../../stores/timezoneStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useDataSourceStore } from '../../stores/dataSourceStore'
 import { useAccountStore } from '../../stores/accountStore'
@@ -110,6 +111,10 @@ export function SettingsModal({ open, onClose }: Props) {
   const setTheme = useThemeStore((s) => s.setTheme)
   const landingWorkspace    = useWorkspaceStore((s) => s.state.landingWorkspace)
   const setLandingWorkspace = useWorkspaceStore((s) => s.setLandingWorkspace)
+  // v0.6 — selectable local clock zone (the TopBar/Macro clock over the fixed
+  // UTC anchor). localStorage-backed like the theme; useClocks reads it.
+  const timezone    = useTimezoneStore((s) => s.timezone)
+  const setTimezone = useTimezoneStore((s) => s.setTimezone)
 
   // Market Data Feed (moved from the TopBar chip, operator ask 2026-07-04) —
   // same useDataSourceStore the old FeedSwitch used, so the data-source-guard.ts
@@ -642,6 +647,25 @@ export function SettingsModal({ open, onClose }: Props) {
         <div className="form-hint">
           {THEMES.find((t) => t.id === theme)?.description ?? ''}
           {' '}Theme changes apply instantly across the app and persist locally.
+        </div>
+        <div className="form-row">
+          <label htmlFor="tz-select">Local clock</label>
+          <select
+            id="tz-select"
+            className="dialog-select"
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value as TimezoneId)}
+          >
+            {TRADING_TIMEZONES.map((z) => (
+              <option key={z.id} value={z.id}>
+                {z.code} · {z.label} — {z.market}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="form-hint">
+          The upper clock (over the fixed UTC anchor) and the Macro strip’s “NOW”.
+          Daylight saving is applied automatically. UTC stays fixed as the trading anchor.
         </div>
         <div className="form-row">
           <label>Zoom</label>
