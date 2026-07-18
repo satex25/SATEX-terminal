@@ -6,6 +6,10 @@
   ],
   "compilerOptions": {
     "composite": true,
+    // TS 6 deprecates classic "node" (node10) resolution; the renderer is
+    // Vite-bundled, so "bundler" is the correct modern setting (matches
+    // tsconfig.node.json).
+    "moduleResolution": "bundler",
     "paths": {
       "@shared/*": ["./src/shared/*"],
       "@renderer/*": ["./src/renderer/*"]
