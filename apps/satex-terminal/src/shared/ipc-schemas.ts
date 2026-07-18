@@ -101,12 +101,20 @@ export const OptionalSessionIdReq = z.string().min(1).max(128).optional()
 export type OptionalSessionIdReq = z.infer<typeof OptionalSessionIdReq>
 
 // ── Credentials ─────────────────────────────────────────────────────────────
+// `.strict()` added P-114 (2026-07-18) — every other security-relevant schema
+// in this file already rejects unknown keys (see OrderSubmitReq/LiveModeSetReq
+// comments re: adversarial findings C1/C6); this is the channel that carries
+// the actual trading API secret and had been left on default (silently-strip)
+// mode. Verified against both call sites (SettingsModal.tsx savePaper/saveLive)
+// — neither sends anything beyond {keyId, secretKey, feed, mode} — so this is
+// behavior-preserving for real traffic and only closes the gap for a hostile
+// renderer trying to smuggle an extra field through.
 export const CredentialsSetReq = z.object({
   keyId: z.string().min(1).max(256),
   secretKey: z.string().min(1).max(512),
   feed: FeedS,
   mode: AccountModeS.optional(),
-})
+}).strict()
 export type CredentialsSetReq = z.infer<typeof CredentialsSetReq>
 
 /** Advisory-LLM config (provider-agnostic, OpenAI-compatible endpoint).
@@ -140,7 +148,11 @@ export const LiveModeSetReq = z.object({
 export type LiveModeSetReq = z.infer<typeof LiveModeSetReq>
 
 // ── Alpaca endpoint mode ────────────────────────────────────────────────────
-export const AlpacaModeSetReq = z.object({ mode: AccountModeS })
+// `.strict()` added P-114 (2026-07-18) — same rationale as CredentialsSetReq
+// above; mode-switching is adjacent to the live-mode arming perimeter. Verified
+// against its only call site (TopBar.tsx:185, `{ mode: target }`) — no extra
+// fields sent.
+export const AlpacaModeSetReq = z.object({ mode: AccountModeS }).strict()
 export type AlpacaModeSetReq = z.infer<typeof AlpacaModeSetReq>
 
 // ── AI brain ────────────────────────────────────────────────────────────────
