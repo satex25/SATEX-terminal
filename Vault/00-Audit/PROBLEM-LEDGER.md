@@ -15,6 +15,28 @@ updated: 2026-07-17
 
 ---
 
+### P-112 · File-bridge corruption event — 3 `.git` metadata files + 10 tracked files truncated in one session, all repaired from git objects — SHIPPED (working tree VERIFIED clean)
+- **PROBLEM (evidenced):** Session boot could not run `git` at all — `git branch` died with `fatal: bad config line 24 in file .git/config`. Investigation found the P-099 file-bridge corruption class had struck in a single event with the widest spread yet recorded:
+  - `.git/config` — NUL-stuffed from byte 496 to EOF (3736 bytes, 3263 NUL); everything from the `[receive]` section onward replaced with NUL padding. Valid config was the intact 496-byte prefix (remote correctly `satex25/SATEX-terminal`, `hooksPath = .husky`).
+  - `.git/packed-refs` — NUL-stuffed from byte 964 to EOF (3605 bytes, 2641 NUL). `master` still resolvable via loose ref `.git/refs/heads/master` (`4788d9c`); the salvageable prefix held `refs/heads/master` + `refs/remotes/origin/master` + tags.
+  - `.git/index` — `bad index file sha1 signature` (valid `DIRC` v2 header, corrupted trailing checksum/body).
+  - **10 tracked working-tree files truncated mid-token** (net −245 lines, +0 real): `Sparkline.tsx` cut at `strokeLineca`, `vitest.config.ts` at `resolve(__`, `PROBLEM-LEDGER.md` −151 lines (2926→2775), `CHANGELOG.md` −63, plus `CONSTITUTION.md`, `ARCHITECTURE.md`, app `CLAUDE.md`, `README.md`, `docs/GETTING-STARTED.md`, `tests/e2e/renderer-perf.spec.ts`. Each confirmed pure tail-truncation (HEAD strictly ⊃ working copy; the lone `+1` per file was the merged final line with `\ No newline at end of file`) — no authored work lost.
+  - A phantom zero-byte `.git/index.lock` (mtime 15:15) blocked every sandbox-side index write with an inconsistent mount view: one `stat` → ENOENT, the next `readdir` → present; `unlink` EPERM, `rename` ENOENT.
+- **SOLUTIONS considered:**
+  1. *Restore all corrupted files from git objects (HEAD) via the P-099 sanctioned mount-write path — `git show` / `read-tree` → atomic `os.replace` → byte-verify — sidestepping the un-writable index and the phantom lock.* **Chosen.** Git objects are the proven clean source (§2.9, P-021); read/rename ops only, zero destructive git commands.
+  2. *Reclone from origin.* Rejected as primary — heavier, needs network/auth, discards locally-recoverable clean state; kept as fallback.
+  3. *Wait for the operator to clear locks and let git self-heal.* Rejected as sole remedy — the config/packed-refs/truncation damage is not lock-related and persists regardless of the lock.
+- **DECISION + repair (evidence):**
+  - `.git/config` → truncated to the valid 496-byte prefix. `git branch` resolves `master`.
+  - `.git/packed-refs` → truncated to the valid 964-byte prefix. Refs resolve; loose `master` overrides the stale packed entry.
+  - `.git/index` → rebuilt from HEAD at a side path (`GIT_INDEX_FILE=.git/index.fresh git read-tree HEAD`) then renamed over the corrupt index (`unlink` was EPERM; `rename` works in this mount).
+  - **10 tracked files** → each restored via `git show HEAD:<path>` → atomic replace → byte-verify. Working tree `git status` **clean**, matches HEAD.
+  - **Verification:** full tracked-file NUL sweep (`grep -qP '\x00'`) CLEAN; `git fsck --connectivity-only` no errors (dangling objects only); ledger restored to 2926 lines, tail intact. Corrupt originals preserved at `/tmp/{config,packed-refs,index}.corrupt.bak`.
+  - **Phantom `index.lock`:** confirmed a sandbox-mount cache artifact only — operator reported no lock on the real Windows filesystem, and Windows `git status` reads clean + in sync with origin, proving the repairs wrote through the mount. The stale phantom persists in the sandbox's cached view and blocks sandbox-side index writes until remount; it does not touch the real repo.
+- **Scar reinforced:** most severe P-099 instance to date (metadata + source truncation, one session). Reaffirms §2.9 — in sandboxed sessions, tracked writes go through the bash mount with byte-verify, git objects are the recovery source, and ledger edits land via `/tmp`-clone + bundle (P-107), never in-mount rewrite, precisely because the bridge corrupts this file. This entry itself was landed that way.
+- **Status:** SHIPPED — all corruption repaired, working tree VERIFIED clean (`master @ 4788d9c`, fsck clean, zero NULs). Committed via `/tmp`-clone bundle handoff (mount index writes blocked by the phantom lock). Follow-up: none required; an operator remount clears the sandbox phantom.
+
+---
 ### P-113 · `upsertBrainParam` never replaces global (symbol:null) Brain params — SQLite composite-PK NULLs are pairwise distinct, so every `Brain.learn()` appends 8 fresh rows forever — FIXED (delete-then-insert + idempotent dedup migration) — SHIPPED (unstaged, 2026-07-17 dawn)
 - **PROBLEM:** Evidence: `persistence.ts:387-392` (pre-fix) ran `INSERT OR REPLACE INTO brain (key, symbol, …)` with `p.symbol ?? null`; the table's `PRIMARY KEY (key, symbol)` (persistence.ts:130) can never match an existing `(key, NULL)` row because SQLite treats PK NULLs as pairwise distinct. Proven live in a probe DB: three sequential upserts of the same key with `symbol:null` ⇒ 3 rows. Callers: `Brain.persist()` (brain.ts:148-158) writes all 7 feature weights + bias with `symbol: null` on EVERY `learn()` ⇒ 8 new rows per learning event, unbounded. `Brain.initialize()` (brain.ts:63) iterates every returned row and last-write-wins per key — which happens to be the newest ONLY because the PK-index scan yields insertion order within a `(key, NULL)` group (unspecified behavior, fragile). `trading-engine.ts:1637`'s health snapshot `brain.params` count inflates with the duplicates. Found during the P-094 persistence-coverage domain probe.
 - **SOLUTIONS considered:**
