@@ -46,5 +46,12 @@ jobs:
       - name: Dead-code audit (knip)
         run: npm run knip
 
+      # postinstall built better-sqlite3 against the Electron ABI, but vitest runs
+      # under plain Node — the Electron binary won't self-register there, so the
+      # persistence suite would silently fall back to the NullDB no-op store and
+      # fail (P-097: no false greens). Rebuild for the runner's Node ABI first.
+      - name: Rebuild better-sqlite3 for Node (vitest runs under Node, not Electron)
+        run: npm rebuild better-sqlite3 --build-from-source
+
       - name: Vitest unit suite
         run: npm test
