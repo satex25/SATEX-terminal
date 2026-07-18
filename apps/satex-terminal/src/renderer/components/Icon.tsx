@@ -2,6 +2,8 @@
  * SATEX — Inline SVG icon set.
  * Stroke-based, currentColor — inherits from parent.
  */
+import type { JSX } from 'react' // React 19 removed the global JSX namespace
+
 interface Props {
   name: 'settings' | 'expand' | 'close' | 'plus' | 'search' | 'bolt' | 'sparkles' | 'drag' | 'chart' | 'eye' | 'eyeoff'
   size?: number
