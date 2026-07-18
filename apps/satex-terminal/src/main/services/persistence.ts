@@ -3,12 +3,20 @@
  * Uses better-sqlite3 (synchronous). Falls back to in-memory no-op if the
  * native module isn't compiled yet (dev bootstrap or CI).
  *
- * Schema:
- *   sessions   — trading session records
- *   orders     — full order history with request + fill metadata
- *   pnl        — periodic equity snapshots per session
- *   brain      — learned stop-loss / take-profit parameters
- *   watchlist  — user-configured symbol list
+ * Schema (13 tables):
+ *   sessions        — trading session records
+ *   orders          — full order history with request + fill metadata
+ *   pnl             — periodic equity snapshots per session
+ *   brain           — learned Brain weights / bias (global + per-symbol)
+ *   watchlist       — user-configured symbol list
+ *   observations    — Phase 8 continuous-observer time series (append-only)
+ *   pattern_weights — Phase 8 PatternLearner weights, keyed (feature, regime)
+ *   learning_log    — Phase 8 per-cycle learning audit rows
+ *   calibration_log — confidence-calibration outcomes (Brier loop)
+ *   ticks           — Phase 9 replay tape (compressed quote snapshots)
+ *   replay_bookmarks — Phase 9 scrubber bookmarks
+ *   tape_manifest   — S1-10 tape integrity manifests
+ *   crypto_subsecond_candles — A1 sealed sub-second buckets
  */
 import fs from 'fs'
 import path from 'path'
@@ -268,6 +276,24 @@ function migrate(db: DB): void {
       log.warn('orders.trace_id migration unexpected error', { err: msg })
     }
   }
+  // P-113 — one-time dedup of legacy global brain-param rows. Every pre-fix
+  // upsertBrainParam({ symbol: null }) appended a duplicate (NULLs are
+  // pairwise distinct in the composite PK). Keep the newest write per key —
+  // highest rowid, which is byte-identical to what Brain.initialize()
+  // effectively loaded (PK-index scan yields insertion order within a
+  // (key, NULL) group). Idempotent: a clean DB deletes zero rows.
+  try {
+    const deduped = db.prepare(`
+      DELETE FROM brain WHERE symbol IS NULL AND rowid NOT IN
+        (SELECT MAX(rowid) FROM brain WHERE symbol IS NULL GROUP BY key)
+    `).run()
+    if (Number(deduped.changes) > 0) {
+      log.info('brain global-param duplicate rows deduped (P-113)', { rowsDeleted: Number(deduped.changes) })
+    }
+  } catch (e) {
+    log.warn('brain NULL-symbol dedup migration failed', { err: String(e) })
+  }
+
   log.info('sqlite schema migrated')
 }
 
@@ -385,10 +411,30 @@ export function listPnlSnapshots(sessionId: string): PnlSnapshot[] {
 // ─── Brain Parameters ────────────────────────────────────────────────────────
 
 export function upsertBrainParam(p: BrainParameter): void {
-  openDB().prepare(`
+  const db = openDB()
+  if (p.symbol == null) {
+    // P-113 — SQLite treats composite-PK NULLs as pairwise distinct, so
+    // INSERT OR REPLACE can never match an existing (key, NULL) row: every
+    // global-param upsert appended a fresh row (8 per Brain.learn(), forever).
+    // Global params therefore delete-then-insert, atomically where the driver
+    // supports transactions (NullDB degrades to sequential no-ops).
+    type TxDB = DB & { transaction?: <T extends (...args: unknown[]) => unknown>(fn: T) => T }
+    const txDb = db as TxDB
+    const exec = (): void => {
+      db.prepare('DELETE FROM brain WHERE key=? AND symbol IS NULL').run(p.key)
+      db.prepare(`
+        INSERT INTO brain (key, symbol, value, sample_size, confidence, updated_at)
+        VALUES (?,NULL,?,?,?,?)
+      `).run(p.key, p.value, p.sampleSize, p.confidence, p.updatedAt)
+    }
+    if (typeof txDb.transaction === 'function') (txDb.transaction(exec))()
+    else exec()
+    return
+  }
+  db.prepare(`
     INSERT OR REPLACE INTO brain (key, symbol, value, sample_size, confidence, updated_at)
     VALUES (?,?,?,?,?,?)
-  `).run(p.key, p.symbol ?? null, p.value, p.sampleSize, p.confidence, p.updatedAt)
+  `).run(p.key, p.symbol, p.value, p.sampleSize, p.confidence, p.updatedAt)
 }
 
 export function listBrainParams(): BrainParameter[] {
