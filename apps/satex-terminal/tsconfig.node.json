@@ -8,6 +8,10 @@
   ],
   "compilerOptions": {
     "composite": true,
+    // @vitejs/plugin-react 5 (and other modern deps) ship types only via an
+    // `exports` map; classic "node" resolution from the base config can't read
+    // them. "bundler" is the Vite-standard setting and pairs with module:esnext.
+    "moduleResolution": "bundler",
     "types": ["electron-vite/node"],
     "paths": {
       "@shared/*": ["./src/shared/*"],

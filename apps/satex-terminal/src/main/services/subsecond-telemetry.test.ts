@@ -5,14 +5,19 @@
  * emit-rate log. The aggregator calls recordEmit() on every seal; the
  * telemetry service is responsible for snapshot + log + reset.
  */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest'
 import { SubsecondTelemetry, type TelemetryDeps } from './subsecond-telemetry'
 
+// vitest 4 tightened Mock typing: a bare vi.fn() no longer satisfies a specific
+// (msg, data?) => void signature via intersection, so parameterize with the log
+// fn type explicitly.
+type LogFn = (msg: string, data?: Record<string, unknown>) => void
+
 function makeSpyLogger(): NonNullable<TelemetryDeps['logger']> & {
-  info:  ReturnType<typeof vi.fn>
-  debug: ReturnType<typeof vi.fn>
+  info:  Mock<LogFn>
+  debug: Mock<LogFn>
 } {
-  return { info: vi.fn(), debug: vi.fn() }
+  return { info: vi.fn<LogFn>(), debug: vi.fn<LogFn>() }
 }
 
 let telemetry: SubsecondTelemetry

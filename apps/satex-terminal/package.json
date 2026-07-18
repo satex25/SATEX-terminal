@@ -49,12 +49,12 @@
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@types/ws": "^8.5.12",
-    "@vitejs/plugin-react": "^4.3.2",
+    "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.5.4",
     "electron": "^32.2.0",
     "electron-builder": "^25.1.7",
     "electron-rebuild": "^3.2.9",
-    "electron-vite": "^2.3.0",
+    "electron-vite": "^5.0.0",
     "eslint": "^10.4.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
@@ -66,7 +66,7 @@
     "tsx": "^4.22.3",
     "typescript": "^5.6.2",
     "typescript-eslint": "^8.59.3",
-    "vite": "^5.4.8",
-    "vitest": "^2.1.2"
+    "vite": "^7.1.0",
+    "vitest": "^4.1.10"
   }
 }
