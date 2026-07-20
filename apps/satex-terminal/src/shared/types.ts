@@ -688,6 +688,10 @@ export interface TacticsStatus {
   expectancy: number
   maxDrawdown: number
   signalQuality: number
+  /** True when the closed-trade record clears the graduation bar (n≥floor ∧
+   *  expectancy>0 ∧ winRate≥floor). The GRADUATE button reads this; it never
+   *  recomputes the criterion. Stays true after graduation (button then hidden). */
+  graduationEligible: boolean
   vetoActive: boolean
   vetoReason: string | null
   lastUpdated: number
