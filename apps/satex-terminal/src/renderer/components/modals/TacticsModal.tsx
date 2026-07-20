@@ -40,7 +40,15 @@ export function TacticsModal({ open, onClose }: Props) {
     setBusy(false)
   }
 
-  const canGraduate = status?.state === 'calibrating' && status.tradesObserved >= status.tradesRequired
+  const canGraduate = status?.state === 'calibrating' && status.graduationEligible
+  // Which clause is holding graduation back (for a self-explaining disabled button).
+  const unmetClause = status && status.state === 'calibrating' && !status.graduationEligible
+    ? status.tradesObserved < status.tradesRequired
+      ? `${status.tradesObserved} / ${status.tradesRequired} closed trades`
+      : status.expectancy <= 0
+        ? `expectancy ${status.expectancy.toFixed(2)} must be positive`
+        : 'win rate below floor'
+    : null
 
   return (
     <Modal
@@ -98,6 +106,11 @@ export function TacticsModal({ open, onClose }: Props) {
               style={{ background: 'var(--warn-soft, rgba(245,158,11,0.08))', borderLeft: '3px solid var(--warn-glow, #F59E0B)', padding: '10px 14px', borderRadius: '0 var(--r-s) var(--r-s) 0' }}
             >
               <strong>Checkpoint:</strong> Graduating activates a hard pre-trade gate. This is a user-confirmed transition and cannot be auto-promoted.
+              {unmetClause && (
+                <div style={{ marginTop: 6, color: 'var(--ink-3)' }}>
+                  Not yet eligible — {unmetClause}.
+                </div>
+              )}
             </div>
           )}
         </>

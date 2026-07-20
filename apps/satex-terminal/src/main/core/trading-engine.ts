@@ -470,8 +470,8 @@ export class TradingEngine {
     // Snapshot weights for the end-of-session LEARNINGS drift diff
     this.brainParamsAtStart = db.listBrainParams()
 
-    // Tactics — seed from prior orders (approx)
-    this.tactics.seedFromOrders(db.listAllOrders())
+    // Tactics history is restored from persisted tactics.json (via recordOutcome);
+    // the retired seedFromOrders re-seed fabricated pnl:0 rows and double-counted.
 
     // Credential resolution: stored credentials take precedence over env.
     // Mode selection is owned by alpaca-mode.ts; default is 'paper'. Env vars
