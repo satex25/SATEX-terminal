@@ -7,7 +7,7 @@ about *how to work*, that one is about *what the app is*.
 
 ## What SATEX is
 
-Windows-only Electron + React 18 + TypeScript trading terminal (TradingView
+Windows-only Electron + React 19 + TypeScript trading terminal (TradingView
 Lightweight Charts v5, **Zustand**, better-sqlite3). It has a **live-capital
 trading path** via Alpaca. Treat it as production financial software, not a toy.
 

@@ -91,11 +91,11 @@ A **Windows-only** desktop trading terminal:
 
 | Layer | Reality (verified 2026-07-15) |
 |---|---|
-| Shell | Electron 32 (electron-vite), `commonjs` main; Node ≥ 20.19 (engines) — CI runs 20.19, operator hardware runs 24.x, sandboxes mount 22 (see §2.9) |
-| UI | React 18.3 · TradingView Lightweight Charts v5 + custom WebGL layer (footprint · vol-heatmap · volume-profile · LOD) · Tailwind (dev) · "Black Box" design system (`--bb-*` tokens, 3 themes: classic / mono / bluyel, 9-step `--text-*` type scale) |
+| Shell | Electron 43 (electron-vite), `commonjs` main; Node ≥ 20.19 (engines) — CI runs 20.19, operator hardware runs 24.x, sandboxes mount 22 (see §2.9) |
+| UI | React 19.2 · TradingView Lightweight Charts v5 + custom WebGL layer (footprint · vol-heatmap · volume-profile · LOD) · Tailwind 4 (dev) · "Black Box" design system (`--bb-*` tokens, 3 themes: classic / mono / bluyel, 9-step `--text-*` type scale) |
 | State | **Zustand 5** (24 stores; never Redux, never Jotai) |
-| Language | TypeScript 5.6, strict; ESLint 10 flat config |
-| IPC | Electron IPC, **123 channels** (`ipc-channels.ts`, measured P-103), all Zod v4 `.strict()` validated |
+| Language | TypeScript 6.0, strict; ESLint 10 flat config |
+| IPC | Electron IPC, **124 channels** (`ipc-channels.ts`, re-measured 2026-07-18), all Zod v4 `.strict()` validated |
 | Persistence | better-sqlite3 (**13 tables**, WAL) + Obsidian Vault (runtime data untracked; ledger, audits, READMEs tracked) |
 | Broker | Alpaca (REST v2 + WebSocket) behind broker-agnostic facets (`@shared/broker/`, concretes in `services/alpaca/`); Rithmic/Tradovate planned at L1.G |
 | Tests | Vitest — baseline **1,668 tests / 126 files** (P-100 gate record, 2026-07-13, `master` @ `32ceccd`; never quote a count you didn't just measure — refresh via `scripts/update-baseline.sh`, live number owned by `ARCHITECTURE.md` §4) |

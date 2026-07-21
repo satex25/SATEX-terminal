@@ -6,7 +6,7 @@ the durable architecture truth an agent needs before touching `satex-app/` — i
 contracts, and where things live. Keep it durable: per-release detail goes in the CHANGELOG,
 not here.
 
-Windows-only Electron + React 18 + TypeScript trading terminal — TradingView Lightweight
+Windows-only Electron + React 19 + TypeScript trading terminal — TradingView Lightweight
 Charts v5, **Zustand** (not Redux), better-sqlite3, Zod-validated IPC, `ws`. Node ≥ 20.19.
 It has a **live-capital path via Alpaca**: treat it as production financial software.
 

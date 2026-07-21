@@ -34,7 +34,7 @@ An **institutional-grade autonomous trading terminal** for Windows. Real-time ma
 
 ```bash
 # Clone the repo
-git clone https://github.com/satex25/satex.git
+git clone https://github.com/satex25/SATEX-terminal.git
 cd satex/apps/satex-terminal
 
 # Install dependencies
@@ -97,8 +97,8 @@ See `AGENTS.md` for the full workflow.
 
 | Layer | Technology |
 |-------|-----------|
-| **Runtime** | Electron 32 + Node 20.19 |
-| **UI Framework** | React 18 + TypeScript 5.6 |
+| **Runtime** | Electron 43 + Node 20.19 |
+| **UI Framework** | React 19 + TypeScript 6.0 |
 | **State** | Zustand (not Redux) |
 | **Charting** | TradingView Lightweight Charts v5 |
 | **Data** | WebSocket + REST (Alpaca API) |
@@ -260,6 +260,6 @@ SATEX is licensed under the **MIT License**. See `LICENSE` for details.
 
 ---
 
-**Latest Release:** [v0.5.0](https://github.com/satex25/satex/releases/tag/v0.5.0)  
-**Repository:** [satex25/satex](https://github.com/satex25/satex)  
+**Latest Release:** [v0.5.0](https://github.com/satex25/SATEX-terminal/releases/tag/v0.5.0)  
+**Repository:** [satex25/SATEX-terminal](https://github.com/satex25/SATEX-terminal)  
 **Last Updated:** 2026-06-12

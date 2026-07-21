@@ -17,7 +17,7 @@ mc4/                                ← canonical repo (master @ github.com/sate
 ├─ README.md                        ← quick start
 ├─ scripts/                         ← operator scripts (one-shot archive in scripts/archive/)
 ├─ apps/
-│  └─ satex-terminal/               ← THE app (Electron + React 18 + TS, Windows-only)
+│  └─ satex-terminal/               ← THE app (Electron + React 19 + TS, Windows-only)
 ├─ Vault/                           ← Obsidian vault — operational memory (runtime data
 │  │                                   untracked; the ledger, audits, and READMEs are tracked)
 │  ├─ 00-Audit/                     ← PROBLEM-LEDGER.md (living PSD queue) + forensic audits
