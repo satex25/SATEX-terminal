@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-07-19
+updated: 2026-07-21
 ---
 
 # Problem Ledger
@@ -14,6 +14,13 @@ updated: 2026-07-19
 > SHIPPED → VERIFIED**. Nothing is ever deleted — solved entries sink to §Closed.
 
 ---
+
+### P-126 · Lean-repo split: operator session history untracked from the stock clone; weekly-clean brief re-homed from its 8.3-mangled root name to docs/policy/; permanent local archive established — SHIPPED (2026-07-21)
+- **PROBLEM:** The stock `git clone` of SATEX-terminal carried the operator's personal session history — 37 tracked `Vault/Daily/` reports + 4 `Vault/_dashboards/` configs — alongside the app. Root also carried `SATEX-~1.md` (a Windows 8.3-mangled filename hiding the weekly-clean source brief; its own installed prompt anticipated "its eventual docs/policy/ home; check both") and the dated `2026-07-16-MERGE-RUNBOOK.md`. Operator directive (2026-07-21, explicit): the stock download = app + governance docs; personal history stays local and gets archived completely for look-back.
+- **SOLUTIONS considered:** 1. *Keep everything tracked, archive only untracked scratch.* Rejected — operator explicitly chose the lean clone. 2. *Untrack the entire Vault/.* Rejected — breaks session-boot ledger reads (`CLAUDE.md` mandates reading this ledger on boot) and CI-visible audit trail on fresh clones. 3. *Targeted split:* gitignore + `git rm --cached` for Daily/_dashboards only; governance (00-Audit, INDEX/HOME, Symbols, READMEs) stays tracked; full local archive. **Chosen.**
+- **DECISION + rationale:** (3). `.gitignore` gains `Vault/Daily/*`, `Vault/_dashboards/*`, `/_archive/`, and the root operator-workspace files (`/SATEX-COCKPIT.canvas`, `/PROJECT-INSTRUCTIONS.md`); 41 files `git rm --cached` (go-forward only — git history retains them all; **no history rewrite**, tags v0.4.4/v0.5.0 untouched). The brief moved to `docs/policy/weekly-clean-brief.md` (tracked; live pointers updated in the policy mirror + installed SKILL prompt; historical docs — this ledger's P-122 title, the 2026-07-19 handoff, the 2026-07-20 ultraplan — intentionally left verbatim, THIS entry is the rename map). The runbook filed at `docs/2026-07-16-MERGE-RUNBOOK.md` (precedent: `docs/CLEANUP-REPORT-2026-06-15.md`; sole external reference is the 2026-07-20 ultraplan's historical inventory, left verbatim). Archive at `_archive/` (see `MANIFEST-2026-07-21.md`): Daily snapshot ×38, full Claude Code session transcripts (~28 MB), retired scratch canvases. The daily agent pair + weekly-clean keep writing to `Vault/Daily/` unchanged — their reports are simply local-only now.
+- **Gates:** N/A app code (structure/docs only) — typecheck+lint green via pre-commit; CI four-gate arbitrates at merge. CHANGELOG: no entry (no app-behavior change; P-123 precedent).
+- **Status:** SHIPPED (2026-07-21).
 
 ### P-125 · Recurring stale `.git/*.lock` files (P-099 class) blocked git writes across sessions — root-caused to the Windows Defender + Search indexer racing git's unlink(); durable two-layer fix shipped (scanner-exclusion script + auto-clean hook) — SHIPPED (2026-07-20)
 - **PROBLEM:** Stale 0-byte lock files recurred under `.git` and blocked the next git write (`fatal: Unable to create '…/.git/index.lock': File exists`), forcing a manual `rm` 3–4 times and breaking session-to-session flow. Evidence (2026-07-20 census, no git process live): **5 stale locks across THREE unrelated git subsystems** — `.git/index.lock` (08:09, index write), `.git/objects/maintenance.lock` (4 days old, gc), and 3 `.git/refs/remotes/origin/**/*.lock` (fetch, 3 days old). The multi-subsystem, multi-day spread rules out a single interrupted command. **Root cause (verified):** on Windows, git creates a `*.lock` per index/ref/gc write and `unlink()`s it microseconds later; Windows Defender real-time scanning (`MsMpEng`) and the Windows Search indexer hold a transient handle on that `.lock` at the delete instant → `unlink` fails `EPERM` → git leaves the lock behind. A killed/timed-out agent git command leaves one identically. Confirmed the previously-"documented durable fix" was **never actually applied**: `scripts/git-unlock.ps1` referenced `scripts/README-git-locks.md` which DID NOT EXIST, and Defender exclusions can't even be read without admin — so every prior "fix" was just another manual `rm`.
