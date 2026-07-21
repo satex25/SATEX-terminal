@@ -1,11 +1,8 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
-    "src/main/index.ts",
-    "src/preload/index.ts",
     "src/renderer/index.html",
     "src/renderer/main.tsx",
-    "electron.vite.config.ts",
     "tests/e2e/**/*.spec.ts",
     "src/**/*.{test,spec}.ts"
   ],
@@ -14,8 +11,7 @@
     "!**/*.d.ts"
   ],
   "ignore": [
-    "src/renderer/panels/FundedAccountPanel.tsx",
-    "src/renderer/stores/fundedAccountStore.ts"
+    "src/renderer/panels/FundedAccountPanel.tsx"
   ],
   "ignoreDependencies": [
     "playwright"
