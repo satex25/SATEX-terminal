@@ -180,3 +180,14 @@ test-results/
 /*.bundle.lock
 /Terminal intro screen rework.zip
 /uploads/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lean-repo split (2026-07-21, ledger P-126): the stock clone ships the app +
+# governance docs; the operator's personal session history and root workspace
+# stay local-only. Point-in-time snapshots live in _archive/ (see its MANIFEST).
+# ─────────────────────────────────────────────────────────────────────────────
+Vault/Daily/*
+Vault/_dashboards/*
+/_archive/
+/SATEX-COCKPIT.canvas
+/PROJECT-INSTRUCTIONS.md
