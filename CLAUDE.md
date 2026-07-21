@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-SATEX is a Windows-only Electron + React 18 + TypeScript trading terminal with a live-capital trading path via Alpaca. Treat it as production financial software.
+SATEX is a Windows-only Electron + React 19 + TypeScript trading terminal with a live-capital trading path via Alpaca. Treat it as production financial software.
 
 ## Read these first
 

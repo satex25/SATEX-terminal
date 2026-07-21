@@ -6,7 +6,7 @@ Paste everything below this line into Claude Design.
 
 ## 1. WHAT YOU ARE DESIGNING
 
-A complete visual redesign of **SATEX**, a production-grade Windows-only Electron + React 18 + TypeScript trading terminal with a live-capital execution path (Alpaca). This is not a marketing site, not a dashboard mockup — it is a dense, operator-facing financial terminal that runs fullscreen for 8+ hours a day. The redesign must feel like institutional infrastructure: the lovechild of a Bloomberg terminal, a fighter-jet HUD, and a Teenage Engineering instrument. Push past what current trading UIs look like — but every pixel must survive translation back into our existing component tree without architectural surgery.
+A complete visual redesign of **SATEX**, a production-grade Windows-only Electron + React 19 + TypeScript trading terminal with a live-capital execution path (Alpaca). This is not a marketing site, not a dashboard mockup — it is a dense, operator-facing financial terminal that runs fullscreen for 8+ hours a day. The redesign must feel like institutional infrastructure: the lovechild of a Bloomberg terminal, a fighter-jet HUD, and a Teenage Engineering instrument. Push past what current trading UIs look like — but every pixel must survive translation back into our existing component tree without architectural surgery.
 
 ## 2. NON-NEGOTIABLE TRANSFER CONSTRAINTS (read first, obey always)
 

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/satex25/SATEX-terminal/actions/workflows/ci.yml/badge.svg)](https://github.com/satex25/SATEX-terminal/actions/workflows/ci.yml)
 
-A **Windows-only** Electron + React 18 + TypeScript trading terminal — TradingView
+A **Windows-only** Electron + React 19 + TypeScript trading terminal — TradingView
 Lightweight Charts v5, Zustand, better-sqlite3, Zod-validated IPC — with a
 **live-capital path via Alpaca**. Treat every line as production financial software.
 
