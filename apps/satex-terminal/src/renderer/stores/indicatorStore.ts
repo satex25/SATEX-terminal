@@ -81,6 +81,7 @@ export const useIndicatorStore = create<IndicatorStoreState>((set, get) => ({
   },
 
   setRsiPeriod: (n) => {
+    if (!Number.isFinite(n)) return // NaN passes the equality guard below and would poison live state (P-118 · P-039/P-040 class; mirrors main-side clampInt)
     const cur = get().settings
     const clamped = Math.max(2, Math.min(200, Math.round(n)))
     if (clamped === cur.rsiPeriod) return
@@ -90,6 +91,7 @@ export const useIndicatorStore = create<IndicatorStoreState>((set, get) => ({
   },
 
   setFibLookback: (n) => {
+    if (!Number.isFinite(n)) return // NaN passes the equality guard below and would poison live state (P-118 · P-039/P-040 class; mirrors main-side clampInt)
     const cur = get().settings
     const clamped = Math.max(5, Math.min(1000, Math.round(n)))
     if (clamped === cur.fibLookback) return
