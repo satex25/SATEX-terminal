@@ -452,3 +452,101 @@ describe('swing-points degenerate window/lookback (P-049)', () => {
     expect(averageVolume(candles, -1)).toBe(0)
   })
 })
+
+// ── RSI flat-line neutral branch (rsiFromAvgs 0/0 → 50, not NaN/100) ──────────
+// The existing rsiSeries tests cover only-gains (→100) and symmetric (~50) but
+// never a fully-flat series — the ONLY input that reaches the
+// `avgGain === 0 && avgLoss === 0 → 50` sub-branch of rsiFromAvgs (rsi.ts:48).
+// A dead-flat market must read a neutral 50, not NaN and not a spurious 100.
+describe('rsiSeries — flat-line neutral branch', () => {
+  it('returns exactly 50 for a dead-flat close series (period 5)', () => {
+    const out = rsiSeries(flatCandles([100, 100, 100, 100, 100, 100]), 5)
+    expect(out.values.slice(0, 5).every(v => Number.isNaN(v))).toBe(true)
+    expect(out.values[5]).toBe(50)
+  })
+
+  it('holds 50 across Wilder smoothing when every diff is zero (period 14)', () => {
+    const out = rsiSeries(flatCandles(new Array(20).fill(100)), 14)
+    const computed = out.values.slice(14)
+    expect(computed.length).toBe(6)
+    expect(computed.every(v => v === 50)).toBe(true)
+  })
+})
+
+// ── Fibonacci direction selection (uptrend vs downtrend level ordering) ───────
+// computeFibonacci flips its anchor math on `highIdx > lowIdx` (fibonacci.ts:45):
+// uptrend retraces DOWN from the high, downtrend retraces UP from the low. The
+// existing suite only exercises the uptrend value; these pin BOTH orderings so a
+// direction-sense regression (retracing the wrong way) turns red.
+describe('computeFibonacci — direction selection', () => {
+  function ramp(fn: (i: number) => number): Candle[] {
+    const cs: Candle[] = []
+    for (let i = 0; i < 50; i++) {
+      const v = fn(i)
+      cs.push(candle({ time: i, open: v, high: v, low: v, close: v, volume: 100 }))
+    }
+    return cs
+  }
+  const priceOf = (levels: ReadonlyArray<{ label: string; price: number }>, pct: string): number =>
+    levels.find(l => l.label.startsWith(`Fib ${pct}`))!.price
+
+  it('uptrend (high after low) retraces DOWN from the high — price falls as ratio rises', () => {
+    const candles = ramp(i => i * 2)            // ascending 0..98
+    candles[0]  = candle({ ...candles[0]!,  low: 0,   high: 0,   close: 0 })
+    candles[49] = candle({ ...candles[49]!, low: 100, high: 100, close: 100 })
+    const levels = computeFibonacci(candles, { lookback: 50 }).levels
+    expect(levels.length).toBe(5)
+    // Uptrend: price = 100 - 100*ratio → higher ratio = lower price.
+    expect(priceOf(levels, '23.6')).toBeCloseTo(76.4, 6)
+    expect(priceOf(levels, '78.6')).toBeCloseTo(21.4, 6)
+    expect(priceOf(levels, '23.6')).toBeGreaterThan(priceOf(levels, '38.2'))
+    expect(priceOf(levels, '38.2')).toBeGreaterThan(priceOf(levels, '50.0'))
+    expect(priceOf(levels, '50.0')).toBeGreaterThan(priceOf(levels, '61.8'))
+    expect(priceOf(levels, '61.8')).toBeGreaterThan(priceOf(levels, '78.6'))
+  })
+
+  it('downtrend (low after high) retraces UP from the low — price rises as ratio rises', () => {
+    const candles = ramp(i => 100 - i * 2)      // descending 100..2
+    candles[0]  = candle({ ...candles[0]!,  low: 100, high: 100, close: 100 })
+    candles[49] = candle({ ...candles[49]!, low: 0,   high: 0,   close: 0 })
+    const levels = computeFibonacci(candles, { lookback: 50 }).levels
+    expect(levels.length).toBe(5)
+    // Downtrend: price = 0 + 100*ratio → higher ratio = higher price (mirror of uptrend).
+    expect(priceOf(levels, '61.8')).toBeCloseTo(61.8, 6)   // 38.2 in the uptrend case — the discriminator
+    expect(priceOf(levels, '23.6')).toBeCloseTo(23.6, 6)
+    expect(priceOf(levels, '78.6')).toBeCloseTo(78.6, 6)
+    expect(priceOf(levels, '78.6')).toBeGreaterThan(priceOf(levels, '61.8'))
+    expect(priceOf(levels, '61.8')).toBeGreaterThan(priceOf(levels, '50.0'))
+    expect(priceOf(levels, '50.0')).toBeGreaterThan(priceOf(levels, '38.2'))
+    expect(priceOf(levels, '38.2')).toBeGreaterThan(priceOf(levels, '23.6'))
+  })
+})
+
+// ── Pivot Points — asymmetric close + strict R3>…>S3 ordering ─────────────────
+// The existing pivot test uses a SYMMETRIC HLC (C at the H/L midpoint), where the
+// even level spacing can mask an R1/R2 or S1/S2 formula transposition. An
+// off-centre close (C=115 in [90,120]) yields distinct, hand-verified levels and
+// pins the full monotonic ladder the operator legend depends on.
+describe('computePivotPoints — asymmetric close + ordering', () => {
+  it('pins all 7 levels for an off-centre close and the strict R3>…>S3 ladder', () => {
+    // H=120 L=90 C=115 → PP=(120+90+115)/3=108.3333, range=30
+    //   R1=2·PP−L=126.6667  S1=2·PP−H=96.6667
+    //   R2=PP+range=138.3333 S2=PP−range=78.3333
+    //   R3=H+2(PP−L)=156.6667 S3=L−2(H−PP)=66.6667
+    const out = computePivotPoints({ high: 120, low: 90, close: 115 })
+    const byLabel = Object.fromEntries(out.levels.map(l => [l.label, l.price]))
+    expect(byLabel['PP']).toBeCloseTo(108.3333, 4)
+    expect(byLabel['R1']).toBeCloseTo(126.6667, 4)
+    expect(byLabel['S1']).toBeCloseTo(96.6667,  4)
+    expect(byLabel['R2']).toBeCloseTo(138.3333, 4)
+    expect(byLabel['S2']).toBeCloseTo(78.3333,  4)
+    expect(byLabel['R3']).toBeCloseTo(156.6667, 4)
+    expect(byLabel['S3']).toBeCloseTo(66.6667,  4)
+    // Strict monotonic ladder — the property the operator legend renders.
+    const ladder = ['R3', 'R2', 'R1', 'PP', 'S1', 'S2', 'S3'].map(k => byLabel[k]!)
+    for (let i = 1; i < ladder.length; i++) {
+      expect(ladder[i - 1]).toBeGreaterThan(ladder[i]!)
+    }
+    expect(out.levels.map(l => l.label)).toEqual(['R3', 'R2', 'R1', 'PP', 'S1', 'S2', 'S3'])
+  })
+})
