@@ -89,6 +89,20 @@ test.describe('renderer frame budget (A1 perf canary)', () => {
       // row proves both that React mounted and the rail we click is interactive.
       await win.locator('.bb-watchlist-row').first().waitFor({ state: 'visible', timeout: 20_000 })
 
+      // ── Dismiss the cold-boot intro before touching the workspace. A fresh
+      // throwaway profile always cold-boots into the P-098 STANDBY GATE → boot
+      // ceremony (BootIntroSequence → StandbyGateFrame/BootCeremonyFrame): a
+      // full-frame `.sxg` overlay (role="presentation") that intercepts pointer
+      // events until armed. Without this the Trade-tab click below is swallowed by
+      // `.sxg-gate-center` (Playwright "…intercepts pointer events"). Arm the gate
+      // (its onClick = PRESS-ANY-KEY equivalent), then wait for the whole intro to
+      // unmount — the ceremony runs ~8.2s (or ~0.9s under prefers-reduced-motion)
+      // after a 0.5s arm fade, so allow generous slack.
+      const gate = win.locator('.sxg-gate')
+      await gate.first().waitFor({ state: 'visible', timeout: 15_000 })
+      await gate.first().click({ timeout: 10_000 })
+      await win.locator('.sxg').waitFor({ state: 'detached', timeout: 20_000 })
+
       // ── Stress path: the Trade workspace renders the lightweight-charts
       // ChartPanel — the path our perf.measure('chart:setData'/'chart:update')
       // instrumentation lives on, and where the S1-1 125ms frame-stall regression
