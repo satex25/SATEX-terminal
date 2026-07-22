@@ -2,63 +2,65 @@
 type: home
 title: SATEX — Home
 tags: [satex, home, moc]
-updated: 2026-07-02
+updated: 2026-07-20
 ---
 
-# SATEX — Home
+# Welcome back
 
-> [!abstract] The cockpit
-> One screen between you and everything this system knows. Machine notes flow
-> in by themselves — sessions, observer checkpoints, learnings, self-evals,
-> and trades. The maps below are curated and never dead-end.
-> Structure last reviewed **2026-07-02**.
+This is where SATEX starts. Not a dashboard trying to say everything at
+once — just a front door that gets you oriented fast, then sends you to
+whatever's actually true right now instead of a copy of it that'll go
+stale. Below: the way into the full cockpit, what's changed since you were
+last here, and the two or three things most worth five minutes of your
+attention today.
 
-> [!tip] Mile-marker, not a stopping point — 2026-07-02
-> Filesystem reorganized to `apps/satex-terminal/`; Intel workspace (composable
-> quant-intelligence tab) shipped; every side-rail panel now fully collapses
-> (P-073); a recurring aliasing-bug class caught and hardened a third time
-> (P-074). Gates: **117 files / 1488 tests / 0 fail**, typecheck/lint/knip all
-> clean. Full writeup: [[Vault/Daily/2026-07-02-full-project-validation|2026-07-02 Full-Project Validation]].
-> Next horizon: a full-day / multi-strategy review surface for the Brain (see
-> the ledger and the validation note for the honest read on what's built vs.
-> what needs your sign-off).
+## → [[SATEX-COCKPIT.canvas|Open the SATEX Cockpit canvas]]
 
-## Start here
+The full session-start view: the authority-chain reading order, the live
+learning loop, the audit trail, the vault map, the watchlist — one screen,
+maximalist by design.
 
-| Door | What's behind it |
-| --- | --- |
-| [[2026-06-14-master-execution-plan-ultraplan\|⭐ Master Execution Plan (today)]] | the holy list — eat-the-frog sequence anchored to L1.D, all phases + operator track |
-| [[Vault/00-Audit/PROBLEM-LEDGER\|Problem Ledger]] | the living PSD queue — open → decided → shipped → verified |
-| [[Vault/00-Audit/2026-06-10-FULL-SYSTEM-AUDIT\|Latest full audit]] | verified system state, findings, priority matrix |
-| [[Vault/00-INDEX\|Vault index]] | the map of every folder in this vault |
-| [[AGENTS]] · [[ARCHITECTURE]] | how to work the repo · the one-page system map |
+## Quick links
 
-## Live state — updates itself
+- [[Vault/00-Audit/PROBLEM-LEDGER|Problem Ledger]] — the living PSD queue: what's open, decided, shipped, verified
+- [[Vault/00-INDEX|Vault index]] — the map of every folder
+- [[AGENTS]] · [[ARCHITECTURE]] — how to work the repo · the one-page system map
+- [[Vault/Symbols/NVDA|NVDA]] · [[Vault/Symbols/AMD|AMD]] · [[Vault/Symbols/MSFT|MSFT]] · [[Vault/Symbols/AAPL|AAPL]] · [[Vault/Symbols/TSLA|TSLA]] · [[Vault/Symbols/META|META]] · [[Vault/Symbols/IWM|IWM]] — the watchlist
+- *Ctrl-P → "Open today's daily note"* for [[Vault/Templates/Daily|the daily template]]
 
-![[Vault/_dashboards/sessions.base]]
+## Recently
 
-More views: [[Vault/_dashboards/trades.base|trades]] · [[Vault/_dashboards/learning-loop.base|learning loop]] — see [[Vault/_dashboards/README|_dashboards]].
+*A hand-picked trail, not a live feed. If this looks old, the*
+*[[SATEX-COCKPIT.canvas|canvas]] and [[Vault/00-Audit/PROBLEM-LEDGER|ledger]] always know more than this note does.*
 
-## The day
+- **2026-07-20** — Back in sync on this machine. The three scheduled
+  agents — dawn planner (05:05), work-layer finisher (06:06), weekly
+  repo-clean (Sun 09:02) — were re-installed from their repo mirrors, and
+  the six unused connectors (Linear / Notion / Slack / Datadog / Amplitude
+  / Hex) were confirmed to touch nothing in this project. The recurring
+  stale `.git/*.lock` snags also got a real root-cause fix: an auto-clean
+  hook now runs before every git op (P-125).
+- **2026-07-20** — MAY-TACTICS graduation was hardened so it can't arm on
+  fabricated data, and the poison-additive order seeder was deleted.
+  Merged to master — **your live perimeter smoke-test is still pending**
+  (P-121).
+- **2026-07-18** — A full dependency upgrade campaign took the whole stack
+  to latest-compatible (React 19, Electron 43, TypeScript 6, Vite 7) and
+  cleared every HIGH/CRITICAL npm-audit finding — 22 down to 0 — across
+  eight reviewed PRs (P-115).
+- **2026-07-17** — A Brain persistence bug that was quietly duplicating
+  rows on every learning event, forever, got found, fixed, and merged to
+  master. 42 new tests pin it down (P-113).
 
-- **Open today's note** — *Ctrl-P → "Open today's daily note"*. Lands in `Vault/Daily/` with [[Vault/Templates/Daily|the template]] pre-filled (pre-open checklist → focus → session log → extraction).
-- **Watchlist:** [[Vault/Symbols/NVDA|NVDA]] · [[Vault/Symbols/AMD|AMD]] · [[Vault/Symbols/MSFT|MSFT]] · [[Vault/Symbols/AAPL|AAPL]] · [[Vault/Symbols/TSLA|TSLA]] · [[Vault/Symbols/META|META]] · [[Vault/Symbols/IWM|IWM]]
+## If you're just sitting down
 
-## How notes arrive (nobody files anything by hand)
+- Skim the [[Vault/00-Audit/PROBLEM-LEDGER|ledger]] for anything DECIDED
+  and waiting on you — usually the highest-leverage five minutes available.
+- Glance at the [[SATEX-COCKPIT.canvas|canvas]] for anything flagged red.
+- Start [[Vault/Templates/Daily|today's daily note]] if you're trading
+  today. The pre-open checklist takes two minutes and has saved worse days
+  than it's cost.
 
-| Folder | Written by | Cadence |
-| --- | --- | --- |
-| [[Vault/Sessions/README\|Sessions]] | engine (vault-writer) | session start + close |
-| [[Vault/Observer/README\|Observer]] | market observer | ~every 10 min while running; archived monthly |
-| [[Vault/Trades/README\|Trades]] | engine, on position close | per trade — **empty until P-013 closes** |
-| [[Vault/Tactics/README\|Tactics]] | MAY-TACTICS state machine | on observe ⇄ armed ⇄ veto transitions |
-| [[Vault/Learnings/README\|Learnings]] | engine shutdown | one ≤4 KB note per session (kept: 30) |
-| [[Vault/Backtests/README\|Backtests]] | nightly self-eval (02:30) | verdict tables vs locked baselines |
-| [[Vault/Brain/README\|Brain]] | brain milestones | rare, on milestone |
-| [[Vault/Daily/README\|Daily]] · [[Vault/Manual/README\|Manual]] | **you** | daily note · phase retros |
+---
 
-## Program state (dated 2026-07-02 — the ledger is the truth)
-
-- Branch: `refactor/filesystem-reorganization` — app now lives at `apps/satex-terminal/`. Ladder: **L1.A–C merged**; L1.D funded-compliance primitives built (topstep-50k-xfa, daily-pnl-ledger, eod-flatten, blackout-window); **L1.F (ensemble → autonomous wiring)** built but uncommitted, awaiting operator sign-off (ledger P-009 — touches the live-decision path).
-- Everything this session is **unstaged, gate-verified, awaiting your branch→PR review** per AGENTS.md — nothing was committed on your behalf.
-- Live numbers are never copied here — they rot. Open the newest note in `Learnings/`, `Vault/Backtests/`, or the dashboards above.
+*Good to have you back — the system remembers everything so you don't have to.*

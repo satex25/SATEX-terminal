@@ -2,13 +2,13 @@
 type: index
 title: SATEX Vault — Index
 tags: [satex, index, moc]
-updated: 2026-06-12
+updated: 2026-07-20
 ---
 
 # SATEX Vault
 
 > Cold-open entry point. Curated map of what's here and what to read first.
-> The cockpit view lives at [[HOME]] — live dashboards, watchlist, the day's workflow.
+> The cockpit view lives at [[SATEX-COCKPIT.canvas|the SATEX Cockpit canvas]] (2026-07-18) — live dashboards, watchlist, the day's workflow, one screen. [[HOME]] now just points there.
 > Numbers go stale by design — trust the folder (every folder now has a README explaining itself).
 
 ## Read first
