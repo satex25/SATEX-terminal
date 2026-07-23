@@ -4,8 +4,18 @@
  * Session-history learner with three states:
  *   - calibrating: not yet graduated; gate is pass-through.
  *   - armed:       user has graduated; gate is active and vetoes weak entries.
- *   - veto:        recent performance below floor → block all entries until
- *                  drawdown recovers or daily session resets.
+ *   - veto:        recent performance below floor → block all entries. The
+ *                  drawdown veto is a RUNNING-MAX LATCH: `metrics().maxDrawdown`
+ *                  is the max over the whole retained history, so once a breach
+ *                  enters the buffer the veto clears only when the trough-defining
+ *                  trades age out of the 500-trade FIFO (or history resets) — NOT
+ *                  via subsequent recovery trades. It is reconstructed from
+ *                  persisted history at boot, so it also persists across restarts.
+ *                  Deliberately conservative: the gate is a restriction, so a
+ *                  latched veto fails safe (it only ever blocks entries). See
+ *                  P-131 — accepted as intentional; windowed-drawdown recovery
+ *                  stays a future option only if evidence shows the latch is too
+ *                  aggressive. The stickiness is regression-pinned in tactics.test.ts.
  *
  * Graduation is a user-confirmed checkpoint (never auto-promoted). It becomes
  * AVAILABLE only once the closed-trade record clears the armed gate's own floors
