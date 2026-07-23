@@ -120,6 +120,7 @@ reference/vendor/
 .claude/sessions/
 .claude/projects/
 .claude/local/
+.claude/settings.local.json
 
 # SATEX vault — machine-local runtime + app-written state, never shared:
 #   Observer = continuous-observer checkpoints (one every ~10 min)
