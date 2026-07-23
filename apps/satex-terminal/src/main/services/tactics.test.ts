@@ -137,3 +137,85 @@ describe('tactics — null-safety', () => {
     expect(s.tradesRequired).toBe(30)
   })
 })
+
+/**
+ * Gap-fill on the P-121 suite (P-094 human-gated remainder). The 12 tests above
+ * all SEED the file and construct fresh; none drives recordOutcome, the 500-cap
+ * FIFO, live veto activation, veto stickiness, or post-graduation clause drift.
+ * Blueprint: docs/superpowers/specs/2026-07-22-live-mode-tactics-coverage-ultraplan.md.
+ */
+describe('tactics — recordOutcome mutation + persistence', () => {
+  it('appends a trade and persists it to disk', () => {
+    seed({ version: 1, history: [], graduated: false })
+    const eng = new TacticsEngine()
+    eng.recordOutcome('AAPL', 12.5)
+    expect(eng.status().tradesObserved).toBe(1)
+    const onDisk = readFile()
+    expect(onDisk.history).toHaveLength(1)
+    expect(onDisk.history[0].pnl).toBe(12.5)
+    expect(onDisk.history[0].symbol).toBe('AAPL')
+  })
+
+  it('trims the OLDEST row when history exceeds the 500 cap (FIFO)', () => {
+    // 'OLDEST' at index 0, then 499 'TEST' rows = 500 at the ceiling.
+    seed({ version: 1, history: [{ pnl: 1, ts: 1, symbol: 'OLDEST' }, ...repeat(499, 1)], graduated: false })
+    const eng = new TacticsEngine()
+    expect(eng.status().tradesObserved).toBe(500)
+    eng.recordOutcome('NEW', 2)
+    const onDisk = readFile()
+    expect(onDisk.history).toHaveLength(500)          // push→501 then shift→500
+    expect(onDisk.history[0].symbol).toBe('TEST')     // 'OLDEST' shifted off the front
+    expect(onDisk.history[499].symbol).toBe('NEW')    // newest appended to the back
+  })
+})
+
+describe('tactics — drawdown veto activation vs stickiness (finding F-1)', () => {
+  it('recordOutcome activates the drawdown veto mid-session, not only at boot', () => {
+    seed({ version: 1, history: [trade(100)], graduated: true })   // peak==equity, no drawdown
+    const eng = new TacticsEngine()
+    expect(eng.status().vetoActive).toBe(false)
+    eng.recordOutcome('X', -10)                                    // equity 90, peak 100 → 10% drawdown
+    const s = eng.status()
+    expect(s.vetoActive).toBe(true)
+    expect(s.state).toBe('veto')
+  })
+
+  it('is STICKY — a winning streak does NOT lift the veto within a session', () => {
+    // maxDrawdown is a running max over the retained buffer (metrics(), tactics.ts:191),
+    // so appended winners can never lower it — the veto-lift branch is unreachable this way
+    // (finding F-1). Pin the true behavior so any future windowed-drawdown refactor turns red.
+    seed({ version: 1, history: [trade(100), trade(-11)], graduated: true })   // 11% drawdown at boot
+    const eng = new TacticsEngine()
+    expect(eng.status().vetoActive).toBe(true)
+    for (let i = 0; i < 50; i++) eng.recordOutcome('WIN', 100)
+    const s = eng.status()
+    expect(s.vetoActive).toBe(true)
+    expect(s.state).toBe('veto')
+  })
+})
+
+describe('tactics — post-graduation preTradeGate clause drift', () => {
+  it('refuses on the win-rate clause when a graduated engine drifts below the floor', () => {
+    // 20 losses then 13 wins, all ±1: winRate 13/33 ≈ 0.39 (<0.45), trades ≥30.
+    // Ordered under water so cumulative equity never goes positive → peak stays 0 and
+    // metrics()' denominator is 1000 (tactics.ts:191), keeping drawdown below the veto
+    // floor so the win-rate clause — not the veto — is what fires.
+    seed({ version: 1, history: [...repeat(20, -1), ...repeat(13, 1)], graduated: true })
+    const eng = new TacticsEngine()
+    expect(eng.status().vetoActive).toBe(false)
+    const res = eng.preTradeGate(0.9)   // high confidence isolates the win-rate clause
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.reason).toMatch(/[Ww]in rate/)
+  })
+
+  it('refuses on the expectancy clause when win-rate holds but expectancy goes negative', () => {
+    // 15 losses of -2 then 15 wins of +1: winRate 0.5 (passes the win-rate floor),
+    // expectancy -0.5 (<0). Under water throughout → no veto short-circuit.
+    seed({ version: 1, history: [...repeat(15, -2), ...repeat(15, 1)], graduated: true })
+    const eng = new TacticsEngine()
+    expect(eng.status().vetoActive).toBe(false)
+    const res = eng.preTradeGate(0.9)
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.reason).toMatch(/[Ee]xpectancy/)
+  })
+})
