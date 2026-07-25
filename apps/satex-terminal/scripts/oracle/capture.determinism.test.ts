@@ -61,7 +61,7 @@ afterEach(async () => {
  * One full capture in a fresh world: new sandbox, new module registry, new
  * database. Everything a second run could inherit from the first is discarded.
  */
-async function captureOnce(tape: CorpusTape): Promise<CaptureResult> {
+async function captureOnce(tape: CorpusTape, extra?: { autonomy?: boolean; speed?: number }): Promise<CaptureResult> {
   sb.dispose()
   sb = createSandbox()
   stub.journal.reset()
@@ -69,6 +69,7 @@ async function captureOnce(tape: CorpusTape): Promise<CaptureResult> {
   vi.useFakeTimers({ now: tape.header.firstTs })
   try {
     return await captureGolden({
+      ...extra,
       sandbox: sb,
       clock: {
         now: () => Date.now(),
@@ -83,6 +84,25 @@ async function captureOnce(tape: CorpusTape): Promise<CaptureResult> {
     try { (await import('../../src/main/services/persistence')).closeDB() } catch { /* never opened */ }
     vi.useRealTimers()
   }
+}
+
+/**
+ * First point at which two golden streams disagree, rendered for a human.
+ *
+ * A determinism failure is a halt-and-investigate condition, so the report has
+ * to name the record rather than dump two 90 KB blobs — this is the same shape
+ * Appendix A.4 asks of the drift report: first divergence, with context.
+ */
+function firstDivergence(a: readonly string[], b: readonly string[]): string | null {
+  const n = Math.min(a.length, b.length)
+  for (let i = 0; i < n; i++) {
+    if (a[i] !== b[i]) {
+      const parsed = JSON.parse(a[i]!) as { kind: string; tickIndex: number }
+      return `record ${i} (kind=${parsed.kind}, tickIndex=${parsed.tickIndex})\n  run 1: ${a[i]}\n  run 2: ${b[i]}`
+    }
+  }
+  if (a.length !== b.length) return `record counts differ: run 1 has ${a.length}, run 2 has ${b.length}`
+  return null
 }
 
 const SYNTHETIC = (): CorpusTape => synthesizeTape({
@@ -119,6 +139,52 @@ describe('double-run determinism — synthetic tape (runs everywhere, including 
     const secondIds = [...second.stream.idMappings().keys()]
     expect(firstIds.length).toBeGreaterThan(0)
     expect(secondIds).not.toEqual(firstIds)
+  }, 300_000)
+
+  /**
+   * KNOWN DEFECT PIN — ledger P-155. This test asserts that something is
+   * BROKEN, and must fail the day it is fixed.
+   *
+   * The AI decision path is **not** replay-deterministic. `getAiDecision`
+   * (`trading-engine.ts:1538`) passes `this.depth.get(symbol)` into
+   * `brain.decide()`, `DepthFeedService.jitterFor` churns that ladder with four
+   * unseeded `Math.random()` calls per tick (`depth-feed.ts:87-91`), and the
+   * brain turns the top of the ladder into `depth_imbalance` (weight 0.15) and
+   * `microprice_dev` (0.10) (`brain.ts:86-105`). So a quarter of every
+   * confidence score is drawn from an unseeded RNG.
+   *
+   * Measured divergence: identical symbol, tick index, and virtual timestamp;
+   * confidence 0.3520162749933342 vs 0.36683881944775815.
+   *
+   * This is why `autonomy` defaults to off and why the archived golden carries
+   * no decision records. It is a hard blocker for Oracle L1 decision parity —
+   * the Rust engine cannot reproduce a number drawn from `Math.random()`. The
+   * remedy is a seeded RNG in `depth-feed.ts`, which is an engine change and
+   * needs an operator ruling.
+   *
+   * When that lands, this test fails, and the person who fixed it should delete
+   * it, flip `autonomy` on for the corpus capture, and regenerate the goldens.
+   */
+  it('KNOWN DEFECT (P-155): the decision stream is NOT deterministic — unseeded depth RNG reaches confidence', async () => {
+    // Speed 1, not the default 10: the trader's cycle is 30 s of *virtual wall*
+    // time, so at 10× this 120-second tape would finish in 12 s and the trader
+    // would never fire once. At 1× the cycle runs repeatedly.
+    const opts = { autonomy: true, speed: 1 }
+    const first = await captureOnce(SYNTHETIC(), opts)
+    const second = await captureOnce(SYNTHETIC(), opts)
+
+    const kinds = first.stream.snapshot().map(l => (JSON.parse(l) as { kind: string }).kind)
+    expect(kinds).toContain('autonomy.enabled')
+    expect(kinds.filter(k => k === 'autonomy.decision').length).toBeGreaterThan(0)
+    expect(first.summary.replayEndReason).toBe('end-of-tape')
+
+    const divergence = firstDivergence(first.stream.snapshot(), second.stream.snapshot())
+    expect(divergence, 'depth RNG appears to have been seeded — see the docblock above, then delete this test').not.toBeNull()
+    // Pin *where* it diverges. If the first divergence ever moves to another
+    // record kind, that is a second, separate nondeterminism and wants its own
+    // investigation rather than being absorbed by this pin.
+    expect(divergence).toMatch(/kind=autonomy\.decision/)
+    expect(divergence).toMatch(/confidence/)
   }, 300_000)
 
   it('hashes differently when the tape changes', async () => {

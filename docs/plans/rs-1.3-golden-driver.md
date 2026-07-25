@@ -91,14 +91,36 @@ engine's `onAccount` push covers event-driven changes, and a pulled checkpoint e
 replay-status pushes (≈2 virtual seconds) covers the rest. The pulled half is not
 optional — a replay routes no orders, so the push never fires on its own.
 
-### Deliberate scope exclusion
+### The decision stream is not deterministic yet — P-155
 
-`depth-feed.ts:89-92` perturbs its ladder with **unseeded `Math.random()`**, and
-`RegimeService` consumes its VPIN. Neither is captured. Appendix A.2 requires such sites
-to be seamed out *or* excluded by explicit ruling rather than silently tolerated, so:
-**depth and regime are outside Oracle L1/L2 until they take a seeded RNG.** Including
-them today would fail the double-run proof — which would be the tripwire working, not a
-reason to widen a tolerance.
+The archived golden carries **no** `autonomy.decision` records, and `autonomy` defaults
+to off. That is not a scoping preference; it is a defect this driver found.
+
+`getAiDecision` (`trading-engine.ts:1538`) passes `this.depth.get(symbol)` into
+`brain.decide()`. `DepthFeedService.jitterFor` churns that ladder with four unseeded
+`Math.random()` calls per tick (`depth-feed.ts:87-91`). The brain turns the top of the
+ladder into `depth_imbalance` (weight 0.15) and `microprice_dev` (0.10)
+(`brain.ts:86-105`). **So a quarter of every confidence score is drawn from an unseeded
+RNG.**
+
+Measured with autonomy enabled: two runs, identical symbol, tick index, and virtual
+timestamp — confidence `0.3520162749933342` vs `0.36683881944775815`.
+
+This is a **hard blocker for Oracle L1 decision parity**: the Rust engine cannot
+reproduce a number drawn from `Math.random()`. It is pinned by a deliberately-failing-
+when-fixed test in `capture.determinism.test.ts` so it cannot quietly persist, and it is
+filed as ledger **P-155**. The remedy is a seeded RNG in `depth-feed.ts` — an engine
+change, so it needs an operator ruling.
+
+An earlier draft of this document described depth as merely "not captured", implying a
+harmless side channel. That was wrong: depth is an **input to the decision path**, and
+excluding it from the captured stream does not remove it from the computation. Appendix
+A.2 requires such sites to be seamed out *or* excluded by explicit ruling rather than
+silently tolerated — this is the explicit statement, and the recommendation is to seam,
+not to exclude.
+
+`RegimeService` consumes the same depth VPIN and is likewise outside L1/L2 until the seam
+lands.
 
 ## 5. Measured results (2026-07-25)
 
@@ -114,9 +136,12 @@ Rescued P-143 corpus tape — 35,658 rows, 18 symbols, 9.15 minutes:
 | Attestation | 1 network attempt blocked (`sec.gov`), **0 dialogs answered** |
 | Double-run | **byte-identical**, both runs |
 
-**Risk R3 is measured and closed for the captured surface**: the TS replay path *is*
-decision-deterministic under the RS-0.7 harness design. This was the plan's designated
-early-warning tripwire; it fired green.
+**Risk R3 is measured, and the answer is split.** For the captured surface — gate
+verdicts, account/brain/calibration/session state, feed status, replay lifecycle — the TS
+replay path *is* reproducible under the RS-0.7 harness design. For the **AI decision
+stream it is not**, because of P-155 above. The plan's designated early-warning tripwire
+fired, in week one of M1, exactly as it was designed to; §4 has the diagnosis. R3 cannot
+be closed until the depth seam lands.
 
 Gates: typecheck **0** · lint **0** · knip **0** · vitest **167 files / 2,188 tests, 0
 failed** (baseline before this work: 160 / 2,120).
@@ -165,8 +190,11 @@ test states out loud which mode the run was in.
    disqualified git), a golden is **92 KB**; twenty of them is ~2 MB, which is entirely
    git-appropriate. Recommend a `!Vault/Backtests/goldens/` negation so parity claims can
    cite a committed artifact.
-2. **Corpus breadth.** The proof runs against one 9.15-minute session. RS-1.2's ≥20
+2. **P-155 — seed the depth RNG.** The highest-value of the three. Until
+   `depth-feed.ts:87-91` takes a seeded RNG, the AI decision stream cannot enter Oracle
+   L1, which means the parity harness measures the engine's *state* but not its
+   *judgement*. This is an engine change on a perimeter-adjacent module, so it needs a
+   ruling before anyone writes it.
+3. **Corpus breadth.** The proof runs against one 9.15-minute session. RS-1.2's ≥20
    sessions across five regime tags still needs operator recordings; that is the M1
    critical path, not this task.
-3. **Depth/regime seaming.** Ratify the §4 exclusion, or schedule a seeded-RNG seam for
-   `depth-feed.ts` so they can enter L1/L2 scope.

@@ -103,6 +103,17 @@ export interface CaptureOptions {
    *  Folded into the summary so a capture can attest that no dialog was
    *  answered during the run. */
   journal?: StubJournal
+  /**
+   * Run the autonomous trader during the capture, populating the
+   * `autonomy.decision` stream. Off by default.
+   *
+   * Safe by three independent walls, none of which this harness supplies:
+   * `AutonomousTrader` refuses to submit when live capital is routed, the
+   * sandbox has no broker credentials so nothing could be routed anyway, and
+   * `submitOrder` refuses outright during replay. What survives is the part
+   * worth capturing — the *decisions*, which is what Appendix A.3 L1 is about.
+   */
+  autonomy?: boolean
 }
 
 /** Everything a capture can attest to about itself. */
@@ -253,6 +264,11 @@ export async function captureGolden(opts: CaptureOptions): Promise<CaptureResult
       tapeEndTs: openStatus.tapeEndTs,
     })
     emitStateCheckpoint()
+
+    if (opts.autonomy === true) {
+      const enabled = engine.enableAutonomous()
+      emit('L1', 'autonomy.enabled', enabled)
+    }
 
     // ── Drive the clock ──────────────────────────────────────────────────────
     // `ReplaySource` auto-pauses with `end-of-tape` once the cursor reaches the
