@@ -1,0 +1,4 @@
+# RS-0.3 — pinned toolchain (installed + verified 2026-07-24, ledger P-136/P-137)
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

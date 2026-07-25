@@ -55,3 +55,103 @@ jobs:
 
       - name: Vitest unit suite
         run: npm test
+
+  # ── RS-UP-1 (ledger P-138): additive Rust six-gate bar for apps/satex-engine-rs ──
+  # Two jobs per plan D-016: ubuntu is speed, windows-latest is the merge-blocking
+  # arbiter (Windows is the truth platform). Gate tools are release-pinned and
+  # sha256-verified inline — deliberately no third-party actions (supply-chain
+  # posture per RS-L9 / risk R7). The TS `Gates` job above is untouched.
+  rust-gates-linux:
+    name: Rust gates (ubuntu, fast)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/satex-engine-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (reads rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install cargo-deny 0.20.2 + cargo-machete v0.9.2 (pinned, sha256-verified)
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/deny.tar.gz https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+          echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  /tmp/deny.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/deny-x && tar -xzf /tmp/deny.tar.gz -C /tmp/deny-x
+          install "$(find /tmp/deny-x -name cargo-deny -type f | head -1)" "$HOME/.cargo/bin/"
+          curl -sSfL -o /tmp/machete.tar.gz https://github.com/bnjbvr/cargo-machete/releases/download/v0.9.2/cargo-machete-v0.9.2-x86_64-unknown-linux-musl.tar.gz
+          echo "48200087f54c55aabcd4db4af1e25742b49846c02a1b1bfa134711945b35b2e9  /tmp/machete.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/machete-x && tar -xzf /tmp/machete.tar.gz -C /tmp/machete-x
+          install "$(find /tmp/machete-x -name cargo-machete -type f | head -1)" "$HOME/.cargo/bin/"
+
+      - name: Gate 1 — format
+        run: cargo fmt --check
+
+      - name: Gate 2 — clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Gate 3 — tests
+        run: cargo test --workspace
+
+      - name: Gate 4 — docs (deny warnings)
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Gate 5 — dead deps (machete)
+        run: cargo machete
+
+      - name: Gate 6 — supply chain (deny)
+        run: cargo deny check
+
+  rust-gates-windows:
+    name: Rust gates (windows arbiter)
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: apps/satex-engine-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (reads rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install cargo-deny 0.20.2 + cargo-machete v0.9.2 (pinned, sha256-verified)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          curl.exe -sSfL -o $env:TEMP\deny.tar.gz https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz
+          $h = (Get-FileHash "$env:TEMP\deny.tar.gz" -Algorithm SHA256).Hash
+          if ($h -ne '975A22143262FD27476D19EE00C7AF67978426E40E1DEE94EED6BBADE1CF87DC') { Write-Error "cargo-deny sha256 mismatch: $h"; exit 1 }
+          New-Item -ItemType Directory -Force "$env:TEMP\deny-x" | Out-Null
+          tar -xzf "$env:TEMP\deny.tar.gz" -C "$env:TEMP\deny-x"
+          Copy-Item (Get-ChildItem -Recurse "$env:TEMP\deny-x" -Filter cargo-deny.exe | Select-Object -First 1).FullName "$env:USERPROFILE\.cargo\bin\"
+          curl.exe -sSfL -o $env:TEMP\machete.tar.gz https://github.com/bnjbvr/cargo-machete/releases/download/v0.9.2/cargo-machete-v0.9.2-x86_64-pc-windows-msvc.tar.gz
+          $h = (Get-FileHash "$env:TEMP\machete.tar.gz" -Algorithm SHA256).Hash
+          if ($h -ne '996120AC70AFE405C58FCE508A476F25BB71032C6FB8013AA0123BBA36429C76') { Write-Error "cargo-machete sha256 mismatch: $h"; exit 1 }
+          New-Item -ItemType Directory -Force "$env:TEMP\machete-x" | Out-Null
+          tar -xzf "$env:TEMP\machete.tar.gz" -C "$env:TEMP\machete-x"
+          Copy-Item (Get-ChildItem -Recurse "$env:TEMP\machete-x" -Filter cargo-machete.exe | Select-Object -First 1).FullName "$env:USERPROFILE\.cargo\bin\"
+
+      - name: Gate 1 — format
+        run: cargo fmt --check
+
+      - name: Gate 2 — clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Gate 3 — tests
+        run: cargo test --workspace
+
+      - name: Gate 4 — docs (deny warnings)
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Gate 5 — dead deps (machete)
+        run: cargo machete
+
+      - name: Gate 6 — supply chain (deny)
+        run: cargo deny check

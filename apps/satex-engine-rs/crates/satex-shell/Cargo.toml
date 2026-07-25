@@ -1,0 +1,10 @@
+[package]
+name = "satex-shell"
+description = "PERIMETER-ADJACENT (updater/credentials/arming modules human-gated): Tauri 2 shell — windows, native arming dialog, kill chord, pinned updater, keyring credentials (Phase 9). Stub lib until RS-9.1."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

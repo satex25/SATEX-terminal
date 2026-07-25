@@ -1,0 +1,10 @@
+[package]
+name = "satex-data"
+description = "Data plane: Simulator | LiveMarket | Replay sources, candle buffer, sub-second aggregator, tick recorder, depth feed, aux feeds (Phase 3)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

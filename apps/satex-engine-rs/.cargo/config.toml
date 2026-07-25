@@ -1,0 +1,4 @@
+# RS-0.3 — workspace cargo config. Intentionally minimal: lints live in
+# [workspace.lints] (Cargo.toml) + clippy.toml; supply chain in deny.toml.
+[net]
+retry = 3
