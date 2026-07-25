@@ -6,3 +6,8 @@
 //! Layer 0 before claiming any task in this crate.
 
 #![forbid(unsafe_code)]
+
+/// Deliberate RS-0.4 gate-can-fail proof (P-097 law) — THIS PR MUST GO RED AND NEVER MERGE.
+pub fn p097_gate_proof() -> i32 {
+    "not a number".parse::<i32>().unwrap()
+}
