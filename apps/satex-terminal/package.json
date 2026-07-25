@@ -13,7 +13,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "lint:types": "npm run typecheck",
-    "lint": "eslint src tests",
+    "lint": "eslint src tests scripts/oracle",
     "knip": "knip",
     "test": "vitest run",
     "test:watch": "vitest",
