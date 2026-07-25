@@ -3,7 +3,7 @@
 > The one-page map of everything in this workspace. *How to work the repo* →
 > [`AGENTS.md`](AGENTS.md). *App invariants* → [`apps/satex-terminal/CLAUDE.md`](apps/satex-terminal/CLAUDE.md).
 > *What changed when* → [`CHANGELOG.md`](apps/satex-terminal/CHANGELOG.md).
-> Last structural update: **2026-07-16**.
+> Last structural update: **2026-07-24**.
 
 ---
 
@@ -17,7 +17,11 @@ mc4/                                ← canonical repo (master @ github.com/sate
 ├─ README.md                        ← quick start
 ├─ scripts/                         ← operator scripts (one-shot archive in scripts/archive/)
 ├─ apps/
-│  └─ satex-terminal/               ← THE app (Electron + React 19 + TS, Windows-only)
+│  ├─ satex-terminal/               ← THE app (Electron + React 19 + TS, Windows-only)
+│  └─ satex-engine-rs/              ← Rust engine rewrite workspace (RS-UP-1, adopted 2026-07-24,
+│                                      ledger P-135; Cargo workspace lands at RS-0.2). Unshipped
+│                                      additive sibling — ZERO contact with the shipping engine
+│                                      or the trading-safety perimeter until the audited M5 flip
 ├─ Vault/                           ← Obsidian vault — operational memory (runtime data
 │  │                                   untracked; the ledger, audits, and READMEs are tracked)
 │  ├─ 00-Audit/                     ← PROBLEM-LEDGER.md (living PSD queue) + forensic audits
