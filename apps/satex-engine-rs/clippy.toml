@@ -1,0 +1,5 @@
+# RS-0.3 — f32 is denied in engine code: JS numbers are IEEE-754 binary64, so any
+# f32 in ported math is a parity bug by construction (RS-UP-1 Appendix B.1).
+disallowed-types = [
+  { path = "f32", reason = "engine math is f64-only — f32 is a parity bug (RS-UP-1 Appendix B.1)" },
+]

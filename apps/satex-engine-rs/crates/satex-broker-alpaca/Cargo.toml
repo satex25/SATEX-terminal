@@ -1,0 +1,10 @@
+[package]
+name = "satex-broker-alpaca"
+description = "Alpaca concretes: REST (reqwest+rustls), WS (tokio-tungstenite), order-router with failUnacked, account-syncer, symbol-resolver (Phase 7)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

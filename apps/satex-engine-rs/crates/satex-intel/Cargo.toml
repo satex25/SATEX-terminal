@@ -1,0 +1,10 @@
+[package]
+name = "satex-intel"
+description = "Intelligence: brain SGD, calibration (downgrade-only), pattern-learner, tactics, autonomous-trader (paper-only wall), self-eval PSR/DSR, LLM advisory wall (Phase 5)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

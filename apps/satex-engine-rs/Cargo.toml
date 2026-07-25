@@ -1,0 +1,29 @@
+# SATEX-RS — Cargo workspace root (RS-UP-1 §2.3; scaffolded at RS-0.2, ledger P-136)
+# Every crate here is an UNSHIPPED additive sibling of apps/satex-terminal until the
+# audited M5 flip. ⚠️ crates (satex-risk, satex-exec, satex-shell's perimeter modules)
+# are human-gated: one PR each, operator review required (Appendix D / D-013).
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.dependencies]
+# Shell-stack pins recorded at scaffold (verified live via cargo search, 2026-07-24).
+# Nothing depends on these yet — they enter the graph at RS-9.1/RS-9.5 with their
+# D-012 justification rows. Re-verify current versions at consumption (RS-L5).
+tauri = "2.11.5"
+tauri-plugin-updater = "2.10.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+disallowed_types = "deny"

@@ -36,6 +36,31 @@ Nothing commits or merges unless **all four** pass. CI enforces all four on ever
 push/PR (see `ci.yml`); a strict local pre-commit runs typecheck + lint (below).
 Report **real** results — exit codes, test counts — never assert them.
 
+## The Rust rewrite lane (RS-UP-1) — six-gate bar
+
+The Rust engine rewrite (plan: `docs/plans/2026-07-22-satex-rs-rewrite-ultraplan.md`,
+adopted 2026-07-24, ledger P-135) grows additively at `apps/satex-engine-rs`. Read the
+plan's **Layer 0 agent contract** before claiming any RS task — it binds in full.
+
+- **Worktree layout (D-001/D-014):** `mc4/` stays on `master` (the operator's daily
+  driver); in-flight RS branches live in the sibling worktree `../mc4-rust`.
+- **Six gates, run from `apps/satex-engine-rs/`** (Appendix F): `cargo fmt --check` ·
+  `cargo clippy --workspace --all-targets -- -D warnings` · `cargo test --workspace` ·
+  `cargo doc --no-deps` (RUSTDOCFLAGS=`-D warnings`) · `cargo machete` ·
+  `cargo deny check`. Same law as the four-gate bar: all green before commit/merge, a
+  gate you can't run is named with CI as arbiter, wrappers that can exit 0 without
+  analyzing are banned (P-097).
+- **⚠️ crates are human-gated:** `satex-risk`, `satex-exec`, and satex-shell's
+  updater/credential/arming modules — one PR per task, operator review required
+  (plan Appendix D). Scheduled agents never touch them (D-013).
+- **Claims:** every RS-x.y task is claimed by ledger entry before work (plan 0.C).
+- **CI (D-016):** the `Rust gates (windows arbiter)` job is the merge-blocking truth
+  platform; ubuntu is advisory-fast. The TS `Gates` job is untouched and still required.
+- **Operator-hardware reality:** run cargo through the VS dev env (`vcvars64.bat`) —
+  the Git-Bash/agent-harness PATH shadows MSVC `link.exe` with coreutils `link.exe`
+  and rustc's MSVC auto-detection fails outside the dev env (measured 2026-07-24,
+  P-136). CI runners are unaffected.
+
 ## Branch → PR → merge flow
 
 - **Never commit or push directly to `master`** — branch first, even for a one-liner.

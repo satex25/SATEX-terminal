@@ -1,0 +1,10 @@
+[package]
+name = "satex-backtest"
+description = "Backtest: runner, strategies, sizing, slippage — validates against locked baselines (Phase 6, the M3 grand gate)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

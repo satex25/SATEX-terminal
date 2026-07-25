@@ -1,0 +1,10 @@
+[package]
+name = "satex-exec"
+description = "PERIMETER CRATE (human-gated, Appendix D): order-manager 9-gate battery + funded overlay gates 9-13, order lifecycle, event router (Phase 8)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
