@@ -3,3 +3,9 @@
 disallowed-types = [
   { path = "f32", reason = "engine math is f64-only — f32 is a parity bug (RS-UP-1 Appendix B.1)" },
 ]
+
+# unwrap/expect are denied in NON-TEST code only (RS-0.3 wording / plan 0.D). Test code
+# may use them freely — a panicking assertion IS the test's failure signal. These two
+# keys scope the workspace `unwrap_used`/`expect_used` denies to non-test code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
