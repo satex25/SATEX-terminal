@@ -4,10 +4,12 @@
     "src/renderer/index.html",
     "src/renderer/main.tsx",
     "tests/e2e/**/*.spec.ts",
-    "src/**/*.{test,spec}.ts"
+    "src/**/*.{test,spec}.ts",
+    "scripts/oracle/**/*.ts"
   ],
   "project": [
     "src/**/*.{ts,tsx}",
+    "scripts/oracle/**/*.ts",
     "!**/*.d.ts"
   ],
   "ignore": [
