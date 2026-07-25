@@ -36,15 +36,28 @@
  * live tripwire for everything else. This is the operator's normalize-in-golden
  * ruling (ledger P-143).
  *
- * Scope note — what is deliberately not captured
- * ----------------------------------------------
- * `depth-feed.ts:89-92` perturbs its ladder with unseeded `Math.random()`, and
- * `RegimeService` consumes its VPIN. Neither appears in the captured stream.
- * Appendix A.2 requires such sites to be seamed out *or* excluded by explicit
- * ruling rather than silently tolerated, so the exclusion is stated here and
- * in the ledger: depth and regime are outside Oracle L1/L2 until they take a
- * seeded RNG. Including them today would fail the double-run proof — which is
- * the tripwire behaving correctly, not a reason to widen a tolerance.
+ * The decision stream is not deterministic yet — P-155
+ * -----------------------------------------------------
+ * `autonomy` defaults to **off**, so a default capture carries no
+ * `autonomy.decision` records. That is not a scoping preference; it is a defect
+ * this driver found.
+ *
+ * `getAiDecision` (`trading-engine.ts:1538`) passes `this.depth.get(symbol)`
+ * into `brain.decide()`. `DepthFeedService.jitterFor` churns that ladder with
+ * four unseeded `Math.random()` calls per tick (`depth-feed.ts:87-91`), and the
+ * brain turns the top of it into `depth_imbalance` (weight 0.15) and
+ * `microprice_dev` (0.10) (`brain.ts:86-105`) — so roughly a quarter of every
+ * confidence score is drawn from an unseeded RNG. Two runs measured: identical
+ * symbol, tick index and virtual timestamp, confidence 0.3520162749933342 vs
+ * 0.36683881944775815.
+ *
+ * Note the shape of the mistake this corrects, because it generalises: an
+ * earlier draft called depth "not captured, therefore out of Oracle L1/L2
+ * scope". Excluding a source from the captured *stream* does not remove it from
+ * the *computation*. Appendix A.2 wants such sites seamed or excluded by
+ * explicit ruling — here the answer is seam, and until it lands the defect is
+ * pinned by a deliberately-failing-when-fixed test in
+ * `capture.determinism.test.ts`.
  *
  * Caller contract
  * ---------------
