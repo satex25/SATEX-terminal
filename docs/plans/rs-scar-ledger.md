@@ -14,7 +14,7 @@ pin (`file:line`) and the passing Rust test path.
 |---|---|---|---|---|
 | PR#6 · P-041 · P-043 · P-046 · P-091 | Leak class → RAII/Drop discipline + drop-order tests | *populate at owning port task* | — | pending |
 | P-039 · P-040 · P-041 · P-074 · P-093 | NaN/degenerate/negative-price inputs → proptest strategies | *populate at RS-2.1+* | — | pending |
-| P-061 · P-074 | Aliased shared mutable defaults → ownership + fresh-construction pins | *populate at owning port task* | — | pending |
+| P-061 · P-074 | Aliased shared mutable defaults → ownership + fresh-construction pins | `services/rng.ts` (RNG spare state) | `crates/satex-core/src/rng.rs::gaussian_spare_alternation_is_stable` | partial (RNG pinned RS-1.1; broader store-default classes pending RS-2.x/4.x) |
 | kill-switch atomic write | tempfile → write → fsync → atomic rename; crash-injection ×1000 | *populate at RS-8.3* | — | pending |
 | P-091 · P-103 | Updater consent flags + endpoint pinned `satex25/SATEX-terminal` exact-capitals | *populate at RS-9.5* | — | pending |
 | P-097 | False-green harness class → oracle mutation tests (harness must be able to fail) | *populate at RS-1.7* | — | pending |
