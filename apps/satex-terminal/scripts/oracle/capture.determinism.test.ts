@@ -124,9 +124,10 @@ describe('double-run determinism — synthetic tape (runs everywhere, including 
     expect(first.summary.replayEndReason).toBe('end-of-tape')
     expect(second.summary.replayEndReason).toBe('end-of-tape')
 
-    // The proof. Compare the text first: on a failure the diff names the
-    // record that moved, which is what an investigation actually needs.
-    expect(second.stream.text()).toBe(first.stream.text())
+    // The proof. Report the first divergence rather than diffing two 90 KB
+    // blobs — a failure here is a halt-and-investigate condition, and the
+    // investigation starts from *which record moved*.
+    expect(firstDivergence(first.stream.snapshot(), second.stream.snapshot())).toBeNull()
     expect(second.summary.goldenHash).toBe(first.summary.goldenHash)
   }, 300_000)
 
