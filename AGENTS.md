@@ -64,7 +64,14 @@ plan's **Layer 0 agent contract** before claiming any RS task — it binds in fu
 ## Branch → PR → merge flow
 
 - **Never commit or push directly to `master`** — branch first, even for a one-liner.
-- Branch names: `feat/…`, `fix/…`, `chore/…`, `release/…`.
+- **Untracked is not a resting state — a pushed branch is.** If you produced files you
+  could not gate (sandbox too slow, toolchain absent, native module wrong-ABI), that is
+  a reason to let CI arbitrate on a PR, *not* a reason to leave the work unstaged
+  "for operator review". Work that exists only as untracked files in a working tree is
+  one `git clean` from gone and invisible to every other session. This has now cost real
+  work twice — see **P-156**, where 8 test suites sat untracked in `mc4` for two days
+  under a ledger number a concurrently-merged entry had already taken.
+- Branch names: `feat/…`, `fix/…`, `chore/…`, `test/…`, `release/…`.
 - Conventional-commit messages; end with
   `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` (or the acting model).
 - Open a PR → let CI go green → `gh pr merge <n> --rebase` (or `--squash`; **merge
