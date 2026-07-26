@@ -106,7 +106,7 @@ observational; risk limits are read-only to every learning component.
 
 All four must be green before any commit/merge (CI enforces on every push/PR):
 `npm run typecheck` · `npm run lint` · `npm test` · `npm run knip`.
-Baseline 2026-07-16: **1753 tests / 134 files**, all four gates green (typecheck node+web · eslint `src tests` · vitest · knip all exit 0) measured this session on the P-111 branch (operator hardware, Node 24.15; jsdom — see P-019). <!-- refresh: scripts/update-baseline.sh -->
+Baseline 2026-07-26: **2234 tests / 175 files**, all four gates green on `test/p156-leaf-component-jsdom` @ 0e0a70e + edits (working tree; jsdom — see P-019). <!-- refresh: scripts/update-baseline.sh -->
 
 Program ladder (spec: `apps/satex-terminal/docs/superpowers/specs/2026-06-02-topstep-eval-capable-program-design.md`):
 **L1.A ✅ → L1.B ✅ → L1.C ✅ → L1.D (funded compliance) → L1.E (payouts) →
