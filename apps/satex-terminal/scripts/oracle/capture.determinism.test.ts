@@ -143,30 +143,29 @@ describe('double-run determinism — synthetic tape (runs everywhere, including 
   }, 300_000)
 
   /**
-   * KNOWN DEFECT PIN — ledger P-155. This test asserts that something is
-   * BROKEN, and must fail the day it is fixed.
+   * L1 DECISION PARITY — ledger P-157, closing P-155.
    *
-   * The AI decision path is **not** replay-deterministic. `getAiDecision`
-   * (`trading-engine.ts:1538`) passes `this.depth.get(symbol)` into
-   * `brain.decide()`, `DepthFeedService.jitterFor` churns that ladder with four
-   * unseeded `Math.random()` calls per tick (`depth-feed.ts:87-91`), and the
-   * brain turns the top of the ladder into `depth_imbalance` (weight 0.15) and
-   * `microprice_dev` (0.10) (`brain.ts:86-105`). So a quarter of every
-   * confidence score is drawn from an unseeded RNG.
+   * From 2026-07-25 until the depth RNG was seeded, this slot held an
+   * *inverted* pin: a test that asserted the decision stream diverged and was
+   * written to fail the day it was fixed. It fired on 2026-07-26. This is what
+   * it was traded for.
    *
-   * Measured divergence: identical symbol, tick index, and virtual timestamp;
-   * confidence 0.3520162749933342 vs 0.36683881944775815.
+   * The defect it pinned: `getAiDecision` (`trading-engine.ts`) passes
+   * `this.depth.get(symbol)` into `brain.decide()`; `DepthFeedService.jitterFor`
+   * churned that ladder with four **unseeded** `Math.random()` calls per tick;
+   * and the brain turns the top of the ladder into `depth_imbalance` (weight
+   * 0.15) and `microprice_dev` (0.10) (`brain.ts:86-105`). A quarter of every
+   * confidence score was therefore undrawable twice. Measured then: identical
+   * symbol, tick index and virtual timestamp — confidence 0.3520162749933342
+   * vs 0.36683881944775815.
    *
-   * This is why `autonomy` defaults to off and why the archived golden carries
-   * no decision records. It is a hard blocker for Oracle L1 decision parity —
-   * the Rust engine cannot reproduce a number drawn from `Math.random()`. The
-   * remedy is a seeded RNG in `depth-feed.ts`, which is an engine change and
-   * needs an operator ruling.
-   *
-   * When that lands, this test fails, and the person who fixed it should delete
-   * it, flip `autonomy` on for the corpus capture, and regenerate the goldens.
+   * The pin's docblock told the fixer to delete it. It is kept and inverted
+   * instead: L1 is the stratum Appendix A.3 gives **no** tolerance ("any
+   * mismatch is a defect"), so trading a failing assertion for no assertion
+   * would have left the most consequential records uncovered. What used to be
+   * evidence of the defect is now the regression guard against its return.
    */
-  it('KNOWN DEFECT (P-155): the decision stream is NOT deterministic — unseeded depth RNG reaches confidence', async () => {
+  it('the decision stream is deterministic — L1 confidence replays exactly (P-155/P-157)', async () => {
     // Speed 1, not the default 10: the trader's cycle is 30 s of *virtual wall*
     // time, so at 10× this 120-second tape would finish in 12 s and the trader
     // would never fire once. At 1× the cycle runs repeatedly.
@@ -174,18 +173,19 @@ describe('double-run determinism — synthetic tape (runs everywhere, including 
     const first = await captureOnce(SYNTHETIC(), opts)
     const second = await captureOnce(SYNTHETIC(), opts)
 
+    // Vacuous-pass guard: two decision-free streams would also compare equal,
+    // so the run has to be shown to contain decisions before their equality
+    // is allowed to mean anything.
     const kinds = first.stream.snapshot().map(l => (JSON.parse(l) as { kind: string }).kind)
     expect(kinds).toContain('autonomy.enabled')
     expect(kinds.filter(k => k === 'autonomy.decision').length).toBeGreaterThan(0)
     expect(first.summary.replayEndReason).toBe('end-of-tape')
 
-    const divergence = firstDivergence(first.stream.snapshot(), second.stream.snapshot())
-    expect(divergence, 'depth RNG appears to have been seeded — see the docblock above, then delete this test').not.toBeNull()
-    // Pin *where* it diverges. If the first divergence ever moves to another
-    // record kind, that is a second, separate nondeterminism and wants its own
-    // investigation rather than being absorbed by this pin.
-    expect(divergence).toMatch(/kind=autonomy\.decision/)
-    expect(divergence).toMatch(/confidence/)
+    expect(
+      firstDivergence(first.stream.snapshot(), second.stream.snapshot()),
+      'the decision stream diverged — P-155 has regressed, or a new nondeterminism entered the AI path',
+    ).toBeNull()
+    expect(second.summary.goldenHash).toBe(first.summary.goldenHash)
   }, 300_000)
 
   it('hashes differently when the tape changes', async () => {
@@ -213,6 +213,19 @@ const CORPUS_DIR = path.resolve(__dirname, '../../../../Vault/Backtests/corpus')
 const CORPUS_INDEX = path.join(CORPUS_DIR, 'corpus-index.json')
 const corpusPresent = fs.existsSync(CORPUS_INDEX)
 
+/**
+ * P-157: the archived golden is captured WITH the autonomous trader running.
+ * It could not be before — the decision stream was nondeterministic (P-155), so
+ * `autonomy` was off and the golden carried zero decision records.
+ *
+ * Speed 1 rather than the default 10 for the same reason the synthetic proof
+ * uses it: the trader's cycle is 30 s of virtual wall time, and at 10× the tape
+ * drains faster than the cycle can fire. This value is written into the
+ * manifest below — the manifest must describe the capture that actually
+ * happened, or regenerating from it would not reproduce the golden.
+ */
+const CORPUS_CAPTURE = { autonomy: true, speed: 1 } as const
+
 describe.skipIf(!corpusPresent)('double-run determinism — recorded corpus (operator hardware)', () => {
   it('verifies every corpus file against the SHA-256 the index recorded', () => {
     const index = JSON.parse(fs.readFileSync(CORPUS_INDEX, 'utf8')) as {
@@ -232,11 +245,19 @@ describe.skipIf(!corpusPresent)('double-run determinism — recorded corpus (ope
     expect(tapeName, 'corpus index carries no tape- file').toBeDefined()
     const tape = readCorpusTape(path.join(CORPUS_DIR, tapeName!))
 
-    const first = await captureOnce(tape)
-    const second = await captureOnce(tape)
+    const first = await captureOnce(tape, CORPUS_CAPTURE)
+    const second = await captureOnce(tape, CORPUS_CAPTURE)
 
     expect(first.summary.replayEndReason).toBe('end-of-tape')
     expect(first.summary.records).toBeGreaterThan(20)
+    // P-157: the archived golden must now carry the decision stream. Before the
+    // depth RNG was seeded this was empty by necessity, and a golden with no
+    // decisions cannot support an L1 parity claim.
+    const corpusKinds = first.stream.snapshot().map(l => (JSON.parse(l) as { kind: string }).kind)
+    expect(
+      corpusKinds.filter(k => k === 'autonomy.decision').length,
+      'corpus capture produced no decisions — the archived golden would not support L1 parity',
+    ).toBeGreaterThan(0)
     expect(second.summary.goldenHash).toBe(first.summary.goldenHash)
 
     // Regeneration. Archiving the *proven* run rather than a third capture is
@@ -254,7 +275,8 @@ describe.skipIf(!corpusPresent)('double-run determinism — recorded corpus (ope
         summary: first.summary,
         corpus: { file: entry.name, sha256: entry.sha256 },
         capture: {
-          speed: CAPTURE_DEFAULTS.speed,
+          // The speed actually used, not the default — see CORPUS_CAPTURE.
+          speed: CORPUS_CAPTURE.speed,
           stepMs: CAPTURE_DEFAULTS.stepMs,
           checkpointEvery: CAPTURE_DEFAULTS.checkpointEvery,
           rngSeed: ORACLE_ENV.rngSeed,
