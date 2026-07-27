@@ -16,6 +16,7 @@
  */
 import type { Quote, DepthLevel, DepthSnapshot } from '@shared/types'
 import { createLogger } from './logger'
+import { mulberry32, randomSeed, type Rng } from './rng'
 
 const log = createLogger('depth')
 
@@ -25,6 +26,13 @@ const LEVELS = 9                // 9 asks + 9 bids per Black Box mockup
 const TICK_HZ = 4               // 250 ms push cadence
 const SIZE_BASE = 1200          // top-of-book size baseline
 const SIZE_DECAY = 0.78         // multiplicative decay per level outward
+
+/** P-157: de-correlates the depth jitter stream from the price walk when both
+ *  are handed the same `env.rngSeed`. Two mulberry32 instances seeded with the
+ *  same number emit the same sequence, and the ladder must not march in step
+ *  with the GBM walk it is pinned to — `depth_imbalance` would then encode the
+ *  price move twice. Any fixed odd constant works; this is the golden ratio. */
+const DEPTH_SEED_SALT = 0x9E3779B9
 
 interface DepthFeedDeps {
   getQuote: (symbol: string) => Quote | undefined
@@ -42,8 +50,17 @@ export class DepthFeedService {
   /** VPIN-like proxy state. Updated as a moving avg of (size imbalance / total).
    *  Real VPIN requires buy/sell trade classification; this is a faithful proxy. */
   private vpinEma: number = 0.18
+  /** P-155/P-157: the ladder churn was four unseeded `Math.random()` calls per
+   *  tick, and the top of this ladder becomes `depth_imbalance` (weight 0.15)
+   *  and `microprice_dev` (0.10) in brain.ts — so a quarter of every AI
+   *  confidence was undrawable twice. Seeded, the decision stream replays.
+   *  Omit the seed (live trading) and entropy is preserved via randomSeed(). */
+  private rng: Rng
 
-  constructor(deps: DepthFeedDeps) { this.deps = deps }
+  constructor(deps: DepthFeedDeps, seed?: number) {
+    this.deps = deps
+    this.rng = mulberry32(seed === undefined ? randomSeed() : (seed ^ DEPTH_SEED_SALT) >>> 0)
+  }
 
   start(): void {
     if (this.timer) return
@@ -86,10 +103,10 @@ export class DepthFeedService {
       this.sizeJitter.set(symbol, arr)
     }
     // Mutate a couple of slots so the ladder churns each tick
-    const i1 = Math.floor(Math.random() * arr.length)
-    const i2 = Math.floor(Math.random() * arr.length)
-    arr[i1] = Math.max(0.4, Math.min(2.0, (arr[i1] ?? 1) + (Math.random() - 0.5) * 0.18))
-    arr[i2] = Math.max(0.4, Math.min(2.0, (arr[i2] ?? 1) + (Math.random() - 0.5) * 0.18))
+    const i1 = this.rng.nextInt(arr.length)
+    const i2 = this.rng.nextInt(arr.length)
+    arr[i1] = Math.max(0.4, Math.min(2.0, (arr[i1] ?? 1) + (this.rng.next() - 0.5) * 0.18))
+    arr[i2] = Math.max(0.4, Math.min(2.0, (arr[i2] ?? 1) + (this.rng.next() - 0.5) * 0.18))
     return arr
   }
 

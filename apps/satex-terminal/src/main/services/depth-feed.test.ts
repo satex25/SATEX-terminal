@@ -34,9 +34,13 @@
  *   7. JITTER CONTINUITY — per-symbol size pattern survives symbol
  *      round-trips (the sizeJitter Map is persistent by design).
  *
- * Determinism: Math.random is pinned to 0.5, which makes the churn delta
- * exactly 0 — the jitter array stays at its deterministic initializer, so
- * every snapshot is reproducible. Fake timers pin the interval and Date.
+ * Determinism: Math.random is pinned to 0.5, which made the churn delta exactly
+ * 0 back when the ladder drew from it. Since P-157 the churn comes from an
+ * injected mulberry32, so that pin is inert for the ladder and reproducibility
+ * comes from the seed instead; the pin stays only because other call sites in
+ * this file (id generation, etc.) may still reach Math.random. The seeded
+ * contract itself is covered in 'depth-feed seeded determinism' below, which
+ * deliberately restores the real Math.random. Fake timers pin interval + Date.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { DepthFeedService } from './depth-feed'
@@ -282,14 +286,75 @@ describe('depth-feed vpin proxy', () => {
   })
 })
 
+/**
+ * P-157 — the seeded-RNG contract that closes P-155.
+ *
+ * These tests deliberately RESTORE the real `Math.random` that the suite-wide
+ * beforeEach pins to 0.5. That pin is what makes the rest of this file
+ * reproducible, but it would make a determinism test meaningless: a constant
+ * Math.random is trivially "deterministic", so the test would pass just as well
+ * against the unseeded code it exists to forbid. With the real RNG restored,
+ * only an actually-seeded ladder can make these pass.
+ */
+describe('depth-feed seeded determinism (P-155/P-157)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks() // drop the Math.random pin — see the docblock above
+  })
+
+  /** Size ladder of `n` successive computations, top-of-book first. */
+  function ladderRun(seed: number | undefined, n = 6): number[][] {
+    const svc = new DepthFeedService({ getQuote: (symbol) => mkQuote({ symbol }) }, seed)
+    return Array.from({ length: n }, () => {
+      const s = svc.get()
+      return [...s.asks.map((l) => l.size), ...s.bids.map((l) => l.size)]
+    })
+  }
+
+  it('the same seed replays an identical ladder sequence', () => {
+    expect(ladderRun(20260725)).toEqual(ladderRun(20260725))
+  })
+
+  it('a different seed produces a different ladder sequence (the seed is really consumed)', () => {
+    expect(ladderRun(20260725)).not.toEqual(ladderRun(999))
+  })
+
+  it('top-of-book sizes are reproducible — this is the pair brain.ts turns into depth_imbalance/microprice_dev', () => {
+    // brain.ts:86-105 reads ONLY bids[0] and asks[0]. Those two numbers carry
+    // 0.25 of the feature weight behind every AI confidence, so their
+    // reproducibility is the whole point of P-155.
+    const tops = (seed: number) =>
+      ladderRun(seed).map((row) => [row[0], row[9]]) // asks[0], bids[0]
+    expect(tops(4242)).toEqual(tops(4242))
+  })
+
+  it('an omitted seed still churns — live trading keeps its entropy', () => {
+    // Determinism is opt-in via env.rngSeed. Two unseeded services must NOT
+    // agree, or we would have silently pinned the live terminal's ladder.
+    expect(ladderRun(undefined)).not.toEqual(ladderRun(undefined))
+  })
+})
+
 describe('depth-feed jitter continuity', () => {
   it('per-symbol size pattern survives a symbol round-trip (persistent sizeJitter Map)', () => {
-    const svc = mkSvc((symbol) => mkQuote({ symbol }))
-    const a1 = svc.get('AAA')
-    svc.get('BBB')
-    const a2 = svc.get('AAA')
-    // Math.random pinned to 0.5 → churn delta is 0 → patterns must be EXACTLY equal
-    expect(a2.asks.map((l) => l.size)).toEqual(a1.asks.map((l) => l.size))
-    expect(a2.bids.map((l) => l.size)).toEqual(a1.bids.map((l) => l.size))
+    // Until P-157 this test got its exactness from the Math.random pin, which
+    // made the churn delta exactly 0. A seeded ladder churns for real, so
+    // continuity is now asserted the way it actually behaves: the round trip
+    // must preserve accumulated drift, moving at most the slots one tick can.
+    const mk = () => new DepthFeedService({ getQuote: (symbol) => mkQuote({ symbol }) }, 31337)
+    const svc = mk()
+    svc.subscribe('AAA')
+    svc.start()
+    vi.advanceTimersByTime(250 * 20) // accumulate real churn on AAA
+    const drifted = svc.get().asks.map((l) => l.size)
+    svc.stop()
+
+    // There IS drift to lose: a fresh service's first AAA ladder differs, so a
+    // reinitialised map would be plainly visible below rather than a no-op.
+    expect(drifted).not.toEqual(mk().get('AAA').asks.map((l) => l.size))
+
+    svc.get('BBB')                                      // switch away…
+    const back = svc.get('AAA').asks.map((l) => l.size) // …and back
+    // One tick churns at most 2 of the 18 slots, so at most 2 ask sizes move.
+    expect(back.filter((s, i) => s !== drifted[i]).length).toBeLessThanOrEqual(2)
   })
 })

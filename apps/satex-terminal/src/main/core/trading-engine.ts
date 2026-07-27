@@ -704,9 +704,16 @@ export class TradingEngine {
 
     // ── Phase 10: SATEX Terminal v2 · Black Box ────────────────────────────
     // Depth feed first — regime can consume its VPIN proxy for the liquidity metric.
+    // P-155/P-157: seed the ladder churn from the same `env.rngSeed` seam the
+    // simulator uses. This synthesized ladder reaches `depth_imbalance` (0.15)
+    // and `microprice_dev` (0.10) in brain.ts via getAiDecision, so leaving it
+    // on Math.random put a quarter of every AI confidence beyond replay — and
+    // beyond the Rust engine's reach for Oracle L1 decision parity. Seeded
+    // unconditionally, not only under `!useAlpaca`: the free Alpaca tier serves
+    // no L2, so this synthesizer is what feeds the brain on the live path too.
     this.depth = new DepthFeedService({
       getQuote: (s) => this.market.getQuote(s),
-    })
+    }, env.rngSeed ?? undefined)
     this.depth.onUpdate((s) => { for (const fn of this.depthListeners) fn(s) })
     this.depth.start()
 
