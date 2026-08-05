@@ -34,6 +34,19 @@ Run from `apps/satex-terminal/`:
 
 Nothing commits or merges unless **all four** pass. CI enforces all four on every
 push/PR (see `ci.yml`); a strict local pre-commit runs typecheck + lint (below).
+
+**Baseline freshness (P-158).** Still four gates — but CI additionally hard-fails when
+`ARCHITECTURE.md` §4's `Baseline` counts disagree with what vitest actually observed.
+If your change adds or removes tests, refresh the line in the same commit:
+
+```
+scripts/update-baseline.sh            # auto: runs the suite and computes counts
+scripts/update-baseline.sh 175 2238   # or pass <files> <tests> if you already know
+```
+
+The failure message prints that command with the arguments filled in. The line records
+whether the tree was clean when measured — do not hand-edit it, and do not "fix" a
+drift by editing the number to match a run you did not do.
 Report **real** results — exit codes, test counts — never assert them.
 
 ## The Rust rewrite lane (RS-UP-1) — six-gate bar
