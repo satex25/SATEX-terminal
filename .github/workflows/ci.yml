@@ -53,8 +53,17 @@ jobs:
       - name: Rebuild better-sqlite3 for Node (vitest runs under Node, not Electron)
         run: npm rebuild better-sqlite3 --build-from-source
 
+      # The JSON report is emitted alongside the normal console output purely so the
+      # baseline check below can read real counts without running the suite twice.
       - name: Vitest unit suite
-        run: npm test
+        run: npm test -- --reporter=default --reporter=json --outputFile=vitest-report.json
+
+      # P-158: ARCHITECTURE.md §4 states a test/file count. AGENTS.md's standing rule
+      # is "report real results — never assert them", and a hand-maintained number
+      # drifts silently (it sat 10 days stale before 27aa7dc caught it by eye). Hard
+      # fail; the fix is one command, printed in the failure message.
+      - name: Baseline freshness (ARCHITECTURE.md §4)
+        run: ../../scripts/check-baseline.sh vitest-report.json
 
   # ── RS-UP-1 (ledger P-138): additive Rust six-gate bar for apps/satex-engine-rs ──
   # Two jobs per plan D-016: ubuntu is speed, windows-latest is the merge-blocking

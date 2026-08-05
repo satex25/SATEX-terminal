@@ -22,6 +22,8 @@ build/
 coverage/
 .nyc_output/
 .vitest-cache/
+# vitest JSON report — CI build artifact feeding scripts/check-baseline.sh (P-158)
+vitest-report.json
 
 # Environment & secrets — keep templates, block everything else
 .env.local

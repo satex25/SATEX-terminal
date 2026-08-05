@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-07-26
+updated: 2026-08-05
 ---
 
 # Problem Ledger
@@ -14,6 +14,26 @@ updated: 2026-07-26
 > SHIPPED → VERIFIED**. Nothing is ever deleted — solved entries sink to §Closed.
 
 ---
+
+### P-158 · **The §4 baseline line asserted its own provenance falsely and drifted unwatched** — the refresh script hardcoded "+ edits (working tree)" and nothing checked the counts — SHIPPED (2026-08-05, branch `chore/baseline-provenance-and-freshness`)
+- **PROBLEM (evidenced, two defects in one line):** `ARCHITECTURE.md` §4 carried `Baseline 2026-07-27: **2238 tests / 175 files**, all four gates green on \`feat/p157-seed-depth-rng\` @ 77ee49f + edits (working tree…)`.
+  1. **The provenance was a template constant, not an observation.** `update-baseline.sh:39` emitted the literal string `+ edits (working tree; jsdom — see P-019)` on every run regardless of `git status`. A baseline measured on a spotless checkout still claimed uncommitted edits. The line asserted a fact about the tree that the script never looked at — the exact "report real results, never assert them" violation AGENTS.md §Gates forbids, sitting in the file that documents the gates.
+  2. **Nothing enforced the counts.** They drifted silently. `27aa7dc`'s own subject records the measure: *"1753/134 was 10 days stale"* — caught by eye, not by a gate — and it drifted again within two days (`4c4934d`). `scripts/update-baseline.sh` existed the whole time; it was simply never obligatory.
+  - Compounding: the recorded `77ee49f` is not reachable from any branch (`git branch --contains` returns empty) — the feature branch was rebase-merged out from under it. So the headline number attested to a state no commit reproduces, in a repo whose current thrust is replay determinism.
+- **SOLUTIONS considered:**
+  1. *CI hard-fails on drift* — every PR changing the test count must also refresh the line. Truthful and impossible to ignore; costs one command per such PR.
+  2. *CI warns via annotation, never blocks* — zero friction, drift stays visible but remains ignorable indefinitely. Rejected: the failure mode being fixed **is** "visible but ignored for 10 days".
+  3. *Delete the counts, point at the latest green CI run* — a number that does not exist cannot go stale, but §4 loses its at-a-glance reference point and the historical baseline series.
+- **DECISION (operator, 2026-08-05): Option 1.** A claim the repo makes about itself is held to the same bar as a test assertion. The friction is one command, and the failure message prints it verbatim with the arguments filled in.
+- **SOLUTION SHIPPED:**
+  - `scripts/baseline.mjs` — new, the **single source of truth for the line's format**, with `read` / `count` / `write` subcommands. Both the writer and the CI checker delegate to it; they must not keep private copies of the format, because a writer and checker disagreeing by one character produce a CI failure that no command can clear — strictly worse than the drift being fixed.
+  - `write` now asks `git status --porcelain` and records what is true: `(clean tree)` or `+ uncommitted edits (working tree)`.
+  - `scripts/check-baseline.sh` — new, compares recorded against observed and exits 1 with the exact fix command. CI's existing "Vitest unit suite" step now also emits `--reporter=json`, so the check **reads** those counts; the suite is never run twice.
+  - `update-baseline.sh` keeps its `<files> <tests>` CLI but drops the 4-way shard that scraped vitest's human-readable summary — that text is not a contract, the JSON report is.
+- **PROOF (measured, not asserted):** full suite in the Node-ABI worktree at `4c4934d` — **2238 passed / 2238, 175 files, exit 0**, confirming the recorded baseline was in fact accurate. Check against that report: `✓ baseline is current`, exit 0. Then the counts were deliberately perturbed to 2251/176 and the check re-run: exit **1**, correct diff, correct fix line. A check only ever observed passing proves nothing — same vacuous-pass discipline as P-157's decision-existence guard.
+  - **File count trap, caught during implementation:** vitest's JSON `numTotalTestSuites` counts `describe` blocks, not files — a single probe file reported `4`. The file count is `testResults.length`. Taking the obvious field would have inflated the count several-fold and left the drift permanently unresolvable. Documented at the function.
+- **KNOWN RESIDUAL — the recorded sha still does not survive a rebase-merge.** `main-protection` mandates linear history, so `gh pr merge --rebase` rewrites the sha this line records, reproducing the `77ee49f` unreachability on every merge. Enforcing sha *reachability* in CI was considered and rejected: `master` is protected, so a post-merge reachability failure could only be cleared by another PR — master would sit red in the interim. What is enforced is the part that actually rotted (the counts); the sha remains an honest record of *what was measured*, not a durable pointer.
+- **Status:** SHIPPED. Gates: typecheck 0 · lint 0 · knip 0 · 2238/2238 tests green on operator hardware (Node-ABI worktree).
 
 ### P-157 · **The depth ladder is seeded — the AI decision stream now replays exactly.** P-155 closed on an operator ruling; the archived golden carries decisions for the first time — SHIPPED (2026-07-26, branch `feat/p157-seed-depth-rng`)
 - **PROBLEM:** P-155, in full below. In one line: `DepthFeedService.jitterFor()` churned the ladder with four unseeded `Math.random()` calls per tick, that ladder's top became `depth_imbalance` (weight 0.15) and `microprice_dev` (0.10) in `brain.ts`, and so ~25 % of the feature weight behind every AI confidence could not be drawn twice. Oracle L1 decision parity — the stratum Appendix A.3 gives *no* tolerance — was unreachable, and `autonomy` had to default **off**, leaving the archived golden with **zero** decision records.
