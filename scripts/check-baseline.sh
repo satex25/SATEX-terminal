@@ -32,8 +32,17 @@ if [[ ! -f "$REPORT" ]]; then
   exit 2
 fi
 
-read -r ACTUAL_TESTS ACTUAL_FILES <<<"$(node "$ROOT/scripts/baseline.mjs" count "$REPORT")"
-read -r RECORDED_TESTS RECORDED_FILES <<<"$(node "$ROOT/scripts/baseline.mjs" read)"
+if ! COUNTS="$(node "$ROOT/scripts/baseline.mjs" count "$REPORT")"; then
+  echo "✗ check-baseline: could not read counts from $REPORT (malformed vitest report?)" >&2
+  exit 2
+fi
+read -r ACTUAL_TESTS ACTUAL_FILES <<<"$COUNTS"
+
+if ! RECORDED="$(node "$ROOT/scripts/baseline.mjs" read)"; then
+  echo "✗ check-baseline: no 'Baseline ' line found in ARCHITECTURE.md — run scripts/update-baseline.sh first" >&2
+  exit 2
+fi
+read -r RECORDED_TESTS RECORDED_FILES <<<"$RECORDED"
 
 if [[ "$ACTUAL_TESTS" == "$RECORDED_TESTS" && "$ACTUAL_FILES" == "$RECORDED_FILES" ]]; then
   echo "✓ baseline is current: ${ACTUAL_TESTS} tests / ${ACTUAL_FILES} files"
