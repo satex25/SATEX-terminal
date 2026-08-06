@@ -2,7 +2,7 @@
 type: ledger
 title: SATEX Problem Ledger — the living PSD queue
 tags: [satex, psd, problems, ledger]
-updated: 2026-08-05
+updated: 2026-08-07
 ---
 
 # Problem Ledger
@@ -14,6 +14,25 @@ updated: 2026-08-05
 > SHIPPED → VERIFIED**. Nothing is ever deleted — solved entries sink to §Closed.
 
 ---
+
+### P-160 · **The §4 baseline line still embeds a branch name and a sha that are dead on arrival after every rebase-merge** — `git blame` already does that job, and survives the rebase — DECIDED (2026-08-06; execution deferred to the next PR that touches `ARCHITECTURE.md`)
+- **PROBLEM (evidenced — observed on P-158's very first merge, exactly as its KNOWN RESIDUAL predicted):** the line read `Baseline 2026-08-05: **2238 tests / 175 files**, all four gates green on \`chore/baseline-provenance-and-freshness\` @ cc0a836 (clean tree)`. PR #86 rebase-merged on 2026-08-06 and rewrote `cc0a836` → `a8f1ef9`; `git branch -a --contains cc0a836` returned empty, and the branch it named was deleted at merge. **Both provenance fields are dead references on any fresh clone** — one points at an unreachable commit, the other at a branch that no longer exists.
+  - **Severity is low and, importantly, bounded.** `scripts/check-baseline.sh` contains no sha or branch reference (verified by grep — it compares counts only), so the CI gate is entirely unaffected. Nor does the defect compound: each merge swaps one dead sha for another, a constant cost rather than accumulating debt.
+  - **But it is the same defect class P-158 existed to kill.** P-158's bug was a line asserting what a reader cannot verify (a fabricated dirty-tree claim); this is a line pointing where a reader cannot go. Milder instance, same family — and it sits in the file that documents AGENTS.md's "report real results, never assert them" rule.
+  - **RECURRED twice more before this entry even shipped**, which is direct evidence for the DECISION below rather than a one-off. PR #87 (`8f6021f`, `1fa3860`) restamped the line to `\`feat/rs-1.7-oracle-mutation-rs-1.4-parity\` @ a5b042f`; that PR's rebase-merge (`0e6fc35`) deleted the branch and rewrote the sha exactly as before — `git branch -a --contains a5b042f` returns empty on current `master`, measured at renumbering time, not asserted from the earlier example.
+- **SOLUTIONS considered:**
+  1. *Drop the branch and sha; keep date, counts, and tree-state.* `git blame -L` on the line returns whatever commit last set it — `1fa3860` at the time of this renumbering, `12fba91` when this entry was first drafted a day earlier — and blame survives rebase because it follows the file rather than an embedded string. The embedded sha is therefore strictly redundant with blame, and strictly worse than it: it goes stale on every single merge, which the two occurrences above now demonstrate directly rather than by prediction.
+  2. *Keep the sha but annotate it as ephemeral* ("pre-rebase; rewritten on merge"). Preserves the audit trail and is honest about durability — but it is still a dead pointer, merely a labelled one, and it lengthens an already dense line.
+  3. *Restamp post-merge to record the merge commit.* Rejected: `master` is protected and each restamp commit moves HEAD again — infinite regress, the same reasoning that made P-158 reject sha-*reachability* enforcement.
+  4. *Leave as-is.* Zero cost, but leaves a guaranteed-false field in the file documenting the honesty rule, and it has now gone false twice in two days.
+- **DECISION — Option 1, execution deferred.** Rationale: the sha was load-bearing back when the counts were hand-maintained and the line had to answer *"when was this last actually true?"* P-158's CI gate now answers that on **every PR**, which makes the embedded provenance vestigial — a fossil of the pre-gate era, and the only part of the line guaranteed to be false. Deferred rather than shipped standalone because `master` is protected: changing one documentation line costs a full PR plus a ~6-minute CI cycle, which is poor value on its own.
+- **PROPOSED LINE** (drop-in; parser-safe — `LINE_RE` `^Baseline .*$` and `COUNTS_RE` `\*\*(\d+) tests \/ (\d+) files\*\*` both still match, so `check-baseline.sh` needs no change):
+  ```
+  Baseline <date>: **<tests> tests / <files> files**, all four gates green (clean tree) — jsdom, see P-019. Counts CI-enforced (P-158). <!-- refresh: scripts/update-baseline.sh -->
+  ```
+- **BLAST RADIUS:** exactly one edit, in `scripts/baseline.mjs`'s `write()` — the single source of truth for the format established by P-158, re-read at renumbering time and confirmed unchanged (`branch`/`sha` still built into `provenance` at lines 65–68). No change to `check-baseline.sh`, none to CI, zero app-code contact. Retains `(clean tree)`, which was P-158's papercut-#1 fix and remains a meaningful claim.
+- **RENUMBERED 2026-08-07: P-159 → P-160.** Drafted 2026-08-06 as P-159 on an unpushed local branch, before PR #87 shipped and claimed P-159 for the RS-1.4 Rust oracle (`apps/satex-terminal/CHANGELOG.md`, `docs/plans/rs-scar-ledger.md`). No other reference to the old number existed outside this branch — grepped repo-wide before renumbering.
+- **Status:** DECIDED, not scheduled standalone. **Fold-in candidate** — the next change touching `ARCHITECTURE.md` should carry it.
 
 ### P-159 · RS-UP-1 / RS-1.4 — **the parity oracle exists in Rust**: JSON value model, golden loader, structural differ, drift reports, corpus custody, and the 49-class falsifiability matrix — SHIPPED (2026-08-07, branch `feat/rs-1.7-oracle-mutation-rs-1.4-parity`)
 - **PROBLEM (evidenced):** RS-1.7 (`b046494`) shipped the mutation matrix against the *TypeScript* verifier, and `scripts/oracle/verify.ts`'s own header names the gap it left: *"RS-1.4 ports this module to Rust; the mutation matrix in `mutate.ts` is the falsifiability contract both implementations must satisfy."* Until that port existed, `crates/satex-parity` was the 6-line RS-0.2 stub, so **every Rust parity claim from Phase 2 onward had no instrument to be measured with** — and RS-L4 says parity is a claim only the harness may make. The plan's dependency graph is explicit: `RS-1.3 → RS-1.4 → RS-1.7 ═══ M1: ORACLE ONLINE (blocks all parity claims)`.
