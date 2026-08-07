@@ -106,7 +106,7 @@ observational; risk limits are read-only to every learning component.
 
 All four must be green before any commit/merge (CI enforces on every push/PR):
 `npm run typecheck` · `npm run lint` · `npm test` · `npm run knip`.
-Baseline 2026-08-05: **2238 tests / 175 files**, all four gates green on `chore/baseline-provenance-and-freshness` @ cc0a836 (clean tree) — jsdom, see P-019. <!-- refresh: scripts/update-baseline.sh -->
+Baseline 2026-08-07: **2369 tests / 178 files**, all four gates green on `feat/rs-1.7-oracle-mutation-rs-1.4-parity` @ a5b042f (clean tree) — jsdom, see P-019. <!-- refresh: scripts/update-baseline.sh -->
 
 Program ladder (spec: `apps/satex-terminal/docs/superpowers/specs/2026-06-02-topstep-eval-capable-program-design.md`):
 **L1.A ✅ → L1.B ✅ → L1.C ✅ → L1.D (funded compliance) → L1.E (payouts) →
